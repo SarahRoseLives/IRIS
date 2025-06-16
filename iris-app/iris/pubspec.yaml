@@ -32,6 +32,7 @@ dependencies:
     sdk: flutter
   http: ^1.2.1
   web_socket_channel: ^2.4.0
+  shared_preferences: ^2.0.0
 
 
   # The following adds the Cupertino Icons font to your application.
@@ -91,6 +92,7 @@ flutter:
   # For details regarding fonts from package dependencies,
   # see https://flutter.dev/custom-fonts/#from-packages
 
-flutter_icons:
+flutter_launcher_icons:
+  android: true # Or true for default name
+  ios: false # Or a custom name like "Icon-App"
   image_path: "icon.png"
-  android: true

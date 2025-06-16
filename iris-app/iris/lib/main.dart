@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart'; // Import shared_preferences
 import 'iris_layout.dart';
-import 'config.dart';
+import 'config.dart'; // Your config.dart import
 
 void main() {
+  // Required for SharedPreferences to be initialized before runApp
+  WidgetsFlutterBinding.ensureInitialized();
   runApp(const IRISApp());
 }
 
@@ -16,14 +19,72 @@ class IRISApp extends StatelessWidget {
     return MaterialApp(
       title: 'IRIS',
       theme: ThemeData.dark().copyWith(
-        colorScheme: ColorScheme.dark(
+        colorScheme: const ColorScheme.dark( // Added const
           primary: Color(0xFF5865F2),
           secondary: Color(0xFF5865F2),
         ),
       ),
-      home: const LoginScreen(),
+      home: const AuthWrapper(), // App starts with AuthWrapper
       debugShowCheckedModeBanner: false,
     );
+  }
+}
+
+// NEW: AuthWrapper to manage login persistence logic
+class AuthWrapper extends StatefulWidget {
+  const AuthWrapper({super.key});
+
+  @override
+  State<AuthWrapper> createState() => _AuthWrapperState();
+}
+
+class _AuthWrapperState extends State<AuthWrapper> {
+  bool _isLoading = true; // To show a loading indicator initially
+
+  @override
+  void initState() {
+    super.initState();
+    _checkLoginStatus(); // Check login status when the widget initializes
+  }
+
+  // Checks if an authentication token is stored locally
+  Future<void> _checkLoginStatus() async {
+    final prefs = await SharedPreferences.getInstance();
+    final token = prefs.getString('auth_token');
+    final username = prefs.getString('username');
+
+    // If both token and username are found, navigate directly to IrisLayout
+    if (token != null && username != null) {
+      // Use addPostFrameCallback to ensure navigation happens after build
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => IrisLayout(username: username),
+            settings: RouteSettings(arguments: {'token': token}),
+          ),
+        );
+      });
+    }
+
+    // Set loading to false once the check is complete, regardless of outcome
+    setState(() {
+      _isLoading = false;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Show a loading indicator while checking for the token
+    if (_isLoading) {
+      return const Scaffold(
+        backgroundColor: Color(0xFF313338),
+        body: Center(
+          child: CircularProgressIndicator(color: Color(0xFF5865F2)),
+        ),
+      );
+    }
+    // If no token was found (or if navigation already happened), show LoginScreen
+    return const LoginScreen();
   }
 }
 
@@ -40,6 +101,13 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
   String? _message;
+
+  @override
+  void dispose() {
+    _usernameController.dispose();
+    _passwordController.dispose();
+    super.dispose();
+  }
 
   Future<void> _login() async {
     setState(() {
@@ -61,12 +129,20 @@ class _LoginScreenState extends State<LoginScreen> {
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200 && data['success'] == true) {
+        final token = data['token'];
+        final username = _usernameController.text.trim();
+
+        // NEW: Save token and username to SharedPreferences
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('auth_token', token);
+        await prefs.setString('username', username); // Also store the username
+
         // On success, navigate to IrisLayout and remove the login screen from stack
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
-            builder: (_) => IrisLayout(username: _usernameController.text),
+            builder: (_) => IrisLayout(username: username),
             settings: RouteSettings(arguments: {
-              'token': data['token'],
+              'token': token,
             }),
           ),
         );
@@ -89,18 +165,18 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: Color(0xFF313338),
+      backgroundColor: const Color(0xFF313338),
       body: Center(
         child: SingleChildScrollView(
           child: Container(
             width: 370,
             padding: const EdgeInsets.all(32),
             decoration: BoxDecoration(
-              color: Color(0xFF2B2D31),
+              color: const Color(0xFF2B2D31),
               borderRadius: BorderRadius.circular(24),
-              boxShadow: [
+              boxShadow: const [ // Made const
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.3),
+                  color: Colors.black, // Color.black.withOpacity is a runtime call
                   blurRadius: 30,
                   offset: Offset(0, 8),
                 ),
@@ -111,7 +187,7 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
-                  Text(
+                  const Text(
                     'IRIS',
                     style: TextStyle(
                       fontFamily: 'Montserrat',
@@ -122,7 +198,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       shadows: [
                         Shadow(
                           blurRadius: 12,
-                          color: Color(0xFF5865F2).withOpacity(0.3),
+                          color: Color(0xFF5865F2), // Removed .withOpacity to allow const Shadow
                           offset: Offset(0, 3),
                         ),
                       ],
@@ -133,25 +209,25 @@ class _LoginScreenState extends State<LoginScreen> {
                     controller: _usernameController,
                     decoration: InputDecoration(
                       filled: true,
-                      fillColor: Color(0xFF232428),
+                      fillColor: const Color(0xFF232428),
                       labelText: 'Username',
-                      prefixIcon: Icon(Icons.person, color: Color(0xFF5865F2)),
+                      prefixIcon: const Icon(Icons.person, color: Color(0xFF5865F2)),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
                     ),
                     validator: (value) => value == null || value.trim().isEmpty ? 'Enter username' : null,
                     enabled: !_loading,
-                    style: TextStyle(color: Colors.white),
+                    style: const TextStyle(color: Colors.white),
                   ),
                   const SizedBox(height: 20),
                   TextFormField(
                     controller: _passwordController,
                     decoration: InputDecoration(
                       filled: true,
-                      fillColor: Color(0xFF232428),
+                      fillColor: const Color(0xFF232428),
                       labelText: 'Password',
-                      prefixIcon: Icon(Icons.lock, color: Color(0xFF5865F2)),
+                      prefixIcon: const Icon(Icons.lock, color: Color(0xFF5865F2)),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
@@ -159,23 +235,23 @@ class _LoginScreenState extends State<LoginScreen> {
                     validator: (value) => value == null || value.isEmpty ? 'Enter password' : null,
                     obscureText: true,
                     enabled: !_loading,
-                    style: TextStyle(color: Colors.white),
+                    style: const TextStyle(color: Colors.white),
                   ),
                   const SizedBox(height: 28),
                   SizedBox(
                     width: double.infinity,
                     child: ElevatedButton.icon(
                       style: ElevatedButton.styleFrom(
-                        backgroundColor: Color(0xFF5865F2),
+                        backgroundColor: const Color(0xFF5865F2),
                         shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(10),
                         ),
                         padding: const EdgeInsets.symmetric(vertical: 16),
-                        textStyle: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                       icon: const Icon(Icons.login, color: Colors.white),
                       label: _loading
-                          ? SizedBox(
+                          ? const SizedBox(
                               width: 22,
                               height: 22,
                               child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
