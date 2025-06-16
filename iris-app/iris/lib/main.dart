@@ -64,6 +64,9 @@ class _LoginScreenState extends State<LoginScreen> {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => IrisLayout(username: _usernameController.text),
+            settings: RouteSettings(arguments: {
+              'token': data['token'],
+            }),
           ),
         );
       } else {

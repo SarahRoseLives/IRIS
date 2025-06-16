@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
 class IrisLayout extends StatefulWidget {
   final String username;
@@ -12,8 +14,10 @@ class _IrisLayoutState extends State<IrisLayout> {
   int selectedChannel = 0;
   bool showLeftDrawer = false;
   bool showRightDrawer = false;
+  bool _loadingChannels = true;
+  String? _error;
+  String? _token;
 
-  final List<String> channels = ['#general', '#random', '#support'];
   final List<String> dms = ['Alice', 'Bob', 'Eve'];
   final List<String> members = ['Alice', 'Bob', 'SarahRose', 'Eve', 'Mallory'];
   final List<String> messages = [
@@ -23,6 +27,48 @@ class _IrisLayoutState extends State<IrisLayout> {
     'SarahRose: This looks awesome!',
   ];
   final TextEditingController _msgController = TextEditingController();
+
+  List<String> channels = [];
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final args = ModalRoute.of(context)?.settings.arguments as Map?;
+    _token = args != null && args.containsKey('token') ? args['token'] : null;
+
+    if (_token != null) {
+      _fetchChannels();
+    }
+  }
+
+  Future<void> _fetchChannels() async {
+    setState(() {
+      _loadingChannels = true;
+      _error = null;
+    });
+
+    final url = Uri.parse('http://localhost:8080/api/channels');
+    try {
+      final response = await http.get(url, headers: {
+        'Authorization': 'Bearer $_token',
+      });
+
+      final data = jsonDecode(response.body);
+      if (response.statusCode == 200 && data['success'] == true) {
+        final List<dynamic> apiChannels = data['channels'];
+        setState(() {
+          channels = apiChannels.map((c) => c['name'].toString()).toList();
+          if (selectedChannel >= channels.length) selectedChannel = 0;
+        });
+      } else {
+        setState(() => _error = data['message'] ?? "Failed to load channels");
+      }
+    } catch (e) {
+      setState(() => _error = "Network error: $e");
+    }
+
+    setState(() => _loadingChannels = false);
+  }
 
   void _sendMessage() {
     if (_msgController.text.trim().isNotEmpty) {
@@ -39,7 +85,6 @@ class _IrisLayoutState extends State<IrisLayout> {
       backgroundColor: const Color(0xFF313338),
       body: Row(
         children: [
-          // Main bar - always visible
           Container(
             width: 80,
             color: const Color(0xFF232428),
@@ -59,7 +104,6 @@ class _IrisLayoutState extends State<IrisLayout> {
                   ),
                 ),
                 const SizedBox(height: 30),
-                // DMs
                 Expanded(
                   child: ListView(
                     children: [
@@ -83,7 +127,6 @@ class _IrisLayoutState extends State<IrisLayout> {
               ],
             ),
           ),
-          // Custom left drawer
           if (showLeftDrawer)
             Container(
               width: 200,
@@ -92,45 +135,70 @@ class _IrisLayoutState extends State<IrisLayout> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    const Padding(
-                      padding: EdgeInsets.all(16.0),
-                      child: Text(
-                        "Channels",
-                        style: TextStyle(
-                            color: Colors.white60,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 22),
+                    Padding(
+                      padding:
+                          const EdgeInsets.symmetric(vertical: 16, horizontal: 16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Text("Channels",
+                              style: TextStyle(
+                                  color: Colors.white60,
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 22)),
+                          IconButton(
+                            icon: const Icon(Icons.refresh,
+                                size: 18, color: Colors.white38),
+                            tooltip: "Refresh",
+                            onPressed: _fetchChannels,
+                          )
+                        ],
                       ),
                     ),
-                    ...channels.asMap().entries.map((entry) {
-                      final idx = entry.key;
-                      final channel = entry.value;
-                      return ListTile(
-                        selected: selectedChannel == idx,
-                        selectedTileColor: const Color(0xFF5865F2),
-                        title: Text(channel,
-                            style: TextStyle(
-                              color: selectedChannel == idx
-                                  ? Colors.white
-                                  : Colors.white70,
-                            )),
-                        onTap: () {
-                          setState(() {
-                            selectedChannel = idx;
-                            showLeftDrawer = false;
-                          });
-                        },
-                      );
-                    }),
+                    if (_loadingChannels)
+                      const Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 16),
+                        child: CircularProgressIndicator(),
+                      )
+                    else if (_error != null)
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 16),
+                        child: Text(_error!,
+                            style: const TextStyle(
+                                color: Colors.redAccent, fontSize: 13)),
+                      )
+                    else
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: channels.length,
+                          itemBuilder: (context, idx) {
+                            final channel = channels[idx];
+                            return ListTile(
+                              selected: selectedChannel == idx,
+                              selectedTileColor: const Color(0xFF5865F2),
+                              title: Text(channel,
+                                  style: TextStyle(
+                                    color: selectedChannel == idx
+                                        ? Colors.white
+                                        : Colors.white70,
+                                  )),
+                              onTap: () {
+                                setState(() {
+                                  selectedChannel = idx;
+                                  showLeftDrawer = false;
+                                });
+                              },
+                            );
+                          },
+                        ),
+                      ),
                   ],
                 ),
               ),
             ),
-          // Main content area
           Expanded(
             child: Column(
               children: [
-                // Top bar: channel name + buttons
                 Container(
                   color: const Color(0xFF232428),
                   height: 56,
@@ -149,15 +217,16 @@ class _IrisLayoutState extends State<IrisLayout> {
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
                         child: Text(
-                          channels[selectedChannel],
+                          channels.isNotEmpty
+                              ? channels[selectedChannel.clamp(0, channels.length - 1)]
+                              : "#loading",
                           style: const TextStyle(
                               color: Colors.white, fontSize: 20),
                         ),
                       ),
                       const Spacer(),
                       IconButton(
-                        icon:
-                            const Icon(Icons.people, color: Colors.white70),
+                        icon: const Icon(Icons.people, color: Colors.white70),
                         tooltip: "Open Members Drawer",
                         onPressed: () {
                           setState(() {
@@ -169,7 +238,6 @@ class _IrisLayoutState extends State<IrisLayout> {
                     ],
                   ),
                 ),
-                // Message history
                 Expanded(
                   child: ListView.builder(
                     padding: const EdgeInsets.all(16.0),
@@ -186,7 +254,6 @@ class _IrisLayoutState extends State<IrisLayout> {
                     },
                   ),
                 ),
-                // Message input bar
                 Container(
                   color: const Color(0xFF232428),
                   padding: const EdgeInsets.symmetric(
@@ -200,7 +267,7 @@ class _IrisLayoutState extends State<IrisLayout> {
                           decoration: InputDecoration(
                             hintText: "Send a message...",
                             hintStyle:
-                                TextStyle(color: Colors.white54, fontSize: 15),
+                                const TextStyle(color: Colors.white54, fontSize: 15),
                             filled: true,
                             fillColor: const Color(0xFF383A40),
                             border: OutlineInputBorder(
@@ -228,7 +295,6 @@ class _IrisLayoutState extends State<IrisLayout> {
               ],
             ),
           ),
-          // Custom right drawer
           if (showRightDrawer)
             Container(
               width: 200,
@@ -247,8 +313,8 @@ class _IrisLayoutState extends State<IrisLayout> {
                     ),
                     ...members.map((m) => ListTile(
                           leading: CircleAvatar(child: Text(m[0])),
-                          title:
-                              Text(m, style: const TextStyle(color: Colors.white)),
+                          title: Text(m,
+                              style: const TextStyle(color: Colors.white)),
                         )),
                   ],
                 ),
