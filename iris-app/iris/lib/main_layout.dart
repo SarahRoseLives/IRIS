@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+
 import 'widgets/left_drawer.dart';
 import 'widgets/right_drawer.dart';
 import 'widgets/channel_panel.dart';
@@ -173,7 +174,7 @@ class _IrisLayoutState extends State<IrisLayout> {
   void _onChannelSelected(int index) {
     setState(() {
       _selectedChannelIndex = index;
-      _showLeftDrawer = false;
+      _showLeftDrawer = false; // Hide drawer after selecting a channel (common UX)
     });
     _fetchChannelMessages(_channels[index]);
   }
@@ -222,60 +223,17 @@ class _IrisLayoutState extends State<IrisLayout> {
       backgroundColor: const Color(0xFF313338),
       body: Row(
         children: [
-          Container(
-            width: 80,
-            color: const Color(0xFF232428),
-            child: Column(
-              children: [
-                const SizedBox(height: 20),
-                const CircleAvatar(
-                  radius: 28,
-                  backgroundColor: Color(0xFF5865F2),
-                  child: Text(
-                    "IRIS",
-                    style: TextStyle(
-                        color: Colors.white,
-                        fontWeight: FontWeight.bold,
-                        fontSize: 18,
-                        letterSpacing: 1.5),
-                  ),
-                ),
-                const SizedBox(height: 30),
-                Expanded(
-                  child: ListView(
-                    children: [
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 4.0),
-                        child: Divider(color: Colors.white54),
-                      ),
-                      ..._dms.map(
-                        (dm) => Padding(
-                          padding: const EdgeInsets.symmetric(vertical: 4.0),
-                          child: CircleAvatar(
-                            backgroundColor: Colors.grey[800],
-                            child: Text(dm[0],
-                                style: const TextStyle(color: Colors.white)),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
+          // The entire LeftDrawer now slides in and out as a single, combined unit
+          LeftDrawer(
+            dms: _dms,
+            channels: _channels,
+            selectedChannelIndex: _selectedChannelIndex,
+            onChannelSelected: _onChannelSelected,
+            loadingChannels: _loadingChannels,
+            error: _channelError,
+            wsStatus: _wsStatus,
+            showDrawer: _showLeftDrawer,
           ),
-          if (_showLeftDrawer)
-            SizedBox(
-              width: 200,
-              child: ChannelPanel(
-                channels: _channels,
-                selectedChannelIndex: _selectedChannelIndex,
-                onChannelSelected: _onChannelSelected,
-                loadingChannels: _loadingChannels,
-                error: _channelError,
-                wsStatus: _wsStatus,
-              ),
-            ),
           Expanded(
             child: SafeArea(
               child: Column(
@@ -290,7 +248,9 @@ class _IrisLayoutState extends State<IrisLayout> {
                           tooltip: "Open Channels Drawer",
                           onPressed: () {
                             setState(() {
+                              // Toggle the visibility of the LeftDrawer
                               _showLeftDrawer = !_showLeftDrawer;
+                              // Ensure right drawer is closed if left opens
                               _showRightDrawer = false;
                             });
                           },
@@ -312,7 +272,7 @@ class _IrisLayoutState extends State<IrisLayout> {
                           onPressed: () {
                             setState(() {
                               _showRightDrawer = !_showRightDrawer;
-                              _showLeftDrawer = false;
+                              _showLeftDrawer = false; // Close left drawer if right opens
                             });
                           },
                         ),
