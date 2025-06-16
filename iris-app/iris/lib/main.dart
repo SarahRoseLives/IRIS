@@ -5,6 +5,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'main_layout.dart';
 import 'config.dart';
+import 'services/api_service.dart'; // Import ApiService
+import 'models/login_response.dart'; // Import LoginResponse model
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -55,10 +57,11 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token');
-    final username = prefs.getString('username');
+    final username = prefs.getString('username'); // Retrieve username
 
     if (token != null && username != null) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
+        // Pass username to IrisLayout
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => IrisLayout(username: username),
@@ -76,7 +79,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   Future<void> logoutAndShowLogin() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
-    await prefs.remove('username');
+    await prefs.remove('username'); // Remove username on logout
 
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
@@ -113,6 +116,7 @@ class _LoginScreenState extends State<LoginScreen> {
   final TextEditingController _passwordController = TextEditingController();
   bool _loading = false;
   String? _message;
+  final ApiService _apiService = ApiService(); // Use ApiService for login
 
   @override
   void dispose() {
@@ -127,47 +131,43 @@ class _LoginScreenState extends State<LoginScreen> {
       _message = null;
     });
 
-    final url = Uri.parse('${baseUrl}/login');
     try {
-      final response = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          "username": _usernameController.text.trim(),
-          "password": _passwordController.text,
-        }),
+      // Use the ApiService login method
+      final LoginResponse response = await _apiService.login(
+        _usernameController.text.trim(),
+        _passwordController.text,
       );
 
-      final data = jsonDecode(response.body);
-
-      if (response.statusCode == 200 && data['success'] == true) {
-        final token = data['token'];
+      if (response.success && response.token != null) {
+        final token = response.token!;
         final username = _usernameController.text.trim();
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('auth_token', token);
-        await prefs.setString('username', username);
+        await prefs.setString('username', username); // Save username
 
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => IrisLayout(username: username),
-            settings: RouteSettings(arguments: {'token': token}),
-          ),
-        );
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => IrisLayout(username: username),
+              settings: RouteSettings(arguments: {'token': token}),
+            ),
+          );
+        }
       } else {
         setState(() {
-          _message = data['message'] ?? "Login failed.";
+          _message = response.message;
         });
       }
     } catch (e) {
       setState(() {
-        _message = "Network error: $e";
+        _message = "Error: $e"; // Catch any unhandled exceptions from ApiService
+      });
+    } finally {
+      setState(() {
+        _loading = false;
       });
     }
-
-    setState(() {
-      _loading = false;
-    });
   }
 
   @override

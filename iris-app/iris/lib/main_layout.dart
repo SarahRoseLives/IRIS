@@ -1,7 +1,8 @@
 // main_layout.dart
 import 'package:flutter/material.dart';
 import 'dart:async'; // Import for Timer
-// import 'package:collection/collection.dart'; // No longer strictly needed for ListEquality here, but good to keep if used elsewhere
+import 'package:shared_preferences/shared_preferences.dart'; // Import for SharedPreferences
+import 'package:http/http.dart' as http; // For checking avatar URL existence
 
 import 'widgets/left_drawer.dart';
 import 'widgets/right_drawer.dart';
@@ -10,7 +11,9 @@ import 'widgets/message_list.dart';
 import 'widgets/message_input.dart';
 import 'services/api_service.dart';
 import 'services/websocket_service.dart';
-import 'config.dart';
+import 'screens/profile_screen.dart'; // Import the new ProfileScreen
+import 'main.dart';
+import 'config.dart'; // Import config for apiHost and apiPort
 
 class IrisLayout extends StatefulWidget {
   final String username;
@@ -26,7 +29,7 @@ class _IrisLayoutState extends State<IrisLayout> {
   bool _showRightDrawer = false;
   bool _loadingChannels = true;
   String? _channelError;
-  String? _token;
+  String? _token; // Store the authentication token
 
   final List<String> _dms = ['Alice', 'Bob', 'Eve'];
   final List<String> _members = ['Alice', 'Bob', 'SarahRose', 'Eve', 'Mallory'];
@@ -35,9 +38,12 @@ class _IrisLayoutState extends State<IrisLayout> {
   final ScrollController _scrollController = ScrollController();
 
   List<String> _channels = [];
-  late ApiService _apiService;
+  late ApiService _apiService; // Initialize later with token
   late WebSocketService _webSocketService;
   WebSocketStatus _wsStatus = WebSocketStatus.disconnected;
+
+  // NEW: Map to store avatar URLs by username
+  Map<String, String> _userAvatars = {};
 
   // --- NEW: Code block re-assembly state ---
   Map<String, List<String>> _codeBlockBuffers = {}; // Map channelName -> List of lines
@@ -47,7 +53,7 @@ class _IrisLayoutState extends State<IrisLayout> {
 
   // Regex to detect code block start/end lines
   final RegExp _codeBlockStartRegex = RegExp(r'^```(\w+)$'); // **Requires a language (e.g., ```dart)**
-  final RegExp _codeBlockEndRegex = RegExp(r'^```$');       // Matches only ```
+  final RegExp _codeBlockEndRegex = RegExp(r'^```$');        // Matches only ```
   // --- END NEW ---
 
   @override
@@ -59,13 +65,9 @@ class _IrisLayoutState extends State<IrisLayout> {
         setState(() {
           _wsStatus = status;
         });
+        // Handle unauthorized status from WebSocket
         if (status == WebSocketStatus.unauthorized) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Session expired. Please login again.'),
-              backgroundColor: Colors.red,
-            ),
-          );
+          _handleLogout(); // Force logout
         }
       }
     });
@@ -77,7 +79,7 @@ class _IrisLayoutState extends State<IrisLayout> {
             _selectedChannelIndex = 0;
           }
         });
-        if (_channels.isNotEmpty) {
+        if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length) {
           _fetchChannelMessages(_channels[_selectedChannelIndex]);
         }
       }
@@ -93,6 +95,8 @@ class _IrisLayoutState extends State<IrisLayout> {
             _selectedChannelIndex < _channels.length &&
             channelName == _channels[_selectedChannelIndex]) {
           _handleIncomingMessage(channelName, sender, content, messageTime);
+          // NEW: Attempt to load avatar for the sender of the new message
+          _loadAvatarForUser(sender);
         }
       }
     });
@@ -212,18 +216,25 @@ class _IrisLayoutState extends State<IrisLayout> {
   }
   // --- END NEW: Message handling logic with re-assembly ---
 
+
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
+    // Retrieve the token passed from the login screen
     final args = ModalRoute.of(context)?.settings.arguments as Map?;
-    _token = args != null && args.containsKey('token') ? args['token'] : null;
+    _token = args?['token'] as String?;
 
     if (_token != null) {
-      _apiService = ApiService(_token!);
-      _fetchChannels();
+      _apiService = ApiService(_token!); // Initialize ApiService with the token
+      _fetchChannels(); // Fetch channels only after token is available
       if (_wsStatus == WebSocketStatus.disconnected || _wsStatus == WebSocketStatus.error) {
-        _webSocketService.connect(_token!);
+        _webSocketService.connect(_token!); // Connect WebSocket with the token
       }
+      // NEW: Load current user's avatar on layout load
+      _loadAvatarForUser(widget.username);
+    } else {
+      // If no token, force logout (should not happen if login flow is correct)
+      _handleLogout();
     }
   }
 
@@ -237,6 +248,57 @@ class _IrisLayoutState extends State<IrisLayout> {
     super.dispose();
   }
 
+  // Handles logout by clearing token and navigating to login screen
+  Future<void> _handleLogout() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth_token');
+    await prefs.remove('username'); // Clear username on logout as well
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (context) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  }
+
+  // NEW: Method to check and load avatar for a given user
+  Future<void> _loadAvatarForUser(String username) async {
+    // If avatar is already known, no need to recheck
+    if (_userAvatars.containsKey(username) && _userAvatars[username] != null) {
+      return;
+    }
+
+    final List<String> possibleExtensions = ['.png', '.jpg', '.jpeg', '.gif'];
+    String? foundUrl;
+
+    for (final ext in possibleExtensions) {
+      final String potentialAvatarUrl = 'http://$apiHost:$apiPort/avatars/$username$ext';
+      try {
+        final response = await http.head(Uri.parse(potentialAvatarUrl));
+        if (response.statusCode == 200) {
+          foundUrl = potentialAvatarUrl;
+          break;
+        }
+      } catch (e) {
+        // Error checking specific URL, continue to next extension
+        print("Error checking avatar for $username with extension $ext: $e");
+      }
+    }
+
+    if (mounted) {
+      setState(() {
+        if (foundUrl != null) {
+          _userAvatars[username] = foundUrl;
+          print('Loaded avatar for $username: $foundUrl');
+        } else {
+          _userAvatars[username] = ''; // Mark as no avatar found to avoid repeated checks
+          print('No avatar found for $username, will use default initial.');
+        }
+      });
+    }
+  }
+
+
   Future<void> _fetchChannels() async {
     setState(() {
       _loadingChannels = true;
@@ -248,16 +310,21 @@ class _IrisLayoutState extends State<IrisLayout> {
       setState(() {
         _channels = fetchedChannels;
         if (_selectedChannelIndex >= _channels.length) {
-          _selectedChannelIndex = 0;
+          _selectedChannelIndex = 0; // Reset to 0 if current index is out of bounds
         }
       });
-      if (_channels.isNotEmpty) {
-        // When fetching historical messages, we need to re-assemble them too.
-        // Process them through _handleIncomingMessage to build proper blocks.
+      if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length) {
         _fetchChannelMessages(_channels[_selectedChannelIndex]);
+      } else {
+        // If no channels, clear messages
+        setState(() {
+          _messages.clear();
+          _messages.add({'from': 'System', 'content': 'No channels available. Join one!', 'time': DateTime.now().toIso8601String()});
+        });
       }
     } catch (e) {
       setState(() => _channelError = e.toString().replaceFirst('Exception: ', ''));
+      print("Error fetching channels: $_channelError");
     } finally {
       setState(() => _loadingChannels = false);
     }
@@ -273,7 +340,10 @@ class _IrisLayoutState extends State<IrisLayout> {
         _messages.clear(); // Clear the 'Loading messages...'
         // Process each fetched message through the re-assembly logic
         for (var msg in fetchedMessages) {
-          _handleIncomingMessage(msg['channel_name'] ?? channelName, msg['from'] ?? 'Unknown', msg['content'] ?? '', msg['time']);
+          final sender = msg['from'] ?? 'Unknown';
+          _handleIncomingMessage(msg['channel_name'] ?? channelName, sender, msg['content'] ?? '', msg['time']);
+          // NEW: Load avatar for all senders in historical messages
+          _loadAvatarForUser(sender);
         }
       });
       _scrollToBottom();
@@ -285,7 +355,6 @@ class _IrisLayoutState extends State<IrisLayout> {
     }
   }
 
-
   void _onChannelSelected(int index) {
     setState(() {
       _selectedChannelIndex = index;
@@ -296,31 +365,42 @@ class _IrisLayoutState extends State<IrisLayout> {
     _fetchChannelMessages(_channels[index]);
   }
 
-  void _sendMessage() {
+  void _sendMessage() async {
     final text = _msgController.text.trim();
-    if (text.isNotEmpty && _channels.isNotEmpty) {
-      final currentChannel = _channels[_selectedChannelIndex];
+    if (text.isEmpty || _channels.isEmpty || _token == null) {
+      return;
+    }
+
+    final currentChannel = _channels[_selectedChannelIndex];
+
+    // Optimistic update: Add the message to the local list immediately.
+    // We'll trust the WebSocket echo to confirm it, but this gives immediate feedback.
+    // The local message sender does not need re-assembly because it sends the full block.
+    setState(() {
+      _addMessageToDisplay({
+        'from': widget.username,
+        'content': text,
+        'time': DateTime.now().toIso8601String(), // Use current time for optimistic message
+      });
+      // NEW: Ensure current user's avatar is loaded if not already
+      _loadAvatarForUser(widget.username);
+    });
+    _scrollToBottom(); // Scroll to bottom after adding message
+
+    try {
       _webSocketService.sendMessage(currentChannel, text);
       _msgController.clear();
-
-      // OPTIMISTIC UPDATE: Add the message to the local list immediately
-      // The local message sender doesn't need re-assembly because it sends the full block.
-      // So, we just add it directly to display messages.
-      setState(() {
-        _addMessageToDisplay({
-          'from': widget.username,
-          'content': text,
-          'time': DateTime.now().toIso8601String(), // Use current time for optimistic message
-        });
-      });
-      _scrollToBottom(); // Scroll to bottom after adding message
-    } else if (_wsStatus != WebSocketStatus.connected) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Cannot send message: WebSocket $_wsStatus.'),
-          backgroundColor: Colors.red,
-        ),
-      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send message: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+      // If send fails, consider removing the optimistic update or showing a failed status
+      // For now, we'll let the WS stream handle discrepancies.
     }
   }
 
@@ -334,6 +414,40 @@ class _IrisLayoutState extends State<IrisLayout> {
         );
       }
     });
+  }
+
+  void _showJoinChannelDialog() {
+    final TextEditingController channelNameController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Join Channel'),
+          content: TextField(
+            controller: channelNameController,
+            decoration: const InputDecoration(hintText: 'Enter channel name (e.g., #general)'),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            ElevatedButton(
+              child: const Text('Join'),
+              onPressed: () async {
+                if (channelNameController.text.isNotEmpty) {
+                  await _apiService.joinChannel(channelNameController.text);
+                  _fetchChannels(); // Refresh channels after joining
+                  if (mounted) Navigator.of(context).pop();
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -367,10 +481,8 @@ class _IrisLayoutState extends State<IrisLayout> {
                           tooltip: "Open Channels Drawer",
                           onPressed: () {
                             setState(() {
-                              // Toggle the visibility of the LeftDrawer
                               _showLeftDrawer = !_showLeftDrawer;
-                              // Ensure right drawer is closed if left opens
-                              _showRightDrawer = false;
+                              _showRightDrawer = false; // Ensure right drawer is closed if left opens
                             });
                           },
                         ),
@@ -385,6 +497,20 @@ class _IrisLayoutState extends State<IrisLayout> {
                           ),
                         ),
                         const Spacer(),
+                        // New Profile Icon
+                        if (_token != null) // Only show if authenticated
+                          IconButton(
+                            icon: const Icon(Icons.person, color: Colors.white70),
+                            tooltip: "Profile",
+                            onPressed: () {
+                              Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (context) => ProfileScreen(authToken: _token!),
+                                ),
+                              );
+                            },
+                          ),
                         IconButton(
                           icon: const Icon(Icons.people, color: Colors.white70),
                           tooltip: "Open Members Drawer",
@@ -395,6 +521,11 @@ class _IrisLayoutState extends State<IrisLayout> {
                             });
                           },
                         ),
+                        IconButton(
+                          icon: const Icon(Icons.logout, color: Colors.white70),
+                          tooltip: "Logout",
+                          onPressed: _handleLogout,
+                        ),
                       ],
                     ),
                   ),
@@ -402,6 +533,7 @@ class _IrisLayoutState extends State<IrisLayout> {
                     child: MessageList(
                       messages: _messages,
                       scrollController: _scrollController,
+                      userAvatars: _userAvatars, // Pass the userAvatars map
                     ),
                   ),
                   MessageInput(

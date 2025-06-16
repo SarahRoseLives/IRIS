@@ -162,7 +162,7 @@ func GetChannelMessagesHandler(c *gin.Context) {
 	// --- END NEW ---
 
 	if !exists { // Check existence AFTER unlocking, if you're not using the messages slice.
-                  // For this logic, it's safer to have the messages var before this check.
+		// For this logic, it's safer to have the messages var before this check.
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "Channel not found in session"})
 		return
 	}

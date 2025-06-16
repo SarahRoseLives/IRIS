@@ -2,7 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config.dart';
-import '../main.dart';
+import '../main.dart'; // Import AuthWrapper from main.dart
 
 enum WebSocketStatus {
   disconnected,
@@ -113,7 +113,7 @@ class WebSocketService {
     print("[WebSocketService] Unauthorized token — force logout.");
     _statusController.add(WebSocketStatus.unauthorized);
     disconnect();
-    AuthWrapper.forceLogout();
+    AuthWrapper.forceLogout(); // Call static method to trigger logout
   }
 
   void _handleWebSocketError(dynamic error) {
