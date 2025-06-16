@@ -32,12 +32,19 @@ class MessageInput extends StatelessWidget {
                   borderSide: BorderSide.none,
                 ),
               ),
-              onSubmitted: (_) => onSendMessage(),
+              // --- START MODIFICATIONS FOR MULTI-LINE INPUT ---
+              maxLines: null, // Allows the TextField to expand vertically
+              keyboardType: TextInputType.multiline, // Ensures the keyboard provides a newline button
+              // The onSubmitted property is removed/commented out
+              // so that pressing Enter creates a newline instead of sending the message.
+              // Sending is now solely handled by the explicit IconButton.
+              // onSubmitted: (_) => onSendMessage(), // REMOVE THIS LINE
+              // --- END MODIFICATIONS FOR MULTI-LINE INPUT ---
             ),
           ),
           IconButton(
             icon: const Icon(Icons.send, color: Color(0xFF5865F2)),
-            onPressed: onSendMessage,
+            onPressed: onSendMessage, // This button will now be the primary way to send
             tooltip: "Send",
           ),
           IconButton(
