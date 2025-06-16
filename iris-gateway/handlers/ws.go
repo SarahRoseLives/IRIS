@@ -35,7 +35,9 @@ func WebSocketHandler(c *gin.Context) {
 	sess, ok := session.GetSession(token)
 	if !ok {
 		log.Printf("[WS] Unauthorized access attempt with token: %s", token)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid session token"})
+		// Return raw 401 Unauthorized BEFORE upgrade
+		c.Writer.WriteHeader(http.StatusUnauthorized)
+		c.Writer.Write([]byte("Unauthorized: Invalid session token"))
 		return
 	}
 
@@ -90,24 +92,24 @@ func WebSocketHandler(c *gin.Context) {
 			var clientMsg events.WsEvent
 			if err := json.Unmarshal(p, &clientMsg); err == nil {
 				if clientMsg.Type == "message" {
+					// Cast Payload to map[string]interface{}
 					if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
 						channelName, channelOk := payload["channel_name"].(string)
 						text, textOk := payload["text"].(string)
 
 						if channelOk && textOk {
-							// --- NEW: Send message to IRC instead of direct broadcast ---
+							// Send message to IRC instead of direct broadcast
 							log.Printf("[WS] Sending message to IRC channel %s from %s: %s", channelName, sess.Username, text)
 							sess.IRC.Privmsg(channelName, text)
-							// The message will be broadcast to WebSockets when the IRC server
-							// echoes it back via the PRIVMSG callback in irc/connection.go.
-							// This ensures consistency.
-							// --- END NEW ---
+							// Message will be broadcast when IRC echoes it back
 						} else {
 							log.Printf("[WS] Received malformed 'message' payload from %s: %v", sess.Username, payload)
 						}
+					} else {
+						log.Printf("[WS] Invalid payload structure in 'message' from %s", sess.Username)
 					}
 				} else {
-					// For other event types received from client, e.g., 'typing_start', you could broadcast them
+					// For other event types, broadcast
 					events.SendEvent(clientMsg.Type, clientMsg.Payload)
 				}
 			} else {

@@ -1,12 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart'; // Import shared_preferences
-import 'iris_layout.dart';
-import 'config.dart'; // Your config.dart import
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'main_layout.dart';
+import 'config.dart';
 
 void main() {
-  // Required for SharedPreferences to be initialized before runApp
   WidgetsFlutterBinding.ensureInitialized();
   runApp(const IRISApp());
 }
@@ -19,43 +19,45 @@ class IRISApp extends StatelessWidget {
     return MaterialApp(
       title: 'IRIS',
       theme: ThemeData.dark().copyWith(
-        colorScheme: const ColorScheme.dark( // Added const
+        colorScheme: const ColorScheme.dark(
           primary: Color(0xFF5865F2),
           secondary: Color(0xFF5865F2),
         ),
       ),
-      home: const AuthWrapper(), // App starts with AuthWrapper
+      home: AuthWrapper(key: AuthWrapper.globalKey),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-// NEW: AuthWrapper to manage login persistence logic
 class AuthWrapper extends StatefulWidget {
-  const AuthWrapper({super.key});
+  AuthWrapper({Key? key}) : super(key: key);
+
+  static final GlobalKey<_AuthWrapperState> globalKey = GlobalKey<_AuthWrapperState>();
+
+  static Future<void> forceLogout() async {
+    globalKey.currentState?.logoutAndShowLogin();
+  }
 
   @override
   State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
 class _AuthWrapperState extends State<AuthWrapper> {
-  bool _isLoading = true; // To show a loading indicator initially
+  bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
-    _checkLoginStatus(); // Check login status when the widget initializes
+    _checkLoginStatus();
   }
 
-  // Checks if an authentication token is stored locally
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token');
     final username = prefs.getString('username');
 
-    // If both token and username are found, navigate directly to IrisLayout
     if (token != null && username != null) {
-      // Use addPostFrameCallback to ensure navigation happens after build
       WidgetsBinding.instance.addPostFrameCallback((_) {
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
@@ -66,15 +68,26 @@ class _AuthWrapperState extends State<AuthWrapper> {
       });
     }
 
-    // Set loading to false once the check is complete, regardless of outcome
     setState(() {
       _isLoading = false;
     });
   }
 
+  Future<void> logoutAndShowLogin() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('auth_token');
+    await prefs.remove('username');
+
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const LoginScreen()),
+        (route) => false,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Show a loading indicator while checking for the token
     if (_isLoading) {
       return const Scaffold(
         backgroundColor: Color(0xFF313338),
@@ -83,7 +96,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
         ),
       );
     }
-    // If no token was found (or if navigation already happened), show LoginScreen
     return const LoginScreen();
   }
 }
@@ -132,18 +144,14 @@ class _LoginScreenState extends State<LoginScreen> {
         final token = data['token'];
         final username = _usernameController.text.trim();
 
-        // NEW: Save token and username to SharedPreferences
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('auth_token', token);
-        await prefs.setString('username', username); // Also store the username
+        await prefs.setString('username', username);
 
-        // On success, navigate to IrisLayout and remove the login screen from stack
         Navigator.of(context).pushReplacement(
           MaterialPageRoute(
             builder: (_) => IrisLayout(username: username),
-            settings: RouteSettings(arguments: {
-              'token': token,
-            }),
+            settings: RouteSettings(arguments: {'token': token}),
           ),
         );
       } else {
@@ -174,9 +182,9 @@ class _LoginScreenState extends State<LoginScreen> {
             decoration: BoxDecoration(
               color: const Color(0xFF2B2D31),
               borderRadius: BorderRadius.circular(24),
-              boxShadow: const [ // Made const
+              boxShadow: const [
                 BoxShadow(
-                  color: Colors.black, // Color.black.withOpacity is a runtime call
+                  color: Colors.black,
                   blurRadius: 30,
                   offset: Offset(0, 8),
                 ),
@@ -198,7 +206,7 @@ class _LoginScreenState extends State<LoginScreen> {
                       shadows: [
                         Shadow(
                           blurRadius: 12,
-                          color: Color(0xFF5865F2), // Removed .withOpacity to allow const Shadow
+                          color: Color(0xFF5865F2),
                           offset: Offset(0, 3),
                         ),
                       ],
@@ -268,10 +276,13 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   if (_message != null) ...[
                     const SizedBox(height: 20),
-                    Text(_message!,
-                        style: TextStyle(
-                            color: _message!.contains("success") ? Colors.green : Colors.redAccent,
-                            fontWeight: FontWeight.bold)),
+                    Text(
+                      _message!,
+                      style: TextStyle(
+                        color: _message!.contains("success") ? Colors.green : Colors.redAccent,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
                   ],
                 ],
               ),

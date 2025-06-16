@@ -35,6 +35,17 @@ func LoginHandler(c *gin.Context) {
         return
     }
 
+    // Check if there is already a session for this username
+    existingToken, found := session.FindSessionTokenByUsername(req.Username)
+    if found {
+        c.JSON(http.StatusOK, gin.H{
+            "success": true,
+            "message": "Already logged in",
+            "token":   existingToken,
+        })
+        return
+    }
+
     // Authenticate with Ergo
     body := map[string]string{
         "accountName": req.Username,
