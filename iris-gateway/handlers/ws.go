@@ -9,7 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
-	"iris-gateway/events" // IMPORANT: Import the new events package
+	"iris-gateway/events"
 	"iris-gateway/session"
 )
 
@@ -20,6 +20,12 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // Allow all origins for development
 	},
+}
+
+// WsEvent struct matches the Flutter client's expected event format
+type WsEvent struct {
+	Type    string      `json:"type"`
+	Payload interface{} `json:"payload"`
 }
 
 // WebSocketHandler handles the initial WebSocket connection upgrade and
@@ -50,7 +56,7 @@ func WebSocketHandler(c *gin.Context) {
 	}
 	sess.Mutex.RUnlock()
 
-	conn.WriteJSON(events.WsEvent{ // Use events.WsEvent
+	conn.WriteJSON(events.WsEvent{
 		Type: "initial_state",
 		Payload: map[string]interface{}{
 			"message":  fmt.Sprintf("Connected to IRIS as %s", sess.Username),
@@ -81,17 +87,28 @@ func WebSocketHandler(c *gin.Context) {
 
 			log.Printf("[WS] Received message from %s: %s (Type: %d)", sess.Username, string(p), messageType)
 
-			var clientMsg events.WsEvent // Use events.WsEvent
+			var clientMsg events.WsEvent
 			if err := json.Unmarshal(p, &clientMsg); err == nil {
 				if clientMsg.Type == "message" {
 					if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
-						if _, exists := payload["sender"]; !exists {
-							payload["sender"] = sess.Username
-							clientMsg.Payload = payload
+						channelName, channelOk := payload["channel_name"].(string)
+						text, textOk := payload["text"].(string)
+
+						if channelOk && textOk {
+							// --- NEW: Send message to IRC instead of direct broadcast ---
+							log.Printf("[WS] Sending message to IRC channel %s from %s: %s", channelName, sess.Username, text)
+							sess.IRC.Privmsg(channelName, text)
+							// The message will be broadcast to WebSockets when the IRC server
+							// echoes it back via the PRIVMSG callback in irc/connection.go.
+							// This ensures consistency.
+							// --- END NEW ---
+						} else {
+							log.Printf("[WS] Received malformed 'message' payload from %s: %v", sess.Username, payload)
 						}
 					}
-					// Send the incoming message to the global broadcast channel
-					events.SendEvent(clientMsg.Type, clientMsg.Payload) // Use events.SendEvent
+				} else {
+					// For other event types received from client, e.g., 'typing_start', you could broadcast them
+					events.SendEvent(clientMsg.Type, clientMsg.Payload)
 				}
 			} else {
 				log.Printf("[WS] Failed to unmarshal incoming message from %s: %v", sess.Username, err)
