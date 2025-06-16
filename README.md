@@ -11,6 +11,7 @@ Iris is a sleek, mobile-first chat application that brings modern UX to the IRC 
 - 📱 **Beautiful Android client** with modern chat UI
 - 🌐 **Gateway server** connects to an Ergo IRC Server
   - Allows us to place a websocket interface between IRC and the Flutter/Android Client
+  - Uses ProxyProtocol v1 to pipe client ip to Ergo IRC server
 - 🖼️ **Embedded media** support including avatars and images
 - 🔐 **NickServ authentication** for secure identity
 - 💬 **Discord-style experience** with channel lists, DMs, and more
