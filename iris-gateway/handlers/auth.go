@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net" // New import for net package
 	"net/http"
 	"strings"
 	"time"
@@ -84,8 +85,15 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
+	// Extract the client's IP address
+	clientIP, _, err := net.SplitHostPort(c.Request.RemoteAddr)
+	if err != nil {
+		clientIP = c.Request.RemoteAddr // Fallback if SplitHostPort fails (e.g., no port)
+	}
+
 	// Connect to IRC
-	client, err := irc.AuthenticateWithNickServ(req.Username, req.Password)
+	// Pass the clientIP to the AuthenticateWithNickServ function
+	client, err := irc.AuthenticateWithNickServ(req.Username, req.Password, clientIP)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "IRC login failed: " + err.Error()})
 		return
@@ -120,9 +128,9 @@ func LoginHandler(c *gin.Context) {
 		userSession.Mutex.Lock()
 		if _, exists := userSession.Channels[channel]; !exists {
 			userSession.Channels[channel] = &session.ChannelState{
-				Name:        channel,
-				Members:     []string{userSession.Username},
-				Messages:    []session.Message{},
+				Name:       channel,
+				Members:    []string{userSession.Username},
+				Messages:   []session.Message{},
 				LastUpdate: time.Now(),
 			}
 		} else {
