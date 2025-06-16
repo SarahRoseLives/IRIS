@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:web_socket_channel/web_socket_channel.dart';
+import 'config.dart';
 
 class IrisLayout extends StatefulWidget {
   final String username;
@@ -60,7 +61,7 @@ class _IrisLayoutState extends State<IrisLayout> {
       _error = null;
     });
 
-    final url = Uri.parse('http://localhost:8080/api/channels');
+    final url = Uri.parse('${baseUrl}/channels');
     try {
       final response = await http.get(url, headers: {
         'Authorization': 'Bearer $_token',
@@ -91,7 +92,7 @@ class _IrisLayoutState extends State<IrisLayout> {
   Future<void> _fetchChannelMessages(String channelName) async {
     if (_token == null || channelName.isEmpty) return;
 
-    final url = Uri.parse('http://localhost:8080/api/channels/$channelName/messages');
+    final url = Uri.parse('${baseUrl}/channels/$channelName/messages');
     try {
       final response = await http.get(url, headers: {
         'Authorization': 'Bearer $_token',
@@ -100,7 +101,6 @@ class _IrisLayoutState extends State<IrisLayout> {
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
         setState(() {
-          // Correctly handle 'messages' being null by providing an empty list
           final List<dynamic> receivedMessages = data['messages'] ?? [];
           messages = receivedMessages
               .map((msg) => {
@@ -133,7 +133,7 @@ class _IrisLayoutState extends State<IrisLayout> {
     });
     print("[WebSocket] Attempting to connect...");
 
-    final uri = Uri.parse("ws://localhost:8080/ws/$token");
+    final uri = Uri.parse("$websocketUrl/$token");
 
     try {
       _ws = WebSocketChannel.connect(uri);
@@ -338,6 +338,7 @@ class _IrisLayoutState extends State<IrisLayout> {
             Container(
               width: 200,
               color: const Color(0xFF2B2D31),
+              // FIX: Apply SafeArea only here, allowing the Column inside to be dynamic
               child: SafeArea(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -361,10 +362,10 @@ class _IrisLayoutState extends State<IrisLayout> {
                           Expanded(
                             flex: 1,
                             child: Text(
-                              _wsStatus,
+                              _wsStatus, // This can now be dynamic
                               textAlign: TextAlign.right,
                               overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
+                              style: TextStyle( // This can now be dynamic
                                 color: _wsStatus == 'Connected' ? Colors.greenAccent : Colors.redAccent,
                                 fontSize: 12,
                               ),
@@ -415,160 +416,163 @@ class _IrisLayoutState extends State<IrisLayout> {
                 ),
               ),
             ),
+          // Main chat area (expanded)
           Expanded(
-            child: Column(
-              children: [
-                Container(
-                  color: const Color(0xFF232428),
-                  height: 56,
-                  child: Row(
-                    children: [
-                      IconButton(
-                        icon: const Icon(Icons.menu, color: Colors.white54),
-                        tooltip: "Open Channels Drawer",
-                        onPressed: () {
-                          setState(() {
-                            showLeftDrawer = !showLeftDrawer;
-                            showRightDrawer = false;
-                          });
-                        },
-                      ),
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8),
-                        child: Text(
-                          channels.isNotEmpty && selectedChannel < channels.length
-                              ? channels[selectedChannel]
-                              : "#loading",
-                          style: const TextStyle(
-                              color: Colors.white, fontSize: 20),
+            child: SafeArea( // Apply SafeArea to the main chat Column
+              child: Column( // This Column is now dynamic again
+                children: [
+                  Container(
+                    color: const Color(0xFF232428),
+                    height: 56,
+                    child: Row(
+                      children: [
+                        IconButton(
+                          icon: const Icon(Icons.menu, color: Colors.white54),
+                          tooltip: "Open Channels Drawer",
+                          onPressed: () {
+                            setState(() {
+                              showLeftDrawer = !showLeftDrawer;
+                              showRightDrawer = false;
+                            });
+                          },
                         ),
-                      ),
-                      const Spacer(),
-                      IconButton(
-                        icon: const Icon(Icons.people, color: Colors.white70),
-                        tooltip: "Open Members Drawer",
-                        onPressed: () {
-                          setState(() {
-                            showRightDrawer = !showRightDrawer;
-                            showLeftDrawer = false;
-                          });
-                        },
-                      ),
-                    ],
-                  ),
-                ),
-                Expanded(
-                  child: ListView.builder(
-                    controller: _scrollController,
-                    padding: const EdgeInsets.all(16.0),
-                    itemCount: messages.length,
-                    itemBuilder: (context, idx) {
-                      final message = messages[idx];
-                      return Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8.0),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            CircleAvatar(
-                              backgroundColor: Color(0xFF5865F2),
-                              radius: 18,
-                              child: Text(
-                                message['from']?.toString().isNotEmpty == true
-                                    ? message['from'][0].toUpperCase()
-                                    : '?',
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Row(
-                                    children: [
-                                      Text(
-                                        message['from'] ?? 'Unknown',
-                                        style: const TextStyle(
-                                            color: Colors.white,
-                                            fontWeight: FontWeight.bold,
-                                            fontSize: 15),
-                                      ),
-                                      const SizedBox(width: 8),
-                                      Text(
-                                        (message['time'] != null && message['time'] is String)
-                                            ? DateTime.tryParse(message['time'])
-                                                    ?.toLocal()
-                                                    .toString()
-                                                    .split('.')[0]
-                                                    .substring(11, 16) ?? ''
-                                            : '',
-                                        style: const TextStyle(
-                                            color: Colors.white54, fontSize: 12),
-                                      ),
-                                    ],
-                                  ),
-                                  Text(
-                                    message['content'] ?? '',
-                                    style: const TextStyle(
-                                        color: Colors.white, fontSize: 16),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    },
-                  ),
-                ),
-                Container(
-                  color: const Color(0xFF232428),
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 12.0, vertical: 8.0),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: _msgController,
-                          style: const TextStyle(color: Colors.white),
-                          decoration: InputDecoration(
-                            hintText: "Send a message...",
-                            hintStyle:
-                                const TextStyle(color: Colors.white54, fontSize: 15),
-                            filled: true,
-                            fillColor: const Color(0xFF383A40),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide.none,
-                            ),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 8),
+                          child: Text(
+                            channels.isNotEmpty && selectedChannel < channels.length
+                                ? channels[selectedChannel]
+                                : "#loading",
+                            style: const TextStyle(
+                                color: Colors.white, fontSize: 20),
                           ),
-                          onSubmitted: (_) => _sendMessage(),
                         ),
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.send, color: Color(0xFF5865F2)),
-                        onPressed: _sendMessage,
-                        tooltip: "Send",
-                      ),
-                      IconButton(
-                        icon: const Icon(Icons.attach_file,
-                            color: Colors.white70),
-                        onPressed: () {},
-                        tooltip: "Attach",
-                      ),
-                    ],
+                        const Spacer(),
+                        IconButton(
+                          icon: const Icon(Icons.people, color: Colors.white70),
+                          tooltip: "Open Members Drawer",
+                          onPressed: () {
+                            setState(() {
+                              showRightDrawer = !showRightDrawer;
+                              showLeftDrawer = false;
+                            });
+                          },
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                  Expanded(
+                    child: ListView.builder(
+                      controller: _scrollController,
+                      padding: const EdgeInsets.all(16.0),
+                      itemCount: messages.length,
+                      itemBuilder: (context, idx) {
+                        final message = messages[idx];
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              CircleAvatar(
+                                backgroundColor: const Color(0xFF5865F2),
+                                radius: 18,
+                                child: Text(
+                                  message['from']?.toString().isNotEmpty == true
+                                      ? message['from'][0].toUpperCase()
+                                      : '?',
+                                  style: const TextStyle(
+                                      color: Colors.white, fontSize: 14, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Text(
+                                          message['from'] ?? 'Unknown',
+                                          style: const TextStyle(
+                                              color: Colors.white,
+                                              fontWeight: FontWeight.bold,
+                                              fontSize: 15),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Text(
+                                          (message['time'] != null && message['time'] is String)
+                                              ? DateTime.tryParse(message['time'])
+                                                      ?.toLocal()
+                                                      .toString()
+                                                      .split('.')[0]
+                                                      .substring(11, 16) ?? ''
+                                              : '',
+                                          style: const TextStyle(
+                                              color: Colors.white54, fontSize: 12),
+                                        ),
+                                      ],
+                                    ),
+                                    Text(
+                                      message['content'] ?? '',
+                                      style: const TextStyle(
+                                          color: Colors.white, fontSize: 16),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                  Container(
+                    color: const Color(0xFF232428),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 12.0, vertical: 8.0),
+                    child: Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: _msgController,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: "Send a message...",
+                              hintStyle:
+                                  const TextStyle(color: Colors.white54, fontSize: 15),
+                              filled: true,
+                              fillColor: const Color(0xFF383A40),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none,
+                              ),
+                            ),
+                            onSubmitted: (_) => _sendMessage(),
+                          ),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.send, color: Color(0xFF5865F2)),
+                          onPressed: _sendMessage,
+                          tooltip: "Send",
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.attach_file,
+                              color: Colors.white70),
+                          onPressed: () {},
+                          tooltip: "Attach",
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
             ),
           ),
           if (showRightDrawer)
             Container(
               width: 200,
               color: const Color(0xFF2B2D31),
-              child: SafeArea(
-                child: Column(
+              child: SafeArea( // Apply SafeArea to the right drawer's content
+                child: Column( // This Column is now dynamic again
                   children: [
                     const ListTile(
                       title: Text(

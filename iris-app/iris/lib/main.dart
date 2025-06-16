@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'iris_layout.dart';
+import 'config.dart';
 
 void main() {
   runApp(const IRISApp());
@@ -46,7 +47,7 @@ class _LoginScreenState extends State<LoginScreen> {
       _message = null;
     });
 
-    final url = Uri.parse('http://localhost:8080/api/login'); // for testing local server
+    final url = Uri.parse('${baseUrl}/login');
     try {
       final response = await http.post(
         url,
