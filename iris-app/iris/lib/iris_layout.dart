@@ -1,6 +1,8 @@
+import 'dart:async'; // Required for Timer
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:web_socket_channel/web_socket_channel.dart';
 
 class IrisLayout extends StatefulWidget {
   final String username;
@@ -17,6 +19,7 @@ class _IrisLayoutState extends State<IrisLayout> {
   bool _loadingChannels = true;
   String? _error;
   String? _token;
+  String _wsStatus = 'Disconnected'; // To show WebSocket connection status
 
   final List<String> dms = ['Alice', 'Bob', 'Eve'];
   final List<String> members = ['Alice', 'Bob', 'SarahRose', 'Eve', 'Mallory'];
@@ -29,6 +32,8 @@ class _IrisLayoutState extends State<IrisLayout> {
   final TextEditingController _msgController = TextEditingController();
 
   List<String> channels = [];
+  WebSocketChannel? _ws;
+  Timer? _reconnectTimer; // Timer for WebSocket reconnection attempts
 
   @override
   void didChangeDependencies() {
@@ -38,7 +43,19 @@ class _IrisLayoutState extends State<IrisLayout> {
 
     if (_token != null) {
       _fetchChannels();
+      // Only attempt to connect WebSocket if it's not already connected or connecting
+      if (_ws == null || _wsStatus == 'Disconnected' || _wsStatus == 'Error') {
+        _connectWebSocket(_token!);
+      }
     }
+  }
+
+  @override
+  void dispose() {
+    _ws?.sink.close();
+    _reconnectTimer?.cancel(); // Cancel any active reconnection timer
+    _msgController.dispose();
+    super.dispose();
   }
 
   Future<void> _fetchChannels() async {
@@ -58,24 +75,180 @@ class _IrisLayoutState extends State<IrisLayout> {
         final List<dynamic> apiChannels = data['channels'];
         setState(() {
           channels = apiChannels.map((c) => c['name'].toString()).toList();
-          if (selectedChannel >= channels.length) selectedChannel = 0;
+          if (selectedChannel >= channels.length) {
+            selectedChannel = 0;
+          }
+          // If channels loaded successfully and it's the first load, set a welcome message
+          if (messages.isEmpty && channels.isNotEmpty) {
+            messages.add('Welcome to #${channels[selectedChannel]}!');
+          }
         });
       } else {
         setState(() => _error = data['message'] ?? "Failed to load channels");
       }
     } catch (e) {
       setState(() => _error = "Network error: $e");
+    } finally {
+      setState(() => _loadingChannels = false);
     }
+  }
 
-    setState(() => _loadingChannels = false);
+  void _connectWebSocket(String token) {
+    _reconnectTimer?.cancel(); // Clear any existing reconnect timer
+
+    setState(() {
+      _wsStatus = 'Connecting...';
+    });
+    print("[WebSocket] Attempting to connect...");
+
+    // IMPORTANT: Ensure your backend serves WebSocket on this exact URL.
+    // If running on a physical Android device, replace 'localhost' with '10.0.2.2'.
+    // If running on a physical iOS device, replace 'localhost' with your machine's local IP.
+    final uri = Uri.parse("ws://localhost:8080/ws/$token");
+
+    try {
+      _ws = WebSocketChannel.connect(uri);
+
+      // Listen for the WebSocket connection to be ready
+      _ws!.ready.then((_) {
+        setState(() {
+          _wsStatus = 'Connected';
+        });
+        print("[WebSocket] Connected successfully to: $uri");
+      }).catchError((e) {
+        print("[WebSocket] Initial connection error: $e");
+        _handleWebSocketError(e);
+      });
+
+      // Listen for messages, errors, and connection closing
+      _ws!.stream.listen((message) {
+        final event = jsonDecode(message);
+        print("[WebSocket] Received event: $event");
+
+        if (event['type'] == 'initial_state') {
+          final List<dynamic> receivedChannels = event['payload']['channels'] ?? [];
+          setState(() {
+            channels = receivedChannels.map((c) => c['name'].toString()).toList();
+            // Ensure selectedChannel is still valid after initial state update
+            if (selectedChannel >= channels.length) {
+              selectedChannel = 0;
+            }
+            // Add a welcome message if the message list is empty
+            if (messages.isEmpty && channels.isNotEmpty) {
+              messages.add('Welcome to #${channels[selectedChannel]}!');
+            } else if (messages.isEmpty && channels.isEmpty) {
+              messages.add('No channels available.');
+            }
+          });
+        }
+
+        if (event['type'] == 'channel_join') {
+          final channel = event['payload']['name'];
+          if (!channels.contains(channel)) {
+            setState(() {
+              channels.add(channel);
+            });
+          }
+        } else if (event['type'] == 'channel_part') {
+          final channelToRemove = event['payload']['name'];
+          setState(() {
+            final int indexToRemove = channels.indexOf(channelToRemove);
+            if (indexToRemove != -1) {
+              channels.removeAt(indexToRemove);
+              // Adjust selectedChannel if the removed channel was currently selected
+              if (selectedChannel == indexToRemove) {
+                if (channels.isNotEmpty) {
+                  // If there are other channels, select the first one
+                  selectedChannel = 0;
+                  messages.clear();
+                  messages.add('Welcome to #${channels[selectedChannel]}!');
+                } else {
+                  // No channels left
+                  selectedChannel = 0; // Default or indicate no channel
+                  messages.clear();
+                  messages.add('No channels available.');
+                }
+              } else if (selectedChannel > indexToRemove) {
+                // If a channel before the selected one was removed,
+                // shift the selectedChannel index back by one
+                selectedChannel--;
+              }
+            }
+          });
+        } else if (event['type'] == 'message') {
+          final payload = event['payload'];
+          final String sender = payload['sender'] ?? 'Unknown';
+          final String text = payload['text'] ?? '';
+          final String channelName = payload['channel_name'] ?? '';
+
+          // Only add message if it belongs to the currently selected channel
+          if (channels.isNotEmpty && selectedChannel < channels.length && channelName == channels[selectedChannel]) {
+            setState(() {
+              messages.add('$sender: $text');
+            });
+          }
+        }
+      }, onError: _handleWebSocketError, onDone: _handleWebSocketDone);
+    } catch (e) {
+      print("[WebSocket] Connection setup failed: $e");
+      _handleWebSocketError(e);
+    }
+  }
+
+  void _handleWebSocketError(dynamic error) {
+    print("[WebSocket] Error occurred: $error");
+    setState(() {
+      _wsStatus = 'Error';
+    });
+    _scheduleReconnect(); // Attempt to reconnect after a delay
+  }
+
+  void _handleWebSocketDone() {
+    print("[WebSocket] Connection closed.");
+    setState(() {
+      _wsStatus = 'Disconnected';
+    });
+    _scheduleReconnect(); // Attempt to reconnect after a delay
+  }
+
+  void _scheduleReconnect() {
+    _reconnectTimer?.cancel(); // Cancel any existing timer
+    _reconnectTimer = Timer(const Duration(seconds: 2), () {
+      if (_token != null && _wsStatus != 'Connecting...' && _wsStatus != 'Connected') {
+        print("[WebSocket] Attempting to reconnect...");
+        _connectWebSocket(_token!);
+      }
+    });
   }
 
   void _sendMessage() {
-    if (_msgController.text.trim().isNotEmpty) {
+    final text = _msgController.text.trim();
+    if (text.isNotEmpty && channels.isNotEmpty && _wsStatus == 'Connected') {
+      final currentChannel = channels[selectedChannel];
+      final messageToSend = jsonEncode({
+        'type': 'message',
+        'payload': {
+          'channel_name': currentChannel,
+          'text': text,
+          'sender': widget.username,
+        },
+      });
+
+      _ws?.sink.add(messageToSend);
+
       setState(() {
-        messages.add('${widget.username}: ${_msgController.text}');
+        messages.add('${widget.username}: $text');
         _msgController.clear();
       });
+    } else if (_wsStatus != 'Connected') {
+      print("[WebSocket] Cannot send message: WebSocket not connected (Status: $_wsStatus).");
+      // Optionally show a user message in the UI, e.g., a SnackBar
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Cannot send message: WebSocket $_wsStatus.'),
+          backgroundColor: Colors.red,
+        ),
+      );
     }
   }
 
@@ -91,10 +264,10 @@ class _IrisLayoutState extends State<IrisLayout> {
             child: Column(
               children: [
                 const SizedBox(height: 20),
-                CircleAvatar(
+                const CircleAvatar(
                   radius: 28,
-                  backgroundColor: const Color(0xFF5865F2),
-                  child: const Text(
+                  backgroundColor: Color(0xFF5865F2),
+                  child: Text(
                     "IRIS",
                     style: TextStyle(
                         color: Colors.white,
@@ -141,17 +314,30 @@ class _IrisLayoutState extends State<IrisLayout> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          const Text("Channels",
+                          // Using Expanded to prevent overflow
+                          const Expanded(
+                            flex: 2, // Gives more space to "Channels"
+                            child: Text(
+                              "Channels",
                               style: TextStyle(
                                   color: Colors.white60,
                                   fontWeight: FontWeight.bold,
-                                  fontSize: 22)),
-                          IconButton(
-                            icon: const Icon(Icons.refresh,
-                                size: 18, color: Colors.white38),
-                            tooltip: "Refresh",
-                            onPressed: _fetchChannels,
-                          )
+                                  fontSize: 22),
+                            ),
+                          ),
+                          // Display WebSocket status, also expanded
+                          Expanded(
+                            flex: 1, // Gives less space, but allows flexing
+                            child: Text(
+                              _wsStatus,
+                              textAlign: TextAlign.right,
+                              overflow: TextOverflow.ellipsis, // Prevents overflow if text is very long
+                              style: TextStyle(
+                                color: _wsStatus == 'Connected' ? Colors.greenAccent : Colors.redAccent,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -186,6 +372,9 @@ class _IrisLayoutState extends State<IrisLayout> {
                                 setState(() {
                                   selectedChannel = idx;
                                   showLeftDrawer = false;
+                                  messages.clear();
+                                  messages.add('Welcome to #$channel!');
+                                  // TODO: Implement fetching message history for the selected channel
                                 });
                               },
                             );
@@ -217,8 +406,8 @@ class _IrisLayoutState extends State<IrisLayout> {
                       Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 8),
                         child: Text(
-                          channels.isNotEmpty
-                              ? channels[selectedChannel.clamp(0, channels.length - 1)]
+                          channels.isNotEmpty && selectedChannel < channels.length
+                              ? channels[selectedChannel]
                               : "#loading",
                           style: const TextStyle(
                               color: Colors.white, fontSize: 20),
