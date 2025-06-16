@@ -5,7 +5,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time"
+	"time" // <--- Add this import
+	"strings" // <--- Add this import
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -98,10 +99,28 @@ func WebSocketHandler(c *gin.Context) {
 						text, textOk := payload["text"].(string)
 
 						if channelOk && textOk {
-							// Send message to IRC instead of direct broadcast
-							log.Printf("[WS] Sending message to IRC channel %s from %s: %s", channelName, sess.Username, text)
-							sess.IRC.Privmsg(channelName, text)
-							// Message will be broadcast when IRC echoes it back
+							// --- START MODIFICATION FOR MULTI-LINE IRC SENDING ---
+							// Split the message by newlines to adhere to IRC's single-line message structure
+							lines := strings.Split(text, "\n")
+							for _, line := range lines {
+								// Trim leading/trailing whitespace from each line if desired, or keep as-is.
+								// For code blocks, keeping leading spaces might be important for indentation.
+								// If a line is empty after splitting (e.g., two newlines in a row), send a single space
+								// to preserve the empty line, or skip it entirely if you prefer.
+								ircLine := line
+								if len(ircLine) == 0 {
+									ircLine = " " // Send a single space for empty lines
+								}
+								log.Printf("[WS] Sending IRC line to channel %s from %s: '%s'", channelName, sess.Username, ircLine)
+								sess.IRC.Privmsg(channelName, ircLine)
+								// Add a small delay between lines to avoid hitting IRC server flood limits
+								// and to ensure messages are processed as distinct lines. Adjust as needed.
+								time.Sleep(100 * time.Millisecond)
+							}
+							// --- END MODIFICATION FOR MULTI-LINE IRC SENDING ---
+
+							// Message will be broadcast when IRC echoes it back (line by line),
+							// and the PRIVMSG handler will re-assemble or pass through as received.
 						} else {
 							log.Printf("[WS] Received malformed 'message' payload from %s: %v", sess.Username, payload)
 						}

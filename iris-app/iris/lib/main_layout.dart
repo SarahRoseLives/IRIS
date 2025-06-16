@@ -1,4 +1,7 @@
+// main_layout.dart
 import 'package:flutter/material.dart';
+import 'dart:async'; // Import for Timer
+// import 'package:collection/collection.dart'; // No longer strictly needed for ListEquality here, but good to keep if used elsewhere
 
 import 'widgets/left_drawer.dart';
 import 'widgets/right_drawer.dart';
@@ -36,6 +39,17 @@ class _IrisLayoutState extends State<IrisLayout> {
   late WebSocketService _webSocketService;
   WebSocketStatus _wsStatus = WebSocketStatus.disconnected;
 
+  // --- NEW: Code block re-assembly state ---
+  Map<String, List<String>> _codeBlockBuffers = {}; // Map channelName -> List of lines
+  Map<String, String?> _codeBlockSenders = {}; // Map channelName -> current sender for the block
+  Map<String, Timer?> _codeBlockTimers = {}; // Map channelName -> Timer for grouping
+  final Duration _codeBlockTimeout = const Duration(milliseconds: 5000); // **Increased timeout to 5 seconds**
+
+  // Regex to detect code block start/end lines
+  final RegExp _codeBlockStartRegex = RegExp(r'^```(\w+)$'); // **Requires a language (e.g., ```dart)**
+  final RegExp _codeBlockEndRegex = RegExp(r'^```$');       // Matches only ```
+  // --- END NEW ---
+
   @override
   void initState() {
     super.initState();
@@ -71,26 +85,14 @@ class _IrisLayoutState extends State<IrisLayout> {
     _webSocketService.messageStream.listen((message) {
       if (mounted) {
         final String channelName = message['channel_name'] ?? '';
+        final String sender = message['sender'] ?? 'Unknown';
+        final String content = message['text'] ?? '';
+        final String? messageTime = message['time'];
+
         if (_channels.isNotEmpty &&
             _selectedChannelIndex < _channels.length &&
             channelName == _channels[_selectedChannelIndex]) {
-          setState(() {
-            final newMessage = {
-              'from': message['sender'] ?? 'Unknown',
-              'content': message['text'] ?? '',
-              'time': message['time'],
-            };
-
-            // Simple de-duplication check: Avoid adding if the last message is identical
-            // This assumes messages arrive in order and backend echoes correctly.
-            if (_messages.isEmpty ||
-                _messages.last['from'] != newMessage['from'] ||
-                _messages.last['content'] != newMessage['content'] ||
-                (_messages.last['time'] != null && newMessage['time'] != null && _messages.last['time'] != newMessage['time'])) {
-              _messages.add(newMessage);
-            }
-          });
-          _scrollToBottom();
+          _handleIncomingMessage(channelName, sender, content, messageTime);
         }
       }
     });
@@ -105,6 +107,110 @@ class _IrisLayoutState extends State<IrisLayout> {
       }
     });
   }
+
+  // --- NEW: Message handling logic with re-assembly (added debug prints) ---
+  void _handleIncomingMessage(String channelName, String sender, String content, String? messageTime) {
+    print('\n--- _handleIncomingMessage ---');
+    print('Channel: $channelName, Sender: $sender, Content: "$content"');
+
+    setState(() {
+      final String trimmedContent = content.trim(); // Trim for regex matching
+
+      final bool isCodeStart = _codeBlockStartRegex.hasMatch(trimmedContent);
+      final bool isCodeEnd = _codeBlockEndRegex.hasMatch(trimmedContent);
+
+      print('isCodeStart: $isCodeStart, isCodeEnd: $isCodeEnd');
+
+      // Check if a code block buffer is currently active for this channel AND from this sender
+      final bool isBuffering = _codeBlockBuffers.containsKey(channelName) && _codeBlockSenders[channelName] == sender;
+      print('isBuffering: $isBuffering (Current Sender: ${_codeBlockSenders[channelName]}, Incoming Sender: $sender)');
+
+
+      if (isCodeStart && !isBuffering) {
+        // Scenario 1: Start a new code block
+        print('Scenario 1: Starting new code block.');
+        _finalizeCodeBlock(channelName); // Finalize any previous incomplete block for this channel (e.g., due to timeout)
+        _codeBlockBuffers[channelName] = [content]; // Store original content, not trimmed
+        _codeBlockSenders[channelName] = sender;
+        _startCodeBlockTimer(channelName, sender, messageTime);
+      } else if (isBuffering) {
+        // Scenario 2: Continue buffering for an active code block
+        print('Scenario 2: Continuing code block.');
+        _codeBlockBuffers[channelName]!.add(content); // Store original content, not trimmed
+        _startCodeBlockTimer(channelName, sender, messageTime); // Reset timer
+
+        if (isCodeEnd) {
+          // Scenario 2a: End of code block detected, finalize and add to messages
+          print('Scenario 2a: End of code block detected, finalizing.');
+          _finalizeCodeBlock(channelName, sender: sender, time: messageTime);
+        }
+      } else {
+        // Scenario 3: Regular message or a line that doesn't fit into an active code block
+        print('Scenario 3: Regular message or mismatch. Finalizing any pending block and adding current message.');
+        _finalizeCodeBlock(channelName); // Finalize any pending code block for this channel
+        _addMessageToDisplay({
+          'from': sender,
+          'content': content,
+          'time': messageTime,
+        });
+      }
+    });
+    _scrollToBottom();
+    print('--- End _handleIncomingMessage ---\n');
+  }
+
+  void _startCodeBlockTimer(String channelName, String sender, String? time) {
+    _codeBlockTimers[channelName]?.cancel();
+    _codeBlockTimers[channelName] = Timer(_codeBlockTimeout, () {
+      print('[_startCodeBlockTimer] Timeout for channel $channelName.');
+      if (_codeBlockBuffers.containsKey(channelName) && _codeBlockSenders[channelName] == sender) {
+        // Timeout occurred, finalize the buffered block even if ```end was not seen
+        print('[_startCodeBlockTimer] Finalizing code block due to timeout.');
+        _finalizeCodeBlock(channelName, sender: sender, time: time);
+      }
+    });
+  }
+
+  void _finalizeCodeBlock(String channelName, {String? sender, String? time}) {
+    if (_codeBlockBuffers.containsKey(channelName) && _codeBlockBuffers[channelName]!.isNotEmpty) {
+      final List<String> lines = _codeBlockBuffers[channelName]!;
+      final String fullContent = lines.join('\n'); // Re-join lines with newlines
+      print('[_finalizeCodeBlock] Finalizing content: "$fullContent"');
+
+      _addMessageToDisplay({
+        'from': sender ?? _codeBlockSenders[channelName] ?? 'Unknown',
+        'content': fullContent,
+        'time': time ?? DateTime.now().toIso8601String(), // Use time of first line, or current
+      });
+
+      // Clear the buffer and timer
+      _codeBlockBuffers.remove(channelName);
+      _codeBlockSenders.remove(channelName);
+      _codeBlockTimers[channelName]?.cancel();
+      _codeBlockTimers.remove(channelName);
+    } else if (_codeBlockBuffers.containsKey(channelName) && _codeBlockBuffers[channelName]!.isEmpty) {
+        // Buffer exists but is empty, just clear the state (e.g., if a start was detected but no lines followed)
+        print('[_finalizeCodeBlock] Clearing empty code block state.');
+        _codeBlockBuffers.remove(channelName);
+        _codeBlockSenders.remove(channelName);
+        _codeBlockTimers[channelName]?.cancel();
+        _codeBlockTimers.remove(channelName);
+    }
+  }
+
+  void _addMessageToDisplay(Map<String, dynamic> newMessage) {
+    // Re-enabled a simple deduplication, as it's common practice.
+    // This assumes that exact duplicates from the same sender within a short time are echoes.
+    if (_messages.isNotEmpty &&
+        _messages.last['from'] == newMessage['from'] &&
+        _messages.last['content'] == newMessage['content']) {
+      print('[_addMessageToDisplay] Detected exact duplicate from same sender, skipping.');
+      return;
+    }
+    print('[_addMessageToDisplay] Adding message: ${newMessage['content']}');
+    _messages.add(newMessage);
+  }
+  // --- END NEW: Message handling logic with re-assembly ---
 
   @override
   void didChangeDependencies() {
@@ -126,6 +232,8 @@ class _IrisLayoutState extends State<IrisLayout> {
     _msgController.dispose();
     _scrollController.dispose();
     _webSocketService.dispose();
+    // Cancel all active timers to prevent memory leaks
+    _codeBlockTimers.values.forEach((timer) => timer?.cancel());
     super.dispose();
   }
 
@@ -144,6 +252,8 @@ class _IrisLayoutState extends State<IrisLayout> {
         }
       });
       if (_channels.isNotEmpty) {
+        // When fetching historical messages, we need to re-assemble them too.
+        // Process them through _handleIncomingMessage to build proper blocks.
         _fetchChannelMessages(_channels[_selectedChannelIndex]);
       }
     } catch (e) {
@@ -160,7 +270,11 @@ class _IrisLayoutState extends State<IrisLayout> {
     try {
       final fetchedMessages = await _apiService.fetchChannelMessages(channelName);
       setState(() {
-        _messages = fetchedMessages;
+        _messages.clear(); // Clear the 'Loading messages...'
+        // Process each fetched message through the re-assembly logic
+        for (var msg in fetchedMessages) {
+          _handleIncomingMessage(msg['channel_name'] ?? channelName, msg['from'] ?? 'Unknown', msg['content'] ?? '', msg['time']);
+        }
       });
       _scrollToBottom();
     } catch (e) {
@@ -171,11 +285,14 @@ class _IrisLayoutState extends State<IrisLayout> {
     }
   }
 
+
   void _onChannelSelected(int index) {
     setState(() {
       _selectedChannelIndex = index;
       _showLeftDrawer = false; // Hide drawer after selecting a channel (common UX)
     });
+    // Important: Finalize any pending code blocks when switching channels
+    _codeBlockBuffers.keys.forEach((chan) => _finalizeCodeBlock(chan));
     _fetchChannelMessages(_channels[index]);
   }
 
@@ -187,8 +304,10 @@ class _IrisLayoutState extends State<IrisLayout> {
       _msgController.clear();
 
       // OPTIMISTIC UPDATE: Add the message to the local list immediately
+      // The local message sender doesn't need re-assembly because it sends the full block.
+      // So, we just add it directly to display messages.
       setState(() {
-        _messages.add({
+        _addMessageToDisplay({
           'from': widget.username,
           'content': text,
           'time': DateTime.now().toIso8601String(), // Use current time for optimistic message
