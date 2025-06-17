@@ -6,11 +6,13 @@ import '../utils/irc_safe_emojis.dart'; // Import your curated list
 class MessageInput extends StatefulWidget {
   final TextEditingController controller;
   final VoidCallback onSendMessage;
+  final VoidCallback onProfilePressed; // New callback for profile button
 
   const MessageInput({
     super.key,
     required this.controller,
     required this.onSendMessage,
+    required this.onProfilePressed, // Required for the new profile button
   });
 
   @override
@@ -25,7 +27,7 @@ class _MessageInputState extends State<MessageInput> {
   void initState() {
     super.initState();
     _messageInputFocusNode.addListener(() {
-      if (_messageInputFocusNode.hasFocus && _showEmojiPicker) {
+      if (_messageInputFocusNode.hasFocus && _showEmojiPicker && mounted) {
         setState(() {
           _showEmojiPicker = false;
         });
@@ -43,11 +45,19 @@ class _MessageInputState extends State<MessageInput> {
   Widget build(BuildContext context) {
     return Column(
       children: [
+        // This entire Container now includes both the profile and emoji/message input
         Container(
           color: const Color(0xFF232428),
           padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
           child: Row(
             children: [
+              // Profile/Settings button (moved here)
+              IconButton(
+                icon: const Icon(Icons.person, color: Colors.white70),
+                tooltip: "Profile",
+                onPressed: widget.onProfilePressed, // Use the passed callback
+              ),
+              // Emoji button
               IconButton(
                 icon: Icon(
                   _showEmojiPicker ? Icons.keyboard : Icons.emoji_emotions,

@@ -59,29 +59,17 @@ class MainChatScreen extends StatelessWidget {
                               ),
                             ),
                             const Spacer(),
-                            if (viewModel.token != null)
-                              IconButton(
-                                icon: const Icon(Icons.person, color: Colors.white70),
-                                tooltip: "Profile",
-                                onPressed: () {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => ProfileScreen(authToken: viewModel.token!),
-                                    ),
-                                  );
-                                },
-                              ),
                             IconButton(
                               icon: const Icon(Icons.people, color: Colors.white70),
                               tooltip: "Open Members Drawer",
                               onPressed: viewModel.toggleRightDrawer,
                             ),
-                            IconButton(
-                              icon: const Icon(Icons.logout, color: Colors.white70),
-                              tooltip: "Logout",
-                              onPressed: () => viewModel.showJoinChannelDialog(context), // Use the dialog here
-                            ),
+                            // Removed the logout button completely
+                            // IconButton(
+                            //   icon: const Icon(Icons.logout, color: Colors.white70),
+                            //   tooltip: "Logout",
+                            //   onPressed: () => viewModel.logout(), // Calls the public logout method
+                            // ),
                           ],
                         ),
                       ),
@@ -95,6 +83,15 @@ class MainChatScreen extends StatelessWidget {
                       MessageInput(
                         controller: viewModel.msgController,
                         onSendMessage: viewModel.handleSendMessage,
+                        onProfilePressed: () {
+                          // Navigate to ProfileScreen when the new profile button is pressed
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => ProfileScreen(authToken: viewModel.token!),
+                            ),
+                          );
+                        },
                       ),
                     ],
                   ),

@@ -492,39 +492,6 @@ Available IRC-like commands:
     }
   }
 
-  void showJoinChannelDialog(BuildContext context) {
-    final TextEditingController channelNameController = TextEditingController();
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Join Channel'),
-          content: TextField(
-            controller: channelNameController,
-            decoration: const InputDecoration(hintText: 'Enter channel name (e.g., #general)'),
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            ElevatedButton(
-              child: const Text('Join'),
-              onPressed: () async {
-                if (channelNameController.text.isNotEmpty) {
-                  Navigator.of(context).pop();
-                  await _handleCommand('/join ${channelNameController.text}');
-                }
-              },
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   @override
   void dispose() {
     _msgController.dispose();
