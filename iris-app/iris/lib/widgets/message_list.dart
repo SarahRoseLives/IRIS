@@ -32,7 +32,7 @@ class MessageList extends StatelessWidget {
     // or if the username is not in the map yet (meaning no check has been made),
     // we can construct a potential URL to trigger a load attempt.
     // However, the `_loadAvatarForUser` in `main_layout` is already doing the `HEAD` request.
-    // So here, we should only return a URL if `main_layout` has *confirmed* one.
+    // So here, we should only return a URL if `main_layout` has *confirmed` one.
     // Otherwise, we return null to show the initial.
 
     // Given `_userAvatars[username] = '';` in main_layout if not found:
@@ -50,6 +50,8 @@ class MessageList extends StatelessWidget {
         final message = messages[idx];
         final content = message['content'] ?? '';
         final sender = message['from']?.toString() ?? 'Unknown';
+        // You can optionally retrieve the message ID here if needed for debugging or future features
+        // final String? messageId = message['id']?.toString();
 
         // Get the confirmed displayable avatar URL. This will be null if no avatar is found.
         final String? displayAvatarUrl = _getDisplayAvatarUrl(sender);
@@ -108,11 +110,11 @@ class MessageList extends StatelessWidget {
                         Text(
                           (message['time'] != null && message['time'] is String)
                               ? DateTime.tryParse(message['time'])
-                                      ?.toLocal()
-                                      .toString()
-                                      .split('.')[0]
-                                      .substring(11, 16) ??
-                                  ''
+                                          ?.toLocal()
+                                          .toString()
+                                          .split('.')[0]
+                                          .substring(11, 16) ??
+                                      ''
                               : '',
                           style: const TextStyle(
                               color: Colors.white54, fontSize: 12),

@@ -3,14 +3,101 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // Import this
+import 'package:provider/provider.dart'; // Import for Provider.of
 
 import 'main_layout.dart';
 import 'config.dart';
 import 'services/api_service.dart';
 import 'models/login_response.dart';
+import 'viewmodels/main_layout_viewmodel.dart'; // Import the viewmodel
 
-void main() {
+// Create a global instance of FlutterLocalNotificationsPlugin
+final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+    FlutterLocalNotificationsPlugin();
+
+// TOP-LEVEL FUNCTION: This must be a top-level function or a static method of a class.
+@pragma('vm:entry-point')
+void onDidReceiveNotificationResponse(NotificationResponse notificationResponse) async {
+  final String? payload = notificationResponse.payload;
+  if (payload != null && AuthWrapper.globalKey.currentContext != null) {
+    try {
+      final Map<String, dynamic> notificationData = jsonDecode(payload);
+      final String channel = notificationData['channel'];
+      final String messageId = notificationData['messageId'];
+
+      final BuildContext? context = AuthWrapper.globalKey.currentContext;
+      if (context != null && context.mounted) {
+        // Ensure we are on the main chat screen before attempting to switch channels.
+        // This handles cases where the user might be on a different screen (e.g., profile screen)
+        // when the notification is tapped.
+        Navigator.of(context).popUntil((route) => route.isFirst);
+
+        // After popping, we need to ensure the widget tree is rebuilt with the MainLayoutViewModel
+        // before we try to access it. A small delay or a post-frame callback is often necessary.
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          // Access the MainLayoutViewModel
+          final mainLayoutViewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
+          mainLayoutViewModel.handleNotificationTap(channel, messageId);
+        });
+      }
+    } catch (e) {
+      print("Error parsing notification payload or navigating: $e");
+    }
+  }
+}
+
+// TOP-LEVEL FUNCTION: This is for foreground iOS notifications (deprecated for newer iOS versions but good practice).
+// The @pragma('vm:entry-point') is crucial for ensuring this function is not tree-shaken during release builds.
+@pragma('vm:entry-point')
+void onDidReceiveLocalNotification(int id, String? title, String? body, String? payload) async {
+  // Handle notifications received when the app is in the foreground on iOS
+  // You can show an in-app alert or banner here if needed.
+  // For consistency with Android and newer iOS, we largely rely on onDidReceiveNotificationResponse
+  // being called when the notification itself is tapped, regardless of app state.
+  print('Foreground iOS notification received: id=$id, title=$title, body=$body, payload=$payload');
+}
+
+
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Request notification permissions for iOS and Android 13+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.requestNotificationsPermission();
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>()
+      ?.requestPermissions(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher'); // Your app icon
+
+  // Corrected: Use the top-level function for onDidReceiveLocalNotification
+  final DarwinInitializationSettings initializationSettingsDarwin =
+      DarwinInitializationSettings(
+    onDidReceiveLocalNotification: onDidReceiveLocalNotification, // Removed async anonymous function
+  );
+
+  final InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+    iOS: initializationSettingsDarwin,
+  );
+
+  await flutterLocalNotificationsPlugin.initialize(
+    initializationSettings,
+    onDidReceiveNotificationResponse: onDidReceiveNotificationResponse,
+    onDidReceiveBackgroundNotificationResponse: onDidReceiveNotificationResponse, // For background taps
+  );
+
   runApp(const IRISApp());
 }
 

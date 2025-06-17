@@ -1,12 +1,15 @@
 // lib/viewmodels/main_layout_viewmodel.dart
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'dart:convert'; // Import for jsonEncode
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // Import this
+import 'package:collection/collection.dart'; // For more flexible list operations like findIndex
 
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
-import '../main.dart'; // Import AuthWrapper from main.dart
+import '../main.dart'; // Import AuthWrapper and the global flutterLocalNotificationsPlugin
 import '../config.dart'; // Import config for apiHost and apiPort
 
 class MainLayoutViewModel extends ChangeNotifier {
@@ -32,6 +35,10 @@ class MainLayoutViewModel extends ChangeNotifier {
   WebSocketStatus _wsStatus = WebSocketStatus.disconnected;
 
   final Map<String, String> _userAvatars = {};
+
+  // Flag to prevent notifications during initial history load
+  bool _isInitialHistoryLoad = true;
+  Timer? _initialLoadTimer; // To reset the flag after a short delay
 
   // Code block handling state (kept commented out for now)
   final Map<String, List<String>> _codeBlockBuffers = {};
@@ -101,7 +108,7 @@ class MainLayoutViewModel extends ChangeNotifier {
       // This listener handles channels being updated (e.g., via WebSocket initial state)
       // Ensure messages are fetched for the current channel after channel list updates
       if (_channels.isNotEmpty) { // Only attempt if channels are available
-        _fetchChannelMessages(_channels[_selectedChannelIndex]);
+        _fetchChannelMessages(_channels[_selectedChannelIndex], isInitialLoad: true); // Mark as initial load
       }
     });
   }
@@ -115,13 +122,25 @@ class MainLayoutViewModel extends ChangeNotifier {
       final String sender = message['sender'] ?? 'Unknown';
       final String content = message['text'] ?? '';
       final String? messageTime = message['time'];
+      final int messageId = message['message_id'] ?? DateTime.now().millisecondsSinceEpoch; // Use a message ID if available, otherwise timestamp
 
       _addMessageToDisplay(channelName, {
         'from': sender,
         'content': content,
         'time': messageTime,
+        'id': messageId, // Store the message ID
       });
       _loadAvatarForUser(sender);
+
+      // Only show notification if it's not the current active channel and not during initial history load
+      if (channelName != _channels[_selectedChannelIndex].toLowerCase() && !_isInitialHistoryLoad) {
+        _showNotification(
+          title: '$sender in $channelName',
+          body: content,
+          channel: channelName,
+          messageId: messageId.toString(), // Pass message ID as string
+        );
+      }
       notifyListeners();
     });
   }
@@ -221,14 +240,12 @@ class MainLayoutViewModel extends ChangeNotifier {
       }
       for (var channelName in _channels) {
         _channelMessages.putIfAbsent(channelName, () => []);
-        // Removed specific _fetchChannelMessages calls here to avoid redundant fetches
-        // The _listenToWebSocketChannels and onChannelSelected handle this.
       }
       // --- CRUCIAL FIX: Explicitly fetch messages for the currently selected channel ---
       if (_channels.isNotEmpty) {
           final selectedChannelName = _channels[_selectedChannelIndex];
           print("[_fetchChannels] Calling _fetchChannelMessages for $selectedChannelName (after channels update)");
-          await _fetchChannelMessages(selectedChannelName); // Ensure messages are loaded after channels are ready
+          await _fetchChannelMessages(selectedChannelName, isInitialLoad: true); // Mark as initial load
       }
       // --- END CRUCIAL FIX ---
     } catch (e) {
@@ -240,8 +257,18 @@ class MainLayoutViewModel extends ChangeNotifier {
     }
   }
 
-  Future<void> _fetchChannelMessages(String channelName) async {
+  Future<void> _fetchChannelMessages(String channelName, {bool isInitialLoad = false}) async {
     if (channelName.isEmpty) return;
+
+    // Set the flag for initial history load
+    if (isInitialLoad) {
+      _isInitialHistoryLoad = true;
+      _initialLoadTimer?.cancel(); // Cancel any previous timer
+      _initialLoadTimer = Timer(const Duration(seconds: 2), () {
+        _isInitialHistoryLoad = false;
+        print("Initial history load flag reset.");
+      });
+    }
 
     // Show loading state initially
     _channelMessages[channelName] = [{'from': 'System', 'content': 'Loading messages...', 'time': DateTime.now().toIso8601String()}];
@@ -257,6 +284,7 @@ class MainLayoutViewModel extends ChangeNotifier {
           'from': sender,
           'content': msg['content'] ?? '',
           'time': msg['time'] ?? DateTime.now().toIso8601String(),
+          'id': msg['id'] ?? DateTime.now().millisecondsSinceEpoch, // Ensure messages from history have an ID
         });
         _loadAvatarForUser(sender);
       }
@@ -279,6 +307,7 @@ class MainLayoutViewModel extends ChangeNotifier {
       'from': 'IRIS Bot',
       'content': message,
       'time': DateTime.now().toIso8601String(),
+      'id': DateTime.now().millisecondsSinceEpoch, // Give info messages an ID too
     });
     _scrollToBottom();
     notifyListeners();
@@ -303,10 +332,12 @@ class MainLayoutViewModel extends ChangeNotifier {
     }
 
     final currentChannel = _channels[_selectedChannelIndex];
+    // Add the message to local display immediately
     _addMessageToDisplay(currentChannel, {
       'from': username,
       'content': text,
       'time': DateTime.now().toIso8601String(),
+      'id': DateTime.now().millisecondsSinceEpoch, // Assign an ID to sent messages
     });
     _loadAvatarForUser(username);
     _scrollToBottom();
@@ -319,6 +350,88 @@ class MainLayoutViewModel extends ChangeNotifier {
     }
   }
 
+  // New method to handle notification tap and navigate
+  void handleNotificationTap(String channelName, String messageId) {
+    final normalizedChannelName = channelName.toLowerCase();
+    print("Notification tapped: Navigating to channel $normalizedChannelName, message ID: $messageId");
+
+    final int targetIndex = _channels.indexWhere((c) => c.toLowerCase() == normalizedChannelName);
+
+    if (targetIndex != -1) {
+      // If the channel is already loaded and selected, just scroll
+      if (_selectedChannelIndex == targetIndex) {
+        _scrollToMessage(messageId);
+      } else {
+        // Switch to the channel
+        _selectedChannelIndex = targetIndex;
+        _showLeftDrawer = false; // Close drawer if it was open
+        notifyListeners(); // Notify to rebuild the UI with the new channel selected
+        // After UI rebuilds, scroll to the message
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _scrollToMessage(messageId);
+        });
+      }
+    } else {
+      // If the channel is not in the current list, try to join it first
+      _addInfoMessageToCurrentChannel('Attempting to join channel $channelName from notification.');
+      _apiService.joinChannel(channelName).then((_) {
+        _fetchChannels().then((_) {
+          // After joining and fetching channels, try to select and scroll again
+          final newTargetIndex = _channels.indexWhere((c) => c.toLowerCase() == normalizedChannelName);
+          if (newTargetIndex != -1) {
+            _selectedChannelIndex = newTargetIndex;
+            notifyListeners();
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _scrollToMessage(messageId);
+            });
+          } else {
+            _addInfoMessageToCurrentChannel('Failed to join or find channel $channelName.');
+          }
+        });
+      }).catchError((e) {
+        _addInfoMessageToCurrentChannel('Failed to join channel $channelName: ${e.toString().replaceFirst('Exception: ', '')}');
+      });
+    }
+  }
+
+  void _scrollToMessage(String messageId) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_scrollController.hasClients) {
+        print("Scroll controller has no clients to scroll to message.");
+        return;
+      }
+
+      final currentChannelMessages = _channelMessages[_channels[_selectedChannelIndex]];
+      if (currentChannelMessages == null || currentChannelMessages.isEmpty) {
+        print("No messages in current channel to scroll to message ID: $messageId");
+        return;
+      }
+
+      // Find the index of the message with the given ID
+      final int messageIndex = currentChannelMessages.indexWhere((msg) => msg['id']?.toString() == messageId);
+
+      if (messageIndex != -1) {
+        // Calculate the offset to scroll to
+        // Assuming each message item has a roughly consistent height
+        // You might need to adjust this calculation based on your MessageList item layout
+        const double estimatedMessageHeight = 70.0; // Estimate average message item height
+        final double offset = messageIndex * estimatedMessageHeight;
+
+        _scrollController.animateTo(
+          offset,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeOut,
+        ).then((_) {
+          print("Scrolled to message ID: $messageId at index $messageIndex");
+          // Optionally, you can add a temporary highlight to the message here
+        });
+      } else {
+        print("Message with ID $messageId not found in current channel.");
+      }
+    });
+  }
+
+
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
@@ -329,6 +442,50 @@ class MainLayoutViewModel extends ChangeNotifier {
         );
       }
     });
+  }
+
+  // New method to show local notifications
+  Future<void> _showNotification({
+    required String title,
+    required String body,
+    required String channel,
+    required String messageId,
+  }) async {
+    const AndroidNotificationDetails androidPlatformChannelSpecifics =
+        AndroidNotificationDetails(
+      'iris_channel', // Channel ID
+      'IRIS Messages', // Channel Name
+      channelDescription: 'Notifications for new IRIS chat messages',
+      importance: Importance.max,
+      priority: Priority.high,
+      showWhen: false,
+    );
+
+    const DarwinNotificationDetails darwinPlatformChannelSpecifics =
+        DarwinNotificationDetails(
+      presentAlert: true,
+      presentBadge: true,
+      presentSound: true,
+    );
+
+    const NotificationDetails platformChannelSpecifics = NotificationDetails(
+      android: androidPlatformChannelSpecifics,
+      iOS: darwinPlatformChannelSpecifics,
+    );
+
+    // Payload to pass channel and message ID when notification is tapped
+    final String payload = jsonEncode({
+      'channel': channel,
+      'messageId': messageId,
+    });
+
+    await flutterLocalNotificationsPlugin.show(
+      0, // Notification ID (can be unique per message if needed, or constant for chat)
+      title,
+      body,
+      platformChannelSpecifics,
+      payload: payload,
+    );
   }
 
   // Code block helper functions (kept commented out for now)
@@ -351,6 +508,7 @@ class MainLayoutViewModel extends ChangeNotifier {
         'from': sender ?? _codeBlockSenders[channelName] ?? 'Unknown',
         'content': fullContent,
         'time': time ?? DateTime.now().toIso8601String(),
+        'id': DateTime.now().millisecondsSinceEpoch, // Add ID for code blocks too
       });
 
       _codeBlockBuffers.remove(channelName);
@@ -417,7 +575,7 @@ class MainLayoutViewModel extends ChangeNotifier {
               if (_channels.isNotEmpty) {
                 _fetchChannelMessages(_channels[_selectedChannelIndex]);
               } else {
-                _addMessageToDisplay('#general', {'from': 'System', 'content': 'No channels available. Join one!', 'time': DateTime.now().toIso8601String()});
+                _addMessageToDisplay('#general', {'from': 'System', 'content': 'No channels available. Join one!', 'time': DateTime.now().toIso8601String(), 'id': DateTime.now().millisecondsSinceEpoch});
                 _channels.add('#general');
                 _selectedChannelIndex = _channels.indexOf('#general');
               }
@@ -436,6 +594,7 @@ class MainLayoutViewModel extends ChangeNotifier {
               'from': username,
               'content': '* $username $args',
               'time': DateTime.now().toIso8601String(),
+              'id': DateTime.now().millisecondsSinceEpoch,
             });
           }
           break;
@@ -461,6 +620,7 @@ class MainLayoutViewModel extends ChangeNotifier {
             'from': username,
             'content': privateMessage,
             'time': DateTime.now().toIso8601String(),
+            'id': DateTime.now().millisecondsSinceEpoch,
           });
           if (!_channels.contains(dmChannelName)) {
             _channels.add(dmChannelName);
@@ -498,6 +658,7 @@ Available IRC-like commands:
     _scrollController.dispose();
     _webSocketService.dispose();
     _codeBlockTimers.values.forEach((timer) => timer?.cancel());
+    _initialLoadTimer?.cancel();
     super.dispose();
   }
 }
