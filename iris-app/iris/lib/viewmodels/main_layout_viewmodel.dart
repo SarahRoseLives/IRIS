@@ -12,7 +12,7 @@ import '../services/websocket_service.dart';
 import '../main.dart'; // Import AuthWrapper and the global flutterLocalNotificationsPlugin
 import '../config.dart'; // Import config for apiHost and apiPort
 
-class MainLayoutViewModel extends ChangeNotifier {
+class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { // Add WidgetsBindingObserver
   final String username;
   late ApiService _apiService;
   late WebSocketService _webSocketService;
@@ -39,6 +39,9 @@ class MainLayoutViewModel extends ChangeNotifier {
   // Flag to prevent notifications during initial history load
   bool _isInitialHistoryLoad = true;
   Timer? _initialLoadTimer; // To reset the flag after a short delay
+
+  // New: Track app focus state
+  bool _isAppFocused = true; // Assume focused initially
 
   // Code block handling state (kept commented out for now)
   final Map<String, List<String>> _codeBlockBuffers = {};
@@ -71,6 +74,9 @@ class MainLayoutViewModel extends ChangeNotifier {
     _apiService = ApiService(_token!);
     _webSocketService = WebSocketService();
 
+    // Add this ViewModel as a WidgetsBindingObserver
+    WidgetsBinding.instance.addObserver(this);
+
     _listenToWebSocketStatus();
     _listenToWebSocketChannels();
     _listenToWebSocketMessages();
@@ -83,6 +89,15 @@ class MainLayoutViewModel extends ChangeNotifier {
     } else {
       _handleLogout();
     }
+  }
+
+  // Override didChangeAppLifecycleState from WidgetsBindingObserver
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    print("AppLifecycleState changed: $state");
+    _isAppFocused = state == AppLifecycleState.resumed;
+    // You could optionally notifyListeners here if UI changes based on focus
+    // but typically not needed for just notification logic.
   }
 
   void _listenToWebSocketStatus() {
@@ -118,7 +133,6 @@ class MainLayoutViewModel extends ChangeNotifier {
       print("[MainLayoutViewModel] Received message from WebSocketService stream: ${message['text']}");
 
       final String channelName = (message['channel_name'] ?? '').toLowerCase();
-
       final String sender = message['sender'] ?? 'Unknown';
       final String content = message['text'] ?? '';
       final String? messageTime = message['time'];
@@ -132,14 +146,33 @@ class MainLayoutViewModel extends ChangeNotifier {
       });
       _loadAvatarForUser(sender);
 
-      // Only show notification if it's not the current active channel and not during initial history load
-      if (channelName != _channels[_selectedChannelIndex].toLowerCase() && !_isInitialHistoryLoad) {
-        _showNotification(
-          title: '$sender in $channelName',
-          body: content,
-          channel: channelName,
-          messageId: messageId.toString(), // Pass message ID as string
-        );
+      // Determine if a notification should be shown
+      final bool isCurrentChannel = channelName == _channels[_selectedChannelIndex].toLowerCase();
+      final bool isMention = content.toLowerCase().contains(username.toLowerCase()); // Check for username mention
+
+      // Logic for showing notification:
+      // NOT during initial history load
+      // AND (
+      //   (NOT current channel) OR (current channel AND app NOT focused AND isMention)
+      // )
+      if (!_isInitialHistoryLoad) {
+        if (!isCurrentChannel) {
+          // If message is for a different channel, always notify (unless initial load)
+          _showNotification(
+            title: '$sender in $channelName',
+            body: content,
+            channel: channelName,
+            messageId: messageId.toString(),
+          );
+        } else if (isCurrentChannel && !_isAppFocused && isMention) {
+          // If message is for the current channel, AND app is NOT focused, AND it's a mention
+          _showNotification(
+            title: '$sender mentioned you in $channelName', // More specific title for mentions
+            body: content,
+            channel: channelName,
+            messageId: messageId.toString(),
+          );
+        }
       }
       notifyListeners();
     });
@@ -654,6 +687,8 @@ Available IRC-like commands:
 
   @override
   void dispose() {
+    // Remove this ViewModel as a WidgetsBindingObserver
+    WidgetsBinding.instance.removeObserver(this);
     _msgController.dispose();
     _scrollController.dispose();
     _webSocketService.dispose();
