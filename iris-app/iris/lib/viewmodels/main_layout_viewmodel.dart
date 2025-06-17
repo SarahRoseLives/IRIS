@@ -33,13 +33,15 @@ class MainLayoutViewModel extends ChangeNotifier {
 
   final Map<String, String> _userAvatars = {};
 
-  // Code block handling state
+  // Code block handling state (kept commented out for now)
   final Map<String, List<String>> _codeBlockBuffers = {};
   final Map<String, String?> _codeBlockSenders = {};
   final Map<String, Timer?> _codeBlockTimers = {};
   final Duration _codeBlockTimeout = const Duration(milliseconds: 5000);
-  final RegExp _codeBlockStartRegex = RegExp(r'^```(\w+)$');
+
+  final RegExp _codeBlockStartRegex = RegExp(r'^```(\w*)$');
   final RegExp _codeBlockEndRegex = RegExp(r'^```$');
+
 
   // Getters for UI to access state
   int get selectedChannelIndex => _selectedChannelIndex;
@@ -96,7 +98,9 @@ class MainLayoutViewModel extends ChangeNotifier {
         _channelMessages.putIfAbsent(channelName, () => []);
       }
       notifyListeners();
-      if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length) {
+      // This listener handles channels being updated (e.g., via WebSocket initial state)
+      // Ensure messages are fetched for the current channel after channel list updates
+      if (_channels.isNotEmpty) { // Only attempt if channels are available
         _fetchChannelMessages(_channels[_selectedChannelIndex]);
       }
     });
@@ -104,25 +108,27 @@ class MainLayoutViewModel extends ChangeNotifier {
 
   void _listenToWebSocketMessages() {
     _webSocketService.messageStream.listen((message) {
-      final String channelName = message['channel_name'] ?? '';
+      print("[MainLayoutViewModel] Received message from WebSocketService stream: ${message['text']}");
+
+      final String channelName = (message['channel_name'] ?? '').toLowerCase();
+
       final String sender = message['sender'] ?? 'Unknown';
       final String content = message['text'] ?? '';
       final String? messageTime = message['time'];
 
-      _handleIncomingMessage(channelName, sender, content, messageTime);
+      _addMessageToDisplay(channelName, {
+        'from': sender,
+        'content': content,
+        'time': messageTime,
+      });
       _loadAvatarForUser(sender);
-      notifyListeners(); // Notify after message processing
+      notifyListeners();
     });
   }
 
   void _listenToWebSocketErrors() {
     _webSocketService.errorStream.listen((error) {
-      // It's generally better for ViewModels to expose state that Widgets react to.
-      // For critical errors like SnackBar, the Widget layer might still be the best place.
-      // However, we can pass it as a special state to the UI.
-      // For now, keeping the print for debugging.
       print("[MainLayoutViewModel] WebSocket Error: $error");
-      // Could add a specific error state here if needed for UI feedback
     });
   }
 
@@ -147,11 +153,14 @@ class MainLayoutViewModel extends ChangeNotifier {
   void onChannelSelected(int index) {
     _selectedChannelIndex = index;
     _showLeftDrawer = false; // Close drawer on selection
-    _finalizeAllCodeBlocks(); // Finalize any pending code blocks
+    _finalizeAllCodeBlocks();
     final selectedChannelName = _channels[index];
+    // Always fetch messages when a channel is selected, unless it's already loading or has messages.
+    // The previous condition `_channelMessages[selectedChannelName]!.isEmpty` was for *initial* load.
+    // Here we ensure a fetch happens when a user clicks a channel.
     if (_channelMessages[selectedChannelName] == null || _channelMessages[selectedChannelName]!.isEmpty ||
         (_channelMessages[selectedChannelName]!.length == 1 && _channelMessages[selectedChannelName]![0]['content'] == 'Loading messages...')) {
-      _fetchChannelMessages(selectedChannelName);
+        _fetchChannelMessages(selectedChannelName);
     }
     _scrollToBottom();
     notifyListeners();
@@ -161,7 +170,7 @@ class MainLayoutViewModel extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
     await prefs.remove('username');
-    AuthWrapper.forceLogout(); // Use the static method to trigger logout
+    AuthWrapper.forceLogout();
   }
 
   Future<void> _loadAvatarForUser(String username) async {
@@ -169,7 +178,6 @@ class MainLayoutViewModel extends ChangeNotifier {
       return; // Already loaded or confirmed no avatar exists
     }
 
-    // Set a placeholder so we don't try to load again immediately
     if (!_userAvatars.containsKey(username)) {
       _userAvatars[username] = ''; // Indicates a check is in progress or failed
     }
@@ -197,7 +205,7 @@ class MainLayoutViewModel extends ChangeNotifier {
       _userAvatars[username] = ''; // Confirmed no avatar found
       print('No avatar found for $username, will use default initial.');
     }
-    notifyListeners(); // Notify listeners after updating avatar map
+    notifyListeners();
   }
 
   Future<void> _fetchChannels() async {
@@ -213,10 +221,16 @@ class MainLayoutViewModel extends ChangeNotifier {
       }
       for (var channelName in _channels) {
         _channelMessages.putIfAbsent(channelName, () => []);
-        if (_channelMessages[channelName]!.isEmpty) {
-          _fetchChannelMessages(channelName);
-        }
+        // Removed specific _fetchChannelMessages calls here to avoid redundant fetches
+        // The _listenToWebSocketChannels and onChannelSelected handle this.
       }
+      // --- CRUCIAL FIX: Explicitly fetch messages for the currently selected channel ---
+      if (_channels.isNotEmpty) {
+          final selectedChannelName = _channels[_selectedChannelIndex];
+          print("[_fetchChannels] Calling _fetchChannelMessages for $selectedChannelName (after channels update)");
+          await _fetchChannelMessages(selectedChannelName); // Ensure messages are loaded after channels are ready
+      }
+      // --- END CRUCIAL FIX ---
     } catch (e) {
       _channelError = e.toString().replaceFirst('Exception: ', '');
       print("Error fetching channels: $_channelError");
@@ -229,6 +243,7 @@ class MainLayoutViewModel extends ChangeNotifier {
   Future<void> _fetchChannelMessages(String channelName) async {
     if (channelName.isEmpty) return;
 
+    // Show loading state initially
     _channelMessages[channelName] = [{'from': 'System', 'content': 'Loading messages...', 'time': DateTime.now().toIso8601String()}];
     notifyListeners();
 
@@ -237,8 +252,13 @@ class MainLayoutViewModel extends ChangeNotifier {
       _channelMessages[channelName]!.clear(); // Clear loading message
       for (var msg in fetchedMessages) {
         final sender = msg['from'] ?? 'Unknown';
-        _handleIncomingMessage(msg['channel_name'] ?? channelName, sender, msg['content'] ?? '', msg['time']);
-        _loadAvatarForUser(sender); // Ensure avatars are loaded for fetched messages
+        // Add fetched messages directly, they are already "finalized"
+        _addMessageToDisplay(msg['channel_name'] ?? channelName, { // Use message's channel_name, which will be normalized by _addMessageToDisplay
+          'from': sender,
+          'content': msg['content'] ?? '',
+          'time': msg['time'] ?? DateTime.now().toIso8601String(),
+        });
+        _loadAvatarForUser(sender);
       }
       _scrollToBottom();
     } catch (e) {
@@ -311,57 +331,13 @@ class MainLayoutViewModel extends ChangeNotifier {
     });
   }
 
-  void _handleIncomingMessage(String channelName, String sender, String content, String? messageTime) {
-    print('\n--- _handleIncomingMessage ---');
-    print('Channel: $channelName, Sender: $sender, Content: "$content"');
-
-    _channelMessages.putIfAbsent(channelName, () => []);
-
-    final String trimmedContent = content.trim();
-
-    final bool isCodeStart = _codeBlockStartRegex.hasMatch(trimmedContent);
-    final bool isCodeEnd = _codeBlockEndRegex.hasMatch(trimmedContent);
-
-    print('isCodeStart: $isCodeStart, isCodeEnd: $isCodeEnd');
-
-    final bool isBuffering = _codeBlockBuffers.containsKey(channelName) && _codeBlockSenders[channelName] == sender;
-    print('isBuffering: $isBuffering (Current Sender: ${_codeBlockSenders[channelName]}, Incoming Sender: $sender)');
-
-    if (isCodeStart && !isBuffering) {
-      print('Scenario 1: Starting new code block.');
-      _finalizeCodeBlock(channelName);
-      _codeBlockBuffers[channelName] = [content];
-      _codeBlockSenders[channelName] = sender;
-      _startCodeBlockTimer(channelName, sender, messageTime);
-    } else if (isBuffering) {
-      print('Scenario 2: Continuing code block.');
-      _codeBlockBuffers[channelName]!.add(content);
-      _startCodeBlockTimer(channelName, sender, messageTime);
-
-      if (isCodeEnd) {
-        print('Scenario 2a: End of code block detected, finalizing.');
-        _finalizeCodeBlock(channelName, sender: sender, time: messageTime);
-      }
-    } else {
-      print('Scenario 3: Regular message or mismatch. Finalizing any pending block and adding current message.');
-      _finalizeCodeBlock(channelName);
-      _addMessageToDisplay(channelName, {
-        'from': sender,
-        'content': content,
-        'time': messageTime,
-      });
-    }
-    print('--- End _handleIncomingMessage ---\n');
-  }
-
+  // Code block helper functions (kept commented out for now)
   void _startCodeBlockTimer(String channelName, String sender, String? time) {
     _codeBlockTimers[channelName]?.cancel();
     _codeBlockTimers[channelName] = Timer(_codeBlockTimeout, () {
-      print('[_startCodeBlockTimer] Timeout for channel $channelName.');
       if (_codeBlockBuffers.containsKey(channelName) && _codeBlockSenders[channelName] == sender) {
-        print('[_startCodeBlockTimer] Finalizing code block due to timeout.');
-        _finalizeCodeBlock(channelName, sender: sender, time: time);
-        notifyListeners(); // Notify after timeout finalization
+        _finalizeCodeBlock(channelName, time: time);
+        notifyListeners();
       }
     });
   }
@@ -370,7 +346,6 @@ class MainLayoutViewModel extends ChangeNotifier {
     if (_codeBlockBuffers.containsKey(channelName) && _codeBlockBuffers[channelName]!.isNotEmpty) {
       final List<String> lines = _codeBlockBuffers[channelName]!;
       final String fullContent = lines.join('\n');
-      print('[_finalizeCodeBlock] Finalizing content: "$fullContent"');
 
       _addMessageToDisplay(channelName, {
         'from': sender ?? _codeBlockSenders[channelName] ?? 'Unknown',
@@ -382,8 +357,7 @@ class MainLayoutViewModel extends ChangeNotifier {
       _codeBlockSenders.remove(channelName);
       _codeBlockTimers[channelName]?.cancel();
       _codeBlockTimers.remove(channelName);
-    } else if (_codeBlockBuffers.containsKey(channelName) && _codeBlockBuffers[channelName]!.isEmpty) {
-      print('[_finalizeCodeBlock] Clearing empty code block state.');
+    } else {
       _codeBlockBuffers.remove(channelName);
       _codeBlockSenders.remove(channelName);
       _codeBlockTimers[channelName]?.cancel();
@@ -392,7 +366,6 @@ class MainLayoutViewModel extends ChangeNotifier {
   }
 
   void _finalizeAllCodeBlocks() {
-    // Call this when changing channels to ensure no pending code blocks are lost
     for (var channelName in _codeBlockBuffers.keys.toList()) {
       _finalizeCodeBlock(channelName);
     }
@@ -400,17 +373,10 @@ class MainLayoutViewModel extends ChangeNotifier {
 
   void _addMessageToDisplay(String channelName, Map<String, dynamic> newMessage) {
     _channelMessages.putIfAbsent(channelName, () => []);
-    final List<Map<String, dynamic>> messagesForChannel = _channelMessages[channelName]!;
-    if (messagesForChannel.isNotEmpty &&
-        messagesForChannel.last['from'] == newMessage['from'] &&
-        messagesForChannel.last['content'] == newMessage['content'] &&
-        newMessage['from'] != 'System' && newMessage['from'] != 'IRIS Bot') {
-      print('[_addMessageToDisplay] Detected exact duplicate from same sender, skipping.');
-      return;
-    }
-    print('[_addMessageToDisplay] Adding message to $channelName: ${newMessage['content']}');
-    messagesForChannel.add(newMessage);
+    _channelMessages[channelName]!.add(newMessage);
+    _scrollToBottom();
   }
+
 
   Future<void> _handleCommand(String commandText) async {
     final parts = commandText.substring(1).split(' ');
@@ -433,7 +399,7 @@ class MainLayoutViewModel extends ChangeNotifier {
               _scrollToBottom();
             } else {
               await _apiService.joinChannel(args);
-              _fetchChannels();
+              _fetchChannels(); // This will trigger _fetchChannelMessages for the newly joined channel
             }
           }
           break;
@@ -506,11 +472,11 @@ class MainLayoutViewModel extends ChangeNotifier {
         case 'help':
           final helpMessage = """
 Available IRC-like commands:
-  /join <channel>       - Join a channel (e.g., /join #general)
-  /part [channel]       - Leave the current channel or specified channel
-  /me <action_text>     - Perform an action (e.g., /me is happy)
-  /query <user> <msg>   - Send a private message to a user
-  /help                 - Show this help message
+  /join <channel>         - Join a channel (e.g., /join #general)
+  /part [channel]         - Leave the current channel or specified channel
+  /me <action_text>       - Perform an action (e.g., /me is happy)
+  /query <user> <msg>     - Send a private message to a user
+  /help                   - Show this help message
 """;
           _addInfoMessageToCurrentChannel(helpMessage);
           break;
@@ -522,7 +488,7 @@ Available IRC-like commands:
       _addInfoMessageToCurrentChannel('Failed to execute /$command: ${e.toString().replaceFirst('Exception: ', '')}');
       print('Command Error: $e');
     } finally {
-      notifyListeners(); // Notify after command handling to update UI
+      notifyListeners();
     }
   }
 

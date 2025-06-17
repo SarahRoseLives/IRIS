@@ -40,7 +40,7 @@ class WebSocketService {
 
   void connect(String token) {
     if (_ws != null && _currentWsStatus == WebSocketStatus.connected) {
-      print("[WebSocketService] Already connected.");
+      print("[WebSocketService] Already connected. Skipping new connection attempt.");
       return;
     }
 
@@ -68,13 +68,24 @@ class WebSocketService {
       });
 
       _ws!.stream.listen((message) {
-        final event = jsonDecode(message);
-        print("[WebSocketService] Received event: $event");
+        print("[WebSocketService] Raw message received: $message");
+
+        Map<String, dynamic> event;
+        try {
+          event = jsonDecode(message);
+        } catch (e) {
+          print("[WebSocketService] Error decoding JSON: $e, Raw message: $message");
+          _errorController.add("WebSocket JSON parsing error: $e");
+          return;
+        }
+
+        print("[WebSocketService] Parsed event: $event (Type: ${event['type']})");
 
         if (event['type'] == 'initial_state') {
           final List<dynamic> receivedChannels = event['payload']['channels'] ?? [];
           _currentChannels = receivedChannels.map((c) => c['name'].toString()).toList();
           _channelsController.add(List.from(_currentChannels));
+          print("[WebSocketService] Added initial channels to stream: $_currentChannels");
         } else if (event['type'] == 'channel_join') {
           final String channelName = event['payload']['name'];
           if (!_currentChannels.contains(channelName)) {
@@ -82,11 +93,13 @@ class WebSocketService {
             _currentChannels.sort();
             _channelsController.add(List.from(_currentChannels));
           }
+          print("[WebSocketService] Added joined channel to stream: $channelName");
         } else if (event['type'] == 'channel_part') {
           final String channelName = event['payload']['name'];
           if (_currentChannels.remove(channelName)) {
             _channelsController.add(List.from(_currentChannels));
           }
+          print("[WebSocketService] Removed parted channel from stream: $channelName");
         } else if (event['type'] == 'message') {
           _messageController.add({
             'channel_name': event['payload']['channel_name'],
@@ -94,9 +107,11 @@ class WebSocketService {
             'text': event['payload']['text'],
             'time': event['payload']['time'] ?? DateTime.now().toIso8601String(),
           });
+          // --- ADDED PRINT STATEMENT HERE ---
+          print("[WebSocketService] ADDED MESSAGE TO STREAM: ${event['payload']['text']}");
         }
       }, onError: (e) {
-        print("[WebSocketService] Error occurred: $e");
+        print("[WebSocketService] Stream listener error: $e"); // More specific log
         if (_isUnauthorized(e.toString())) {
           _handleUnauthorized();
         } else {
@@ -104,7 +119,7 @@ class WebSocketService {
         }
       }, onDone: _handleWebSocketDone);
     } catch (e) {
-      print("[WebSocketService] Connection setup failed: $e");
+      print("[WebSocketService] Outer catch: Connection setup failed: $e"); // More specific log
       _handleWebSocketError(e);
     }
   }
@@ -152,6 +167,7 @@ class WebSocketService {
   void sendMessage(String channelName, String text) {
     if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
       _errorController.add("Cannot send message: WebSocket not connected.");
+      print("[WebSocketService] Cannot send message: WS not connected."); // Added debug print
       return;
     }
     final messageToSend = jsonEncode({
@@ -162,6 +178,7 @@ class WebSocketService {
       },
     });
     _ws?.sink.add(messageToSend);
+    print("[WebSocketService] Sent message: $messageToSend"); // Added debug print
   }
 
   void disconnect() {

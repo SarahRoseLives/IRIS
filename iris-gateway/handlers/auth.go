@@ -3,16 +3,14 @@ package handlers
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
-	"net" // New import for net package
+	"log"
+	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
 	"iris-gateway/irc"
 	"iris-gateway/session"
@@ -67,20 +65,32 @@ func LoginHandler(c *gin.Context) {
 
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Gateway error"})
+		log.Printf("Ergo authentication request failed: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Gateway error during authentication"})
 		return
 	}
 	defer resp.Body.Close()
 
-	respData, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	_ = json.Unmarshal(respData, &result)
+	respData, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Printf("Failed to read Ergo response body: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to read authentication response"})
+		return
+	}
 
-	if resp.StatusCode != 200 || result["success"] != true {
+	var result map[string]interface{}
+	if err := json.Unmarshal(respData, &result); err != nil {
+		log.Printf("Failed to unmarshal Ergo response: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "Failed to parse authentication response"})
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK || result["success"] != true {
 		msg, _ := result["message"].(string)
 		if msg == "" {
 			msg = "Login failed"
 		}
+		log.Printf("Ergo authentication failed: status %d, message: %s", resp.StatusCode, msg)
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": msg})
 		return
 	}
@@ -88,76 +98,42 @@ func LoginHandler(c *gin.Context) {
 	// Extract the client's IP address
 	clientIP, _, err := net.SplitHostPort(c.Request.RemoteAddr)
 	if err != nil {
-		clientIP = c.Request.RemoteAddr // Fallback if SplitHostPort fails (e.g., no port)
+		clientIP = c.Request.RemoteAddr
+		log.Printf("Could not split host port for RemoteAddr '%s', using full address as IP: %v", c.Request.RemoteAddr, err)
 	}
 
-	// Connect to IRC
-	// Pass the clientIP to the AuthenticateWithNickServ function
-	client, err := irc.AuthenticateWithNickServ(req.Username, req.Password, clientIP)
+	// Create the UserSession *before* connecting to IRC so it can be passed in
+	userSession := &session.UserSession{
+		Username: req.Username,
+		Channels: make(map[string]*session.ChannelState),
+	}
+
+	// Connect to IRC, passing the userSession itself as the ChannelStateUpdater
+	client, err := irc.AuthenticateWithNickServ(req.Username, req.Password, clientIP, userSession)
 	if err != nil {
+		log.Printf("IRC login failed for user %s: %v", req.Username, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "IRC login failed: " + err.Error()})
 		return
 	}
 
-	fmt.Printf("[SESSION] IRC pointer for user %s: %p\n", req.Username, client)
+	log.Printf("[SESSION] IRC pointer for user %s: %p", req.Username, client)
 
-	userSession := &session.UserSession{
-		Username: req.Username,
-		IRC:      client,
-		Channels: make(map[string]*session.ChannelState),
-	}
+	userSession.IRC = client // Assign the IRC client to the session
 
-	// Register callbacks BEFORE any join
-	client.AddCallback("JOIN", func(e *ircevent.Event) {
-		fmt.Printf("[IRC] JOIN callback fired on IRC pointer: %p\n", e.Connection)
-		fmt.Printf("[IRC] Raw JOIN Event: %+v\n", e)
+	// Optional: Join fallback default channel
+	defaultChannel := "#welcome"
+	client.Join(defaultChannel)
 
-		if !strings.EqualFold(e.Nick, userSession.Username) {
-			return
-		}
+    // Eagerly add the channel to the session's internal map, using lowercased name.
+    // This ensures the channel appears immediately in API responses.
+    userSession.AddChannelToSession(defaultChannel)
+    log.Printf("[LoginHandler] Immediately added %s to session for user %s", defaultChannel, userSession.Username)
 
-		var channel string
-		if len(e.Arguments) > 0 {
-			channel = e.Arguments[len(e.Arguments)-1]
-		} else {
-			channel = e.Message()
-		}
-
-		fmt.Printf("[IRC] User %s JOINED %s\n", e.Nick, channel)
-
-		userSession.Mutex.Lock()
-		if _, exists := userSession.Channels[channel]; !exists {
-			userSession.Channels[channel] = &session.ChannelState{
-				Name:       channel,
-				Members:    []string{userSession.Username},
-				Messages:   []session.Message{},
-				LastUpdate: time.Now(),
-			}
-		} else {
-			userSession.Channels[channel].LastUpdate = time.Now()
-		}
-		userSession.Mutex.Unlock()
-	})
-
-	client.AddCallback("PART", func(e *ircevent.Event) {
-		fmt.Printf("[IRC] PART callback fired on IRC pointer: %p\n", e.Connection)
-
-		if strings.EqualFold(e.Nick, userSession.Username) && len(e.Arguments) > 0 {
-			channel := e.Arguments[0]
-			userSession.Mutex.Lock()
-			delete(userSession.Channels, channel)
-			userSession.Mutex.Unlock()
-			fmt.Printf("[IRC] User %s PARTED %s\n", e.Nick, channel)
-		}
-	})
-
-	// Optional: Join fallback default (can be removed if auto-joins are guaranteed)
-	client.Join("#welcome")
 
 	token := uuid.New().String()
 	session.AddSession(token, userSession)
 
-	fmt.Printf("[SESSION] Created for %s with token %s\n", req.Username, token)
+	log.Printf("[SESSION] Created for %s with token %s", req.Username, token)
 
 	c.JSON(http.StatusOK, LoginResponse{
 		Success: true,

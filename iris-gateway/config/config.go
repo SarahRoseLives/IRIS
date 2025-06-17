@@ -8,6 +8,9 @@ type Config struct {
 	AvatarDir    string // New field for avatar directory
 
 	IRCServer string
+
+	// New: Max history lines per channel
+	MaxHistoryLines int
 }
 
 var Cfg = Config{ // Capitalized to export
@@ -18,4 +21,7 @@ var Cfg = Config{ // Capitalized to export
 	AvatarDir:    "./avatars", // Default value for avatar directory
 
 	IRCServer: "localhost:6667", // replace with your actual IRC server address
+
+	// Default to 500 lines
+	MaxHistoryLines: 500,
 }

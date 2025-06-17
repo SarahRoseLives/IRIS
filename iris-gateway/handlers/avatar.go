@@ -15,7 +15,7 @@ import (
 // It expects a multipart form with a file field named "avatar".
 // The uploaded file will be named after the username and stored in the configured avatar directory.
 func UploadAvatarHandler(c *gin.Context) {
-	token, ok := getToken(c)
+	token, ok := getToken(c) // Now getToken is available from helpers.go
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Missing token"})
 		return

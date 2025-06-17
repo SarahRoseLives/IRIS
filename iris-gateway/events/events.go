@@ -1,9 +1,8 @@
 package events
 
 import (
-    "log"
-
-	"iris-gateway/session"
+	"log"
+	"sync" // NEW: Import sync for mutex
 )
 
 // WsEvent struct matches the Flutter client's expected event format
@@ -12,61 +11,22 @@ type WsEvent struct {
 	Payload interface{} `json:"payload"`
 }
 
-// A global channel for messages to be broadcast to all connected clients.
-// Events are sent to this channel from anywhere in your backend (e.g., IRC handlers).
+// WsBroadcasterFunc defines the signature for functions that can broadcast a WsEvent.
+// A session's Broadcast method will conform to this.
+// NEW: This type definition breaks the direct import dependency.
+type WsBroadcasterFunc func(eventType string, payload interface{})
+
+// globalBroadcastChannel is a global channel for messages to be broadcast to all connected clients.
 var globalBroadcastChannel = make(chan WsEvent, 100) // Buffered channel to prevent blocking senders
+
+// NEW: Map to hold registered broadcaster functions, keyed by a unique ID (e.g., session token).
+var activeBroadcasters = make(map[string]WsBroadcasterFunc)
+var broadcastersMutex = &sync.RWMutex{} // NEW: Mutex to protect activeBroadcasters map
 
 // init function runs once when the package is imported
 func init() {
 	// Start the WebSocket broadcaster in a goroutine
 	go startWebSocketBroadcaster()
-
-	// --- TEMPORARY: Optional Simulation for testing if needed after the cycle fix ---
-	// You can uncomment this block for testing if you want, but remove it in production.
-	/*
-	go func() {
-		time.Sleep(5 * time.Second) // Give clients time to connect
-		log.Println("[EVENTS Sim] Sending #new_channel_join")
-		globalBroadcastChannel <- WsEvent{
-			Type:    "channel_join",
-			Payload: map[string]string{"name": "#new_channel_from_events"},
-		}
-
-		time.Sleep(10 * time.Second)
-		log.Println("[EVENTS Sim] Sending #test_part_from_events")
-		globalBroadcastChannel <- WsEvent{
-			Type:    "channel_part",
-			Payload: map[string]string{"name": "#test_from_events"},
-		}
-
-		time.Sleep(15 * time.Second)
-		log.Println("[EVENTS Sim] Sending #general_message_from_events")
-		globalBroadcastChannel <- WsEvent{
-			Type: "message",
-			Payload: map[string]string{
-				"channel_name": "#general",
-				"sender":       "EventsSim",
-				"text":         "This is a message from the events simulator!",
-			},
-		}
-	}()
-	*/
-	// --- End TEMPORARY Simulation ---
-}
-
-// startWebSocketBroadcaster listens for messages on the globalBroadcastChannel
-// and forwards them to all active WebSocket connections across all user sessions.
-func startWebSocketBroadcaster() {
-	for {
-		event := <-globalBroadcastChannel // Blocks until an event is sent
-		log.Printf("[Events Broadcaster] Received event for broadcast: Type=%s, Payload=%v", event.Type, event.Payload)
-
-		// Iterate over all active sessions and broadcast the event to their WebSockets
-		session.ForEachSession(func(sess *session.UserSession) {
-			// Each session's Broadcast method handles sending to its specific WebSockets
-			sess.Broadcast(event.Type, event.Payload)
-		})
-	}
 }
 
 // Public function to allow other packages to send events
@@ -74,5 +34,51 @@ func SendEvent(eventType string, payload interface{}) {
 	globalBroadcastChannel <- WsEvent{
 		Type:    eventType,
 		Payload: payload,
+	}
+}
+
+// NEW: RegisterBroadcaster allows a session to register its WebSocket broadcast function.
+// The 'id' parameter should be unique per session (e.g., the session token).
+func RegisterBroadcaster(id string, fn WsBroadcasterFunc) {
+	broadcastersMutex.Lock()
+	defer broadcastersMutex.Unlock()
+	activeBroadcasters[id] = fn
+	log.Printf("[Events] Broadcaster %s registered. Total: %d", id, len(activeBroadcasters))
+}
+
+// NEW: UnregisterBroadcaster allows a session to remove its WebSocket broadcast function.
+// Call this when a session is closed or no longer needs to receive broadcasts.
+func UnregisterBroadcaster(id string) {
+	broadcastersMutex.Lock()
+	defer broadcastersMutex.Unlock()
+	delete(activeBroadcasters, id)
+	log.Printf("[Events] Broadcaster %s unregistered. Total: %d", id, len(activeBroadcasters))
+}
+
+// startWebSocketBroadcaster listens for messages on the globalBroadcastChannel
+// and forwards them to all registered WebSocket broadcast functions.
+// MODIFIED: Now iterates over registered broadcasters instead of `session.ForEachSession`.
+func startWebSocketBroadcaster() {
+	for {
+		event := <-globalBroadcastChannel // Blocks until an event is sent
+		log.Printf("[Events Broadcaster] Received event for broadcast: Type=%s, Payload=%v", event.Type, event.Payload)
+
+		broadcastersMutex.RLock() // Acquire read lock while iterating
+		// Iterate over a copy of the slice of functions to avoid holding the lock
+		// if a broadcastFn takes time, and to prevent map modification during iteration.
+		// If a broadcastFn panics, we recover and unregister it.
+		for id, broadcastFn := range activeBroadcasters {
+			go func(id string, fn WsBroadcasterFunc, eventType string, payload interface{}) {
+				defer func() {
+					if r := recover(); r != nil {
+						log.Printf("[Events Broadcaster] Recovered from panic in broadcaster %s: %v", id, r)
+						// Optionally unregister a panicking broadcaster if it indicates a bad state
+						UnregisterBroadcaster(id) // Unregister the problematic broadcaster
+					}
+				}()
+				fn(eventType, payload)
+			}(id, broadcastFn, event.Type, event.Payload)
+		}
+		broadcastersMutex.RUnlock() // Release read lock
 	}
 }

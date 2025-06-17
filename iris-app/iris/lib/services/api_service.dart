@@ -15,17 +15,20 @@ class ApiService {
   // This method should not require a token as it's for initial login
   Future<LoginResponse> login(String username, String password) async {
     final url = Uri.parse('$baseUrl/login');
+    print("[ApiService] login: Calling POST $url"); // Added debug print
     try {
       final response = await http.post(
         url,
         headers: {'Content-Type': 'application/json'},
         body: json.encode({'username': username, 'password': password}),
       );
+      print("[ApiService] login: Received status code ${response.statusCode}"); // Added debug print
 
       // Always try to parse the response with LoginResponse.fromJson
       final responseData = json.decode(response.body);
       return LoginResponse.fromJson(responseData);
     } catch (e) {
+      print("[ApiService] login Error: $e"); // Added debug print
       // For any network or parsing error, return a failed LoginResponse
       return LoginResponse(success: false, message: 'Network error during login: $e');
     }
@@ -48,11 +51,13 @@ class ApiService {
   /// Fetches the list of channels from the API.
   Future<List<String>> fetchChannels() async {
     final url = Uri.parse('$baseUrl/channels');
+    print("[ApiService] fetchChannels: Calling GET $url with token: $_token"); // Added debug print
     try {
       final response = await http.get(
         url,
         headers: {'Authorization': 'Bearer ${_getToken()}'},
       );
+      print("[ApiService] fetchChannels: Received status code ${response.statusCode}"); // Added debug print
 
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
@@ -62,39 +67,61 @@ class ApiService {
         throw Exception(data['message'] ?? "Failed to load channels");
       }
     } catch (e) {
+      print("[ApiService] fetchChannels Error: $e"); // Added debug print
       throw Exception("Network error fetching channels: $e");
     }
   }
 
   /// Fetches messages for a specific channel from the API.
   Future<List<Map<String, dynamic>>> fetchChannelMessages(String channelName) async {
-    if (channelName.isEmpty) return [];
+    print("[ApiService] fetchChannelMessages: Attempting to fetch messages for $channelName"); // Added debug print
+    if (channelName.isEmpty) {
+      print("[ApiService] fetchChannelMessages: Channel name is empty, returning empty list."); // Added debug print
+      return [];
+    }
 
-    final url = Uri.parse('$baseUrl/channels/$channelName/messages');
+    // FIX 1: URL-encode the channel name to handle '#' or other special characters
+    // Uri.encodeComponent is used for path segments
+    final encodedChannelName = Uri.encodeComponent(channelName);
+    final url = Uri.parse('$baseUrl/channels/$encodedChannelName/messages');
+    final token = _getToken(); // Get token before the request
+    print("[ApiService] fetchChannelMessages: Calling GET $url with token: $token"); // Added debug print
+
     try {
       final response = await http.get(
         url,
-        headers: {'Authorization': 'Bearer ${_getToken()}'},
+        headers: {'Authorization': 'Bearer $token'},
       );
+      print("[ApiService] fetchChannelMessages: Received status code ${response.statusCode} for $channelName"); // Added debug print
+
+      print("[ApiService] fetchChannelMessages: Raw response body: ${response.body}");
 
       final data = jsonDecode(response.body);
-      if (response.statusCode == 200 && data['success'] == true) {
-        final List<dynamic> receivedMessages = data['messages'] ?? [];
+
+      // FIX 2: Remove the `data['success'] == true` check for this endpoint
+      // The curl output confirmed that the response for messages directly contains the "messages" field.
+      if (response.statusCode == 200) { // Only check for 200 status code
+        final List<dynamic> receivedMessages = data['messages'] ?? []; // Access the 'messages' field
+        print("[ApiService] fetchChannelMessages: Successfully fetched ${receivedMessages.length} messages for $channelName"); // Added debug print
         return receivedMessages.map((msg) => {
               'from': msg['from'] ?? '',
               'content': msg['content'] ?? '',
               'time': msg['time'] ?? DateTime.now().toIso8601String(),
             }).toList();
       } else {
-        throw Exception("Failed to load messages: ${data['message'] ?? response.statusCode}");
+        // If status is not 200, assume an error, and try to get a message from the response
+        print("[ApiService] fetchChannelMessages: API returned non-200 status for $channelName: ${response.statusCode}"); // Added debug print
+        throw Exception("Failed to load messages: Status ${response.statusCode}, Body: ${response.body}");
       }
     } catch (e) {
+      print("[ApiService] fetchChannelMessages Error for $channelName: $e"); // Added debug print
       throw Exception("Network error fetching messages: $e");
     }
   }
 
   Future<Map<String, dynamic>> joinChannel(String channelName) async {
     final url = Uri.parse('$baseUrl/channels/join');
+    print("[ApiService] joinChannel: Calling POST $url for channel $channelName"); // Added debug print
     final response = await http.post(
       url,
       headers: {
@@ -104,6 +131,7 @@ class ApiService {
       body: json.encode({'channel': channelName}),
     );
     final responseData = json.decode(response.body);
+    print("[ApiService] joinChannel: Received status code ${response.statusCode}, success: ${responseData['success']}"); // Added debug print
     if (response.statusCode == 200 && responseData['success'] == true) {
       return responseData;
     } else {
@@ -113,6 +141,7 @@ class ApiService {
 
   Future<Map<String, dynamic>> partChannel(String channelName) async {
     final url = Uri.parse('$baseUrl/channels/part');
+    print("[ApiService] partChannel: Calling POST $url for channel $channelName"); // Added debug print
     final response = await http.post(
       url,
       headers: {
@@ -122,6 +151,7 @@ class ApiService {
       body: json.encode({'channel': channelName}),
     );
     final responseData = json.decode(response.body);
+    print("[ApiService] partChannel: Received status code ${response.statusCode}, success: ${responseData['success']}"); // Added debug print
     if (response.statusCode == 200 && responseData['success'] == true) {
       return responseData;
     } else {
@@ -132,6 +162,7 @@ class ApiService {
   // New method to upload avatar
   Future<Map<String, dynamic>> uploadAvatar(File imageFile, String token) async {
     final uri = Uri.parse('$baseUrl/upload-avatar');
+    print("[ApiService] uploadAvatar: Calling POST $uri for avatar upload."); // Added debug print
     final request = http.MultipartRequest('POST', uri)
       ..headers['Authorization'] = 'Bearer $token'; // Use the passed token directly
 
@@ -144,10 +175,8 @@ class ApiService {
         mimeType = 'image/jpeg';
         break;
       case 'png':
-        mimeType = 'image/png';
-        break;
       case 'gif':
-        mimeType = 'image/gif';
+        mimeType = 'image/png';
         break;
       default:
         mimeType = 'application/octet-stream'; // Fallback for unknown types
@@ -165,9 +194,10 @@ class ApiService {
     final responseBody = await response.stream.bytesToString();
 
     if (response.statusCode == 200) {
+      print("[ApiService] uploadAvatar: Upload successful, status 200."); // Added debug print
       return json.decode(responseBody);
     } else {
-      // Provide more detailed error information
+      print("[ApiService] uploadAvatar: Upload failed, status ${response.statusCode}, body: $responseBody"); // Added debug print
       final errorData = json.decode(responseBody);
       throw Exception('Failed to upload avatar: ${response.statusCode} - ${errorData['message'] ?? responseBody}');
     }
