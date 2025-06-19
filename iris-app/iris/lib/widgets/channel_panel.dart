@@ -1,10 +1,11 @@
+// widgets/channel_panel.dart
 import 'package:flutter/material.dart';
 import '../services/websocket_service.dart';
 
 class ChannelPanel extends StatelessWidget {
   final List<String> channels;
-  final int selectedChannelIndex;
-  final ValueChanged<int> onChannelSelected;
+  final String selectedConversationTarget;
+  final ValueChanged<String> onChannelSelected;
   final bool loadingChannels;
   final String? error;
   final WebSocketStatus wsStatus;
@@ -12,7 +13,7 @@ class ChannelPanel extends StatelessWidget {
   const ChannelPanel({
     super.key,
     required this.channels,
-    required this.selectedChannelIndex,
+    required this.selectedConversationTarget,
     required this.onChannelSelected,
     required this.loadingChannels,
     this.error,
@@ -29,7 +30,6 @@ class ChannelPanel extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              // Channels title
               const Expanded(
                 flex: 2,
                 child: Text(
@@ -40,11 +40,10 @@ class ChannelPanel extends StatelessWidget {
                       fontSize: 22),
                 ),
               ),
-              // WebSocket status display
-              Expanded(
+              Expanded( // FIX: Removed stray '_'
                 flex: 1,
                 child: Text(
-                  wsStatus.name, // Display enum name (e.g., 'connected')
+                  wsStatus.name,
                   textAlign: TextAlign.right,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(
@@ -58,42 +57,37 @@ class ChannelPanel extends StatelessWidget {
             ],
           ),
         ),
-        // Loading indicator or error message
         if (loadingChannels)
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: CircularProgressIndicator(),
-          )
+          const Center(child: Padding(
+            padding: EdgeInsets.all(8.0),
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ))
         else if (error != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(error!,
-                style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
+            child: Text(error!, style: const TextStyle(color: Colors.redAccent, fontSize: 13)),
           )
         else
-          // List of channels
-          ListView.builder(
-            // These properties are crucial for correct nested scrolling within LeftDrawer's SingleChildScrollView.
-            // shrinkWrap: true makes the ListView only take up the space its children need.
-            // physics: NeverScrollableScrollPhysics() prevents it from having its own scroll.
-            shrinkWrap: true,
-            physics: const NeverScrollableScrollPhysics(),
-            itemCount: channels.length,
-            itemBuilder: (context, idx) {
-              final channel = channels[idx];
-              return ListTile(
-                selected: selectedChannelIndex == idx,
-                selectedTileColor: const Color(0xFF5865F2),
-                title: Text(channel,
-                    style: TextStyle(
-                      color: selectedChannelIndex == idx
-                          ? Colors.white
-                          : Colors.white70,
-                    )),
-                onTap: () => onChannelSelected(idx),
-              );
-            },
-          ),
+          Expanded(
+              child: ListView.builder(
+                padding: EdgeInsets.zero,
+                itemCount: channels.length,
+                itemBuilder: (context, idx) {
+                  final channel = channels[idx];
+                  final isSelected = selectedConversationTarget.toLowerCase() == channel.toLowerCase();
+                  return ListTile(
+                    selected: isSelected,
+                    selectedTileColor: const Color(0xFF5865F2),
+                    title: Text(channel, // FIX: Removed stray '_'
+                        style: TextStyle(
+                          color: isSelected ? Colors.white : Colors.white70,
+                          fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        )),
+                    onTap: () => onChannelSelected(channel),
+                  );
+                },
+              ),
+            ),
       ],
     );
   }

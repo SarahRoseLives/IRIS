@@ -21,10 +21,13 @@ class MainChatScreen extends StatelessWidget {
           body: Row(
             children: [
               LeftDrawer(
-                dms: viewModel.dms,
-                channels: viewModel.channelNames, // MODIFIED: Pass channel names
-                selectedChannelIndex: viewModel.selectedChannelIndex,
+                dms: viewModel.dmChannelNames,
+                userAvatars: viewModel.userAvatars,
+                channels: viewModel.publicChannelNames,
+                selectedConversationTarget: viewModel.selectedConversationTarget,
                 onChannelSelected: viewModel.onChannelSelected,
+                onDmSelected: viewModel.onDmSelected,
+                onIrisTap: viewModel.selectMainView,
                 loadingChannels: viewModel.loadingChannels,
                 error: viewModel.channelError,
                 wsStatus: viewModel.wsStatus,
@@ -47,10 +50,7 @@ class MainChatScreen extends StatelessWidget {
                             Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 8),
                               child: Text(
-                                viewModel.channelNames.isNotEmpty &&
-                                        viewModel.selectedChannelIndex < viewModel.channelNames.length
-                                    ? viewModel.channelNames[viewModel.selectedChannelIndex]
-                                    : "#loading",
+                                viewModel.selectedConversationTarget,
                                 style: const TextStyle(color: Colors.white, fontSize: 20),
                               ),
                             ),
@@ -74,12 +74,14 @@ class MainChatScreen extends StatelessWidget {
                         controller: viewModel.msgController,
                         onSendMessage: viewModel.handleSendMessage,
                         onProfilePressed: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => ProfileScreen(authToken: viewModel.token!),
-                            ),
-                          );
+                          if (viewModel.token != null) {
+                            Navigator.push(
+                              context,
+                              MaterialPageRoute(
+                                builder: (context) => ProfileScreen(authToken: viewModel.token!),
+                              ),
+                            );
+                          }
                         },
                       ),
                     ],
@@ -87,7 +89,7 @@ class MainChatScreen extends StatelessWidget {
                 ),
               ),
               if (viewModel.showRightDrawer)
-                RightDrawer(members: viewModel.members), // MODIFIED: Pass the list of ChannelMember objects
+                RightDrawer(members: viewModel.members),
             ],
           ),
         );

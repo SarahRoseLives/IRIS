@@ -4,7 +4,7 @@ import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../config.dart';
 import '../main.dart';
-import '../models/channel_member.dart'; // Import the new model
+import '../models/channel_member.dart';
 
 enum WebSocketStatus {
   disconnected,
@@ -25,15 +25,20 @@ class WebSocketService {
   final StreamController<WebSocketStatus> _statusController = StreamController<WebSocketStatus>.broadcast();
   Stream<WebSocketStatus> get statusStream => _statusController.stream;
 
+  // MODIFIED: This stream is no longer populated by 'initial_state'.
   final StreamController<List<String>> _channelsController = StreamController<List<String>>.broadcast();
   Stream<List<String>> get channelsStream => _channelsController.stream;
 
   final StreamController<Map<String, dynamic>> _messageController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
 
-  // NEW: Stream for member list updates
   final StreamController<Map<String, dynamic>> _membersUpdateController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get membersUpdateStream => _membersUpdateController.stream;
+
+  // NEW: A stream to pass the entire initial state payload to the view model.
+  final StreamController<Map<String, dynamic>> _initialStateController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get initialStateStream => _initialStateController.stream;
+
 
   final StreamController<String> _errorController = StreamController<String>.broadcast();
   Stream<String> get errorStream => _errorController.stream;
@@ -88,10 +93,11 @@ class WebSocketService {
 
         switch (event['type']) {
           case 'initial_state':
-            final List<dynamic> receivedChannels = payload['channels'] ?? [];
-            _currentChannels = receivedChannels.map((c) => c['name'].toString()).toList();
-            _channelsController.add(List.from(_currentChannels));
-            print("[WebSocketService] Added initial channels to stream: $_currentChannels");
+            // MODIFICATION: The payload now contains a map of full channel objects.
+            // We pass this entire map to the ViewModel to handle the logic.
+            final Map<String, dynamic> receivedChannelsMap = payload['channels'] as Map<String, dynamic>? ?? {};
+            _initialStateController.add(receivedChannelsMap);
+            print("[WebSocketService] Forwarded initial state payload with ${receivedChannelsMap.keys.length} channels.");
             break;
           case 'channel_join':
             final String channelName = payload['name'];
@@ -118,7 +124,6 @@ class WebSocketService {
             });
             print("[WebSocketService] ADDED MESSAGE TO STREAM: ${payload['text']}");
             break;
-          // NEW: Handle member updates
           case 'members_update':
             final String channelName = payload['channel_name'];
             final List<dynamic> membersData = payload['members'] ?? [];
@@ -208,7 +213,8 @@ class WebSocketService {
     _statusController.close();
     _channelsController.close();
     _messageController.close();
-    _membersUpdateController.close(); // Close the new controller
+    _membersUpdateController.close();
+    _initialStateController.close(); // NEW: Close the new controller.
     _errorController.close();
   }
 }

@@ -1,3 +1,4 @@
+// handlers/ws.go
 package handlers
 
 import (
@@ -5,8 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"time" // <--- Add this import
-	"strings" // <--- Add this import
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/websocket"
@@ -51,23 +52,45 @@ func WebSocketHandler(c *gin.Context) {
 	sess.AddWebSocket(conn)
 	log.Printf("[WS] WebSocket connected for user %s (token: %s). Total WS for user: %d\n", sess.Username, token, len(sess.WebSockets))
 
-	// Send initial welcome message and current channels to the newly connected client
-	channelsPayload := make([]map[string]string, 0)
+	// --- START: MODIFIED SECTION ---
+	// Send initial state including full channel history upon connection.
+	// This ensures the client gets all available scrollback immediately.
 	sess.Mutex.RLock()
-	for _, channelState := range sess.Channels {
-		channelsPayload = append(channelsPayload, map[string]string{"name": channelState.Name})
+	// The payload is now a map where keys are channel names and values are the full ChannelState.
+	// This provides the client with names, members, messages, etc., for each channel.
+	channelsPayload := make(map[string]*session.ChannelState)
+	for name, channelState := range sess.Channels {
+		// IMPORTANT: Use the thread-safe GetMessages() method to retrieve a copy
+		// of the message history. This prevents race conditions.
+		messages := channelState.GetMessages()
+
+		// Create a complete snapshot of the channel's state for the payload.
+		channelsPayload[name] = &session.ChannelState{
+			Name:       channelState.Name,
+			Members:    channelState.Members,
+			Messages:   messages, // Use the copied message slice
+			LastUpdate: channelState.LastUpdate,
+			Topic:      channelState.Topic,
+		}
+		log.Printf("[WS] Preparing initial state for channel '%s' with %d messages for user %s.", name, len(messages), sess.Username)
 	}
 	sess.Mutex.RUnlock()
 
-	conn.WriteJSON(events.WsEvent{
+	// Send the comprehensive initial state to the newly connected client.
+	err = conn.WriteJSON(events.WsEvent{
 		Type: "initial_state",
 		Payload: map[string]interface{}{
 			"message":  fmt.Sprintf("Connected to IRIS as %s", sess.Username),
 			"username": sess.Username,
 			"time":     time.Now().Format(time.RFC3339),
-			"channels": channelsPayload,
+			"channels": channelsPayload, // This payload now contains the full history for all channels.
 		},
 	})
+	if err != nil {
+		log.Printf("[WS] Error sending initial_state to %s: %v", sess.Username, err)
+	}
+	// --- END: MODIFIED SECTION ---
+
 
 	// Reader goroutine: continuously read messages from the client
 	go func() {
@@ -103,24 +126,19 @@ func WebSocketHandler(c *gin.Context) {
 							// Split the message by newlines to adhere to IRC's single-line message structure
 							lines := strings.Split(text, "\n")
 							for _, line := range lines {
-								// Trim leading/trailing whitespace from each line if desired, or keep as-is.
-								// For code blocks, keeping leading spaces might be important for indentation.
 								// If a line is empty after splitting (e.g., two newlines in a row), send a single space
-								// to preserve the empty line, or skip it entirely if you prefer.
+								// to preserve the empty line.
 								ircLine := line
 								if len(ircLine) == 0 {
 									ircLine = " " // Send a single space for empty lines
 								}
 								log.Printf("[WS] Sending IRC line to channel %s from %s: '%s'", channelName, sess.Username, ircLine)
 								sess.IRC.Privmsg(channelName, ircLine)
-								// Add a small delay between lines to avoid hitting IRC server flood limits
-								// and to ensure messages are processed as distinct lines. Adjust as needed.
+								// Add a small delay between lines to avoid hitting IRC server flood limits.
 								time.Sleep(100 * time.Millisecond)
 							}
 							// --- END MODIFICATION FOR MULTI-LINE IRC SENDING ---
 
-							// Message will be broadcast when IRC echoes it back (line by line),
-							// and the PRIVMSG handler will re-assemble or pass through as received.
 						} else {
 							log.Printf("[WS] Received malformed 'message' payload from %s: %v", sess.Username, payload)
 						}
