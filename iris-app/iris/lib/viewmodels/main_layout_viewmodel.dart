@@ -20,7 +20,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   late WebSocketService _webSocketService;
 
   int _selectedChannelIndex = 0;
-  bool _showLeftDrawer = true;
+  bool _showLeftDrawer = false;
   bool _showRightDrawer = false;
   bool _loadingChannels = true; // Still true initially
   String? _channelError;
