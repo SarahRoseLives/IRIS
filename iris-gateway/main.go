@@ -1,20 +1,22 @@
+// main.go
 package main
 
 import (
 	"github.com/gin-gonic/gin"
-	"iris-gateway/handlers"
 	"iris-gateway/config"
-	"net/http" // New import for serving static files
+	"iris-gateway/handlers"
+	"iris-gateway/push" // <-- Import the new push package
+	"net/http"
 )
 
 func main() {
+	// Initialize Firebase Cloud Messaging
+	push.InitFCM() // <-- Initialize FCM
+
 	router := gin.Default()
 
 	// Serve static avatar files
-	// This will serve files from the "avatars" directory under the "/avatars" URL path.
-	// For example, if a user uploads an avatar named "john.jpg", it will be accessible at /avatars/john.jpg
 	router.StaticFS("/avatars", http.Dir(config.Cfg.AvatarDir))
-
 
 	router.POST("/api/login", handlers.LoginHandler)
 	router.POST("/api/channels/join", handlers.JoinChannelHandler)
@@ -22,10 +24,10 @@ func main() {
 	router.GET("/api/channels", handlers.ListChannelsHandler)
 	router.GET("/api/channels/:channelName/messages", handlers.GetChannelMessagesHandler)
 	router.GET("/ws/:token", handlers.WebSocketHandler)
-
-	// New route for avatar upload
 	router.POST("/api/upload-avatar", handlers.UploadAvatarHandler)
 
+	// New route for registering FCM token
+	router.POST("/api/register-fcm-token", handlers.RegisterFCMTokenHandler) // <-- Add new route
 
 	router.Run(config.Cfg.ListenAddr)
 }

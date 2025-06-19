@@ -1,3 +1,4 @@
+// session/session.go
 package session
 
 import (
@@ -9,10 +10,11 @@ import (
 
 	"github.com/gorilla/websocket"
 	ircevent "github.com/thoj/go-ircevent"
-	"iris-gateway/config" // Import for MaxHistoryLines
-	"iris-gateway/events" // Import for RegisterBroadcaster/UnregisterBroadcaster
+	"iris-gateway/config"
+	"iris-gateway/events"
 )
 
+// ... (Message and ChannelState structs remain the same) ...
 type Message struct {
 	From    string    `json:"from"`
 	Content string    `json:"content"`
@@ -20,16 +22,14 @@ type Message struct {
 }
 
 type ChannelState struct {
-	Name        string    `json:"name"` // Stores the normalized (lowercased) channel name
-	Members     []string  `json:"members"`
-	Messages    []Message `json:"messages"`
-	LastUpdate  time.Time `json:"last_update"`
-	Topic       string    `json:"topic"`
-	msgMutex    sync.Mutex // Mutex to protect Messages and Members slices
+	Name       string    `json:"name"`
+	Members    []string  `json:"members"`
+	Messages   []Message `json:"messages"`
+	LastUpdate time.Time `json:"last_update"`
+	Topic      string    `json:"topic"`
+	msgMutex   sync.Mutex
 }
 
-// AddMessage appends a new message to the channel's history,
-// ensuring the history does not exceed the configured limit.
 func (cs *ChannelState) AddMessage(msg Message) {
 	cs.msgMutex.Lock()
 	defer cs.msgMutex.Unlock()
@@ -39,28 +39,38 @@ func (cs *ChannelState) AddMessage(msg Message) {
 		cs.Messages = cs.Messages[len(cs.Messages)-config.Cfg.MaxHistoryLines:]
 	}
 	cs.LastUpdate = time.Now()
-	// New debug log
 	log.Printf("[ChannelState.AddMessage] Added msg for '%s' (ptr: %p). Current messages count: %d. Last msg: '%s'",
 		cs.Name, cs, len(cs.Messages), msg.Content)
 }
 
-// GetMessages returns a copy of the channel's message history.
 func (cs *ChannelState) GetMessages() []Message {
-    cs.msgMutex.Lock()
-    defer cs.msgMutex.Unlock()
-    return cs.Messages // Return copy if needed for thread safety
+	cs.msgMutex.Lock()
+	defer cs.msgMutex.Unlock()
+	messagesCopy := make([]Message, len(cs.Messages))
+	copy(messagesCopy, cs.Messages)
+	return messagesCopy
 }
+
 
 type UserSession struct {
 	Token      string
 	Username   string
+	FCMToken   string // <-- New field for FCM token
 	IRC        *ircevent.Connection
-	Channels   map[string]*ChannelState // Map key is always the lowercased channel name
+	Channels   map[string]*ChannelState
 	WebSockets []*websocket.Conn
-	wsMutex    sync.Mutex   // Mutex to protect WebSocket writes for this session
-	Mutex      sync.RWMutex // Protects access to WebSockets slice and Channels map
+	wsMutex    sync.Mutex
+	Mutex      sync.RWMutex
 }
 
+// IsActive checks if the user has any active WebSocket connections.
+func (s *UserSession) IsActive() bool {
+	s.Mutex.RLock()
+	defer s.Mutex.RUnlock()
+	return len(s.WebSockets) > 0
+}
+
+// ... (rest of the session.go file remains the same, but for completeness, it's included below)
 // AddChannelToSession adds or updates a channel's state in the user's session.
 // Channel names are normalized to lowercase before being stored as keys.
 func (s *UserSession) AddChannelToSession(channelName string) {
@@ -70,10 +80,10 @@ func (s *UserSession) AddChannelToSession(channelName string) {
 
 	if _, ok := s.Channels[normalizedChannelName]; !ok {
 		cs := &ChannelState{ // Create a new ChannelState pointer
-			Name:        normalizedChannelName, // Store normalized name in the struct
-			Members:     []string{},
-			Messages:    []Message{},
-			LastUpdate:  time.Now(),
+			Name:       normalizedChannelName, // Store normalized name in the struct
+			Members:    []string{},
+			Messages:   []Message{},
+			LastUpdate: time.Now(),
 		}
 		s.Channels[normalizedChannelName] = cs // Assign the new pointer to the map
 		// New debug log
@@ -107,45 +117,45 @@ func (s *UserSession) RemoveChannelFromSession(channelName string) {
 // UpdateChannelMembers updates the list of members for a given channel.
 // Channel names are normalized to lowercase for lookup.
 func (s *UserSession) UpdateChannelMembers(channelName string, members []string) {
-    normalizedChannelName := strings.ToLower(channelName) // Normalize to lowercase
-    s.Mutex.Lock()
-    defer s.Mutex.Unlock()
+	normalizedChannelName := strings.ToLower(channelName) // Normalize to lowercase
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
 
-    if ch, ok := s.Channels[normalizedChannelName]; ok {
-        ch.msgMutex.Lock() // Protect channel-specific data (Members)
-        ch.Members = members
-        ch.msgMutex.Unlock() // Release the channel's mutex
-        // New debug log
-        log.Printf("[Session.UpdateChannelMembers] Channel '%s' (ptr: %p) members updated. Count: %d", normalizedChannelName, ch, len(members))
-    } else {
-        log.Printf("[Session.UpdateChannelMembers] Attempted to update members for non-existent channel '%s'", normalizedChannelName)
-    }
+	if ch, ok := s.Channels[normalizedChannelName]; ok {
+		ch.msgMutex.Lock() // Protect channel-specific data (Members)
+		ch.Members = members
+		ch.msgMutex.Unlock() // Release the channel's mutex
+		// New debug log
+		log.Printf("[Session.UpdateChannelMembers] Channel '%s' (ptr: %p) members updated. Count: %d", normalizedChannelName, ch, len(members))
+	} else {
+		log.Printf("[Session.UpdateChannelMembers] Attempted to update members for non-existent channel '%s'", normalizedChannelName)
+	}
 }
 
 // AddMessageToChannel adds a message to the specified channel's history in the session.
 // Channel names are normalized to lowercase for lookup.
 func (s *UserSession) AddMessageToChannel(channelName, sender, messageContent string) {
-    normalizedChannelName := strings.ToLower(channelName) // Normalize to lowercase
-    s.Mutex.RLock() // Use RLock for reading the Channels map
-    channelState, exists := s.Channels[normalizedChannelName]
-    s.Mutex.RUnlock()
+	normalizedChannelName := strings.ToLower(channelName) // Normalize to lowercase
+	s.Mutex.RLock() // Use RLock for reading the Channels map
+	channelState, exists := s.Channels[normalizedChannelName]
+	s.Mutex.RUnlock()
 
-    if exists {
-        channelState.AddMessage(Message{
-            From:    sender,
-            Content: messageContent,
-            Time:    time.Now(),
-        })
-        // AddMessage already logs the details, no need for redundant log here unless different info needed
-    } else {
-        log.Printf("[Session.AddMessageToChannel] Attempted to add message to non-existent channel '%s' (normalized). Message: '%s'", normalizedChannelName, messageContent)
-    }
+	if exists {
+		channelState.AddMessage(Message{
+			From:    sender,
+			Content: messageContent,
+			Time:    time.Now(),
+		})
+		// AddMessage already logs the details, no need for redundant log here unless different info needed
+	} else {
+		log.Printf("[Session.AddMessageToChannel] Attempted to add message to non-existent channel '%s' (normalized). Message: '%s'", normalizedChannelName, messageContent)
+	}
 }
 
 
 var (
 	sessionMap = make(map[string]*UserSession)
-	mutex      sync.RWMutex // Protects access to sessionMap
+	mutex      = sync.RWMutex{} // Protects access to sessionMap
 )
 
 // AddSession adds a new user session to the map and registers its broadcaster function.
@@ -230,9 +240,6 @@ func (s *UserSession) Broadcast(eventType string, payload any) {
 		log.Printf("[Session.Broadcast] Error marshalling event '%s': %v", eventType, err)
 		return
 	}
-
-	// New debug log: Uncomment this if you need to see every broadcast, but it can be noisy.
-	// log.Printf("[Session.Broadcast] Broadcasting '%s' to %d WebSockets for user '%s' (session_ptr: %p)", eventType, len(s.WebSockets), s.Username, s)
 
 	for _, ws := range s.WebSockets {
 		s.wsMutex.Lock()

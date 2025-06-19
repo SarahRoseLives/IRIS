@@ -1,4 +1,5 @@
 // lib/viewmodels/main_layout_viewmodel.dart
+
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert'; // Import for jsonEncode
@@ -6,10 +7,12 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
 import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // Import this
 import 'package:collection/collection.dart'; // For more flexible list operations like findIndex
+import 'package:iris/services/notification_service.dart';
+import 'package:get_it/get_it.dart';
 
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
-import '../main.dart'; // Import AuthWrapper and the global flutterLocalNotificationsPlugin
+import '../main.dart'; // Import AuthWrapper and the service locator
 import '../config.dart'; // Import config for apiHost and apiPort
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { // Add WidgetsBindingObserver
@@ -86,8 +89,21 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
       _fetchChannels();
       _connectWebSocket();
       _loadAvatarForUser(username);
+      _initNotifications(); // <-- ADDED THIS CALL TO INITIALIZE NOTIFICATIONS
     } else {
       _handleLogout();
+    }
+  }
+
+  // ** NEW METHOD TO INITIALIZE NOTIFICATIONS AND REGISTER TOKEN **
+  Future<void> _initNotifications() async {
+    // Use the GetIt service locator to get the singleton instance of NotificationService
+    final notificationService = GetIt.instance<NotificationService>();
+    final fcmToken = await notificationService.getFCMToken();
+
+    if (fcmToken != null) {
+      // Use the existing ApiService instance to register the token
+      await _apiService.registerFCMToken(fcmToken);
     }
   }
 
@@ -132,8 +148,21 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
     _webSocketService.messageStream.listen((message) {
       print("[MainLayoutViewModel] Received message from WebSocketService stream: ${message['text']}");
 
-      final String channelName = (message['channel_name'] ?? '').toLowerCase();
+      // Handle private messages by creating a channel name with the sender
+      String channelName = (message['channel_name'] ?? '').toLowerCase();
       final String sender = message['sender'] ?? 'Unknown';
+
+      // If the channel name doesn't start with '#', it's a PM.
+      // The channel for a PM should be identified by the sender's name.
+      if (!channelName.startsWith('#')) {
+        channelName = '@$sender';
+        // Ensure the PM channel exists in the UI list
+        if (!_channels.contains(channelName)) {
+            _channels.add(channelName);
+            _channels.sort(); // Keep the list sorted
+        }
+      }
+
       final String content = message['text'] ?? '';
       final String? messageTime = message['time'];
       final int messageId = message['message_id'] ?? DateTime.now().millisecondsSinceEpoch; // Use a message ID if available, otherwise timestamp
@@ -147,27 +176,15 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
       _loadAvatarForUser(sender);
 
       // Determine if a notification should be shown
-      final bool isCurrentChannel = channelName == _channels[_selectedChannelIndex].toLowerCase();
-      final bool isMention = content.toLowerCase().contains(username.toLowerCase()); // Check for username mention
+      String currentChannelName = _channels.isNotEmpty ? _channels[_selectedChannelIndex].toLowerCase() : '';
+      final bool isCurrentChannel = channelName == currentChannelName;
+      final bool isMention = content.toLowerCase().contains(username.toLowerCase());
 
-      // Logic for showing notification:
-      // NOT during initial history load
-      // AND (
-      //   (NOT current channel) OR (current channel AND app NOT focused AND isMention)
-      // )
       if (!_isInitialHistoryLoad) {
-        if (!isCurrentChannel) {
-          // If message is for a different channel, always notify (unless initial load)
-          _showNotification(
-            title: '$sender in $channelName',
-            body: content,
-            channel: channelName,
-            messageId: messageId.toString(),
-          );
-        } else if (isCurrentChannel && !_isAppFocused && isMention) {
-          // If message is for the current channel, AND app is NOT focused, AND it's a mention
-          _showNotification(
-            title: '$sender mentioned you in $channelName', // More specific title for mentions
+        // Only show notifications if the app is not focused or the message is not for the current channel.
+        if (!isCurrentChannel || !_isAppFocused) {
+           _showNotification(
+            title: sender,
             body: content,
             channel: channelName,
             messageId: messageId.toString(),
@@ -203,13 +220,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
   }
 
   void onChannelSelected(int index) {
+    if (index >= _channels.length) return; // Bounds check
     _selectedChannelIndex = index;
     _showLeftDrawer = false; // Close drawer on selection
     _finalizeAllCodeBlocks();
     final selectedChannelName = _channels[index];
-    // Always fetch messages when a channel is selected, unless it's already loading or has messages.
-    // The previous condition `_channelMessages[selectedChannelName]!.isEmpty` was for *initial* load.
-    // Here we ensure a fetch happens when a user clicks a channel.
     if (_channelMessages[selectedChannelName] == null || _channelMessages[selectedChannelName]!.isEmpty ||
         (_channelMessages[selectedChannelName]!.length == 1 && _channelMessages[selectedChannelName]![0]['content'] == 'Loading messages...')) {
         _fetchChannelMessages(selectedChannelName);
@@ -274,13 +289,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
       for (var channelName in _channels) {
         _channelMessages.putIfAbsent(channelName, () => []);
       }
-      // --- CRUCIAL FIX: Explicitly fetch messages for the currently selected channel ---
       if (_channels.isNotEmpty) {
           final selectedChannelName = _channels[_selectedChannelIndex];
           print("[_fetchChannels] Calling _fetchChannelMessages for $selectedChannelName (after channels update)");
-          await _fetchChannelMessages(selectedChannelName, isInitialLoad: true); // Mark as initial load
+          await _fetchChannelMessages(selectedChannelName, isInitialLoad: true);
       }
-      // --- END CRUCIAL FIX ---
     } catch (e) {
       _channelError = e.toString().replaceFirst('Exception: ', '');
       print("Error fetching channels: $_channelError");
@@ -292,32 +305,30 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
 
   Future<void> _fetchChannelMessages(String channelName, {bool isInitialLoad = false}) async {
     if (channelName.isEmpty) return;
+    if (channelName.startsWith('@')) return; // Don't fetch history for PMs yet
 
-    // Set the flag for initial history load
     if (isInitialLoad) {
       _isInitialHistoryLoad = true;
-      _initialLoadTimer?.cancel(); // Cancel any previous timer
+      _initialLoadTimer?.cancel();
       _initialLoadTimer = Timer(const Duration(seconds: 2), () {
         _isInitialHistoryLoad = false;
         print("Initial history load flag reset.");
       });
     }
 
-    // Show loading state initially
     _channelMessages[channelName] = [{'from': 'System', 'content': 'Loading messages...', 'time': DateTime.now().toIso8601String()}];
     notifyListeners();
 
     try {
       final fetchedMessages = await _apiService.fetchChannelMessages(channelName);
-      _channelMessages[channelName]!.clear(); // Clear loading message
+      _channelMessages[channelName]!.clear();
       for (var msg in fetchedMessages) {
         final sender = msg['from'] ?? 'Unknown';
-        // Add fetched messages directly, they are already "finalized"
-        _addMessageToDisplay(msg['channel_name'] ?? channelName, { // Use message's channel_name, which will be normalized by _addMessageToDisplay
+        _addMessageToDisplay(channelName, {
           'from': sender,
           'content': msg['content'] ?? '',
           'time': msg['time'] ?? DateTime.now().toIso8601String(),
-          'id': msg['id'] ?? DateTime.now().millisecondsSinceEpoch, // Ensure messages from history have an ID
+          'id': msg['id'] ?? DateTime.now().millisecondsSinceEpoch,
         });
         _loadAvatarForUser(sender);
       }
@@ -340,7 +351,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
       'from': 'IRIS Bot',
       'content': message,
       'time': DateTime.now().toIso8601String(),
-      'id': DateTime.now().millisecondsSinceEpoch, // Give info messages an ID too
+      'id': DateTime.now().millisecondsSinceEpoch,
     });
     _scrollToBottom();
     notifyListeners();
@@ -348,10 +359,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
 
   Future<void> handleSendMessage() async {
     final text = _msgController.text.trim();
-    if (text.isEmpty || _token == null) {
-      return;
-    }
-
+    if (text.isEmpty || _token == null) return;
     _msgController.clear();
 
     if (text.startsWith('/')) {
@@ -365,103 +373,56 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
     }
 
     final currentChannel = _channels[_selectedChannelIndex];
-    // Add the message to local display immediately
+
+    // For PMs, the WebSocket expects the recipient's name as the channel
+    String targetChannel = currentChannel.startsWith('@')
+        ? currentChannel.substring(1)
+        : currentChannel;
+
     _addMessageToDisplay(currentChannel, {
       'from': username,
       'content': text,
       'time': DateTime.now().toIso8601String(),
-      'id': DateTime.now().millisecondsSinceEpoch, // Assign an ID to sent messages
+      'id': DateTime.now().millisecondsSinceEpoch,
     });
     _loadAvatarForUser(username);
     _scrollToBottom();
     notifyListeners();
 
     try {
-      _webSocketService.sendMessage(currentChannel, text);
+      _webSocketService.sendMessage(targetChannel, text);
     } catch (e) {
       _addInfoMessageToCurrentChannel('Failed to send message: ${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 
-  // New method to handle notification tap and navigate
   void handleNotificationTap(String channelName, String messageId) {
     final normalizedChannelName = channelName.toLowerCase();
-    print("Notification tapped: Navigating to channel $normalizedChannelName, message ID: $messageId");
+    print("Notification tapped: Navigating to channel $normalizedChannelName");
+
+    // Ensure the PM channel exists if it doesn't already
+    if (normalizedChannelName.startsWith('@') && !_channels.contains(normalizedChannelName)) {
+      _channels.add(normalizedChannelName);
+      _channels.sort();
+    }
 
     final int targetIndex = _channels.indexWhere((c) => c.toLowerCase() == normalizedChannelName);
 
     if (targetIndex != -1) {
-      // If the channel is already loaded and selected, just scroll
-      if (_selectedChannelIndex == targetIndex) {
-        _scrollToMessage(messageId);
-      } else {
-        // Switch to the channel
-        _selectedChannelIndex = targetIndex;
-        _showLeftDrawer = false; // Close drawer if it was open
-        notifyListeners(); // Notify to rebuild the UI with the new channel selected
-        // After UI rebuilds, scroll to the message
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          _scrollToMessage(messageId);
-        });
-      }
-    } else {
-      // If the channel is not in the current list, try to join it first
-      _addInfoMessageToCurrentChannel('Attempting to join channel $channelName from notification.');
-      _apiService.joinChannel(channelName).then((_) {
-        _fetchChannels().then((_) {
-          // After joining and fetching channels, try to select and scroll again
-          final newTargetIndex = _channels.indexWhere((c) => c.toLowerCase() == normalizedChannelName);
-          if (newTargetIndex != -1) {
-            _selectedChannelIndex = newTargetIndex;
-            notifyListeners();
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              _scrollToMessage(messageId);
-            });
-          } else {
-            _addInfoMessageToCurrentChannel('Failed to join or find channel $channelName.');
-          }
-        });
-      }).catchError((e) {
-        _addInfoMessageToCurrentChannel('Failed to join channel $channelName: ${e.toString().replaceFirst('Exception: ', '')}');
+      _selectedChannelIndex = targetIndex;
+      _showLeftDrawer = false;
+      notifyListeners();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+         _scrollToMessage(messageId);
       });
     }
   }
 
   void _scrollToMessage(String messageId) {
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!_scrollController.hasClients) {
-        print("Scroll controller has no clients to scroll to message.");
-        return;
-      }
-
-      final currentChannelMessages = _channelMessages[_channels[_selectedChannelIndex]];
-      if (currentChannelMessages == null || currentChannelMessages.isEmpty) {
-        print("No messages in current channel to scroll to message ID: $messageId");
-        return;
-      }
-
-      // Find the index of the message with the given ID
-      final int messageIndex = currentChannelMessages.indexWhere((msg) => msg['id']?.toString() == messageId);
-
-      if (messageIndex != -1) {
-        // Calculate the offset to scroll to
-        // Assuming each message item has a roughly consistent height
-        // You might need to adjust this calculation based on your MessageList item layout
-        const double estimatedMessageHeight = 70.0; // Estimate average message item height
-        final double offset = messageIndex * estimatedMessageHeight;
-
-        _scrollController.animateTo(
-          offset,
-          duration: const Duration(milliseconds: 500),
-          curve: Curves.easeOut,
-        ).then((_) {
-          print("Scrolled to message ID: $messageId at index $messageIndex");
-          // Optionally, you can add a temporary highlight to the message here
-        });
-      } else {
-        print("Message with ID $messageId not found in current channel.");
-      }
-    });
+    // This is a basic implementation. A more robust solution might involve
+    // item keys in the MessageList for precise scrolling. For now, we'll
+    // just ensure the bottom is visible.
+    _scrollToBottom();
   }
 
 
@@ -477,17 +438,19 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
     });
   }
 
-  // New method to show local notifications
   Future<void> _showNotification({
     required String title,
     required String body,
     required String channel,
     required String messageId,
   }) async {
+    // Use the GetIt service locator to get the plugin instance
+    final flutterLocalNotificationsPlugin = GetIt.instance<FlutterLocalNotificationsPlugin>();
+
     const AndroidNotificationDetails androidPlatformChannelSpecifics =
         AndroidNotificationDetails(
-      'iris_channel', // Channel ID
-      'IRIS Messages', // Channel Name
+      'iris_channel_id', // MUST MATCH the ID in AndroidManifest.xml
+      'IRIS Messages',
       channelDescription: 'Notifications for new IRIS chat messages',
       importance: Importance.max,
       priority: Priority.high,
@@ -506,14 +469,14 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
       iOS: darwinPlatformChannelSpecifics,
     );
 
-    // Payload to pass channel and message ID when notification is tapped
     final String payload = jsonEncode({
-      'channel': channel,
-      'messageId': messageId,
+      'channel_name': channel, // Use the key your background handler expects
+      'sender': title,
+      'type': channel.startsWith('@') ? 'private_message' : 'channel_message'
     });
 
     await flutterLocalNotificationsPlugin.show(
-      0, // Notification ID (can be unique per message if needed, or constant for chat)
+      DateTime.now().millisecondsSinceEpoch.remainder(100000), // Unique ID
       title,
       body,
       platformChannelSpecifics,
@@ -521,7 +484,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
     );
   }
 
-  // Code block helper functions (kept commented out for now)
   void _startCodeBlockTimer(String channelName, String sender, String? time) {
     _codeBlockTimers[channelName]?.cancel();
     _codeBlockTimers[channelName] = Timer(_codeBlockTimeout, () {
@@ -541,7 +503,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
         'from': sender ?? _codeBlockSenders[channelName] ?? 'Unknown',
         'content': fullContent,
         'time': time ?? DateTime.now().toIso8601String(),
-        'id': DateTime.now().millisecondsSinceEpoch, // Add ID for code blocks too
+        'id': DateTime.now().millisecondsSinceEpoch,
       });
 
       _codeBlockBuffers.remove(channelName);
@@ -563,11 +525,15 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
   }
 
   void _addMessageToDisplay(String channelName, Map<String, dynamic> newMessage) {
-    _channelMessages.putIfAbsent(channelName, () => []);
-    _channelMessages[channelName]!.add(newMessage);
-    _scrollToBottom();
-  }
+    final normalizedChannel = channelName.toLowerCase();
+    _channelMessages.putIfAbsent(normalizedChannel, () => []);
 
+    // To prevent duplicates, check if a message with the same ID already exists
+    if (_channelMessages[normalizedChannel]!.every((m) => m['id'] != newMessage['id'])) {
+      _channelMessages[normalizedChannel]!.add(newMessage);
+      _scrollToBottom();
+    }
+  }
 
   Future<void> _handleCommand(String commandText) async {
     final parts = commandText.substring(1).split(' ');
@@ -581,8 +547,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
     try {
       switch (command) {
         case 'join':
-          if (args.isEmpty) {
-            _addInfoMessageToCurrentChannel('Usage: /join <channel_name>');
+          if (args.isEmpty || !args.startsWith('#')) {
+            _addInfoMessageToCurrentChannel('Usage: /join <#channel_name>');
           } else {
             if (_channels.any((c) => c.toLowerCase() == args.toLowerCase())) {
               _addInfoMessageToCurrentChannel('Already in channel: $args');
@@ -590,14 +556,14 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
               _scrollToBottom();
             } else {
               await _apiService.joinChannel(args);
-              _fetchChannels(); // This will trigger _fetchChannelMessages for the newly joined channel
+              _fetchChannels();
             }
           }
           break;
         case 'part':
           String channelToPart = args.isNotEmpty ? args : currentChannelName;
           if (channelToPart.isEmpty) {
-            _addInfoMessageToCurrentChannel('No channel specified to part from. Usage: /part <channel_name> or /part in a channel.');
+            _addInfoMessageToCurrentChannel('Usage: /part <#channel_name>');
           } else if (!_channels.any((c) => c.toLowerCase() == channelToPart.toLowerCase())) {
             _addInfoMessageToCurrentChannel('Not currently in channel: $channelToPart');
           } else {
@@ -607,28 +573,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
               _selectedChannelIndex = 0;
               if (_channels.isNotEmpty) {
                 _fetchChannelMessages(_channels[_selectedChannelIndex]);
-              } else {
-                _addMessageToDisplay('#general', {'from': 'System', 'content': 'No channels available. Join one!', 'time': DateTime.now().toIso8601String(), 'id': DateTime.now().millisecondsSinceEpoch});
-                _channels.add('#general');
-                _selectedChannelIndex = _channels.indexOf('#general');
               }
             }
-          }
-          break;
-        case 'nick':
-          _addInfoMessageToCurrentChannel('The /nick command is not yet implemented in this client.');
-          break;
-        case 'me':
-          if (args.isEmpty) {
-            _addInfoMessageToCurrentChannel('Usage: /me <action_text>');
-          } else {
-            _webSocketService.sendMessage(currentChannelName, '/me $args');
-            _addMessageToDisplay(currentChannelName, {
-              'from': username,
-              'content': '* $username $args',
-              'time': DateTime.now().toIso8601String(),
-              'id': DateTime.now().millisecondsSinceEpoch,
-            });
           }
           break;
         case 'query':
@@ -643,33 +589,30 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver { /
           }
           final targetUser = qParts[0];
           final privateMessage = qParts.skip(1).join(' ').trim();
-
           final dmChannelName = '@$targetUser';
 
-          _webSocketService.sendMessage(dmChannelName, privateMessage);
+          _webSocketService.sendMessage(targetUser, privateMessage);
 
-          _channelMessages.putIfAbsent(dmChannelName, () => []);
+          if (!_channels.contains(dmChannelName)) {
+            _channels.add(dmChannelName);
+            _channels.sort();
+          }
+          _selectedChannelIndex = _channels.indexOf(dmChannelName);
           _addMessageToDisplay(dmChannelName, {
             'from': username,
             'content': privateMessage,
             'time': DateTime.now().toIso8601String(),
             'id': DateTime.now().millisecondsSinceEpoch,
           });
-          if (!_channels.contains(dmChannelName)) {
-            _channels.add(dmChannelName);
-            _channels.sort();
-          }
-          _selectedChannelIndex = _channels.indexOf(dmChannelName);
           _scrollToBottom();
           break;
         case 'help':
           final helpMessage = """
 Available IRC-like commands:
-  /join <channel>         - Join a channel (e.g., /join #general)
-  /part [channel]         - Leave the current channel or specified channel
-  /me <action_text>       - Perform an action (e.g., /me is happy)
-  /query <user> <msg>     - Send a private message to a user
-  /help                   - Show this help message
+  /join <#channel>       - Join a channel
+  /part [#channel]      - Leave a channel
+  /query <user> <msg>   - Send a private message
+  /help                 - Show this help message
 """;
           _addInfoMessageToCurrentChannel(helpMessage);
           break;
@@ -687,7 +630,6 @@ Available IRC-like commands:
 
   @override
   void dispose() {
-    // Remove this ViewModel as a WidgetsBindingObserver
     WidgetsBinding.instance.removeObserver(this);
     _msgController.dispose();
     _scrollController.dispose();

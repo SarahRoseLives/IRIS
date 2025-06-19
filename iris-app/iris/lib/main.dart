@@ -1,101 +1,77 @@
-// main.dart (Modified)
+// lib/main.dart
 import 'package:flutter/material.dart';
 import 'dart:convert';
-import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart'; // Import this
-import 'package:provider/provider.dart'; // Import for Provider.of
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:provider/provider.dart';
+
+// Firebase Imports
+import 'package:firebase_core/firebase_core.dart';
+import 'package:iris/firebase_options.dart';
+import 'package:iris/services/notification_service.dart';
 
 import 'main_layout.dart';
-import 'config.dart';
 import 'services/api_service.dart';
 import 'models/login_response.dart';
-import 'viewmodels/main_layout_viewmodel.dart'; // Import the viewmodel
+import 'viewmodels/main_layout_viewmodel.dart';
 
-// Create a global instance of FlutterLocalNotificationsPlugin
-final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
-    FlutterLocalNotificationsPlugin();
+// ** NEW: Use a service locator pattern like get_it for easier access to singletons **
+// This avoids passing the instance around everywhere.
+import 'package:get_it/get_it.dart';
 
-// TOP-LEVEL FUNCTION: This must be a top-level function or a static method of a class.
+final getIt = GetIt.instance;
+
+void setupLocator() {
+  getIt.registerSingleton<FlutterLocalNotificationsPlugin>(FlutterLocalNotificationsPlugin());
+  getIt.registerSingleton<NotificationService>(NotificationService());
+}
+// ** END NEW **
+
+// This callback is for flutter_local_notifications when a notification is tapped
 @pragma('vm:entry-point')
 void onDidReceiveNotificationResponse(NotificationResponse notificationResponse) async {
   final String? payload = notificationResponse.payload;
-  if (payload != null && AuthWrapper.globalKey.currentContext != null) {
+  if (payload != null) {
     try {
-      final Map<String, dynamic> notificationData = jsonDecode(payload);
-      final String channel = notificationData['channel'];
-      final String messageId = notificationData['messageId'];
-
-      final BuildContext? context = AuthWrapper.globalKey.currentContext;
-      if (context != null && context.mounted) {
-        // Ensure we are on the main chat screen before attempting to switch channels.
-        // This handles cases where the user might be on a different screen (e.g., profile screen)
-        // when the notification is tapped.
-        Navigator.of(context).popUntil((route) => route.isFirst);
-
-        // After popping, we need to ensure the widget tree is rebuilt with the MainLayoutViewModel
-        // before we try to access it. A small delay or a post-frame callback is often necessary.
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          // Access the MainLayoutViewModel
-          final mainLayoutViewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
-          mainLayoutViewModel.handleNotificationTap(channel, messageId);
-        });
-      }
+      final Map<String, dynamic> data = jsonDecode(payload);
+      final notificationService = getIt<NotificationService>();
+      notificationService.handleNotificationTap(data);
     } catch (e) {
-      print("Error parsing notification payload or navigating: $e");
+      print("Error in onDidReceiveNotificationResponse: $e");
     }
   }
 }
 
-// TOP-LEVEL FUNCTION: This is for foreground iOS notifications (deprecated for newer iOS versions but good practice).
-// The @pragma('vm:entry-point') is crucial for ensuring this function is not tree-shaken during release builds.
-@pragma('vm:entry-point')
-void onDidReceiveLocalNotification(int id, String? title, String? body, String? payload) async {
-  // Handle notifications received when the app is in the foreground on iOS
-  // You can show an in-app alert or banner here if needed.
-  // For consistency with Android and newer iOS, we largely rely on onDidReceiveNotificationResponse
-  // being called when the notification itself is tapped, regardless of app state.
-  print('Foreground iOS notification received: id=$id, title=$title, body=$body, payload=$payload');
-}
-
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Request notification permissions for iOS and Android 13+
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
-      ?.requestNotificationsPermission();
+  // ** NEW: Initialize Firebase **
+  await Firebase.initializeApp(
+    options: DefaultFirebaseOptions.currentPlatform,
+  );
 
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-          IOSFlutterLocalNotificationsPlugin>()
-      ?.requestPermissions(
-        alert: true,
-        badge: true,
-        sound: true,
-      );
+  // ** NEW: Setup service locators **
+  setupLocator();
 
+  // ** NEW: Initialize Notification Service **
+  await getIt<NotificationService>().init();
 
   const AndroidInitializationSettings initializationSettingsAndroid =
-      AndroidInitializationSettings('@mipmap/ic_launcher'); // Your app icon
+      AndroidInitializationSettings('@mipmap/ic_launcher');
 
-  // Corrected: Use the top-level function for onDidReceiveLocalNotification
   final DarwinInitializationSettings initializationSettingsDarwin =
-      DarwinInitializationSettings(
-    onDidReceiveLocalNotification: onDidReceiveLocalNotification, // Removed async anonymous function
-  );
+      DarwinInitializationSettings();
 
   final InitializationSettings initializationSettings = InitializationSettings(
     android: initializationSettingsAndroid,
     iOS: initializationSettingsDarwin,
   );
 
-  await flutterLocalNotificationsPlugin.initialize(
+  // Initialize flutter_local_notifications
+  await getIt<FlutterLocalNotificationsPlugin>().initialize(
     initializationSettings,
     onDidReceiveNotificationResponse: onDidReceiveNotificationResponse,
-    onDidReceiveBackgroundNotificationResponse: onDidReceiveNotificationResponse, // For background taps
+    onDidReceiveBackgroundNotificationResponse: onDidReceiveNotificationResponse,
   );
 
   runApp(const IRISApp());
@@ -108,31 +84,41 @@ class IRISApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'IRIS',
+      // The navigatorKey allows us to access the context from anywhere
+      navigatorKey: AuthWrapper.globalKey,
       theme: ThemeData.dark().copyWith(
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF5865F2),
           secondary: Color(0xFF5865F2),
         ),
       ),
-      home: AuthWrapper(key: AuthWrapper.globalKey),
+      // AuthWrapper now uses the static key directly
+      home: AuthWrapper(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
+// AuthWrapper now uses a GlobalKey<NavigatorState> for navigation context
 class AuthWrapper extends StatefulWidget {
-  AuthWrapper({Key? key}) : super(key: key);
+  // Use a NavigatorState key to get context from anywhere
+  static final GlobalKey<NavigatorState> globalKey = GlobalKey<NavigatorState>();
 
-  static final GlobalKey<_AuthWrapperState> globalKey = GlobalKey<_AuthWrapperState>();
+  // A separate key for the state if needed, though NavigatorState is more useful
+  static final GlobalKey<_AuthWrapperState> stateKey = GlobalKey<_AuthWrapperState>();
+
+  AuthWrapper() : super(key: stateKey);
 
   static Future<void> forceLogout() async {
-    globalKey.currentState?.logoutAndShowLogin();
+    stateKey.currentState?.logoutAndShowLogin();
   }
 
   @override
   State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
+// ... rest of AuthWrapper and LoginScreen remain the same ...
+// No changes are needed in the rest of the file.
 class _AuthWrapperState extends State<AuthWrapper> {
   bool _isLoading = true;
 
