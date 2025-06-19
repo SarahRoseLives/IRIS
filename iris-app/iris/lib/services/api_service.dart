@@ -1,17 +1,21 @@
 // lib/services/api_service.dart
 import 'dart:convert';
-import 'dart:io'; // Import for File class
+import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'package:http_parser/http_parser.dart'; // Import for MediaType
-import '../config.dart'; // For base URL
-import '../models/login_response.dart'; // Import the new LoginResponse model
+import 'package:http_parser/http_parser.dart';
+import '../config.dart';
+import '../models/login_response.dart';
+import '../models/channel.dart';
 
 class ApiService {
   String? _token;
 
   ApiService([this._token]);
 
-  // This method should not require a token as it's for initial login
+  void setToken(String token) {
+    _token = token;
+  }
+
   Future<LoginResponse> login(String username, String password) async {
     final url = Uri.parse('$baseUrl/login');
     print("[ApiService] login: Calling POST $url");
@@ -31,8 +35,6 @@ class ApiService {
     }
   }
 
-  // ============== FIX STARTS HERE ==============
-  // Helper to ensure token is present for authenticated calls
   String _getToken() {
     if (_token == null) {
       throw Exception("Authentication token is not set for ApiService.");
@@ -40,7 +42,6 @@ class ApiService {
     return _token!;
   }
 
-  // New method to register the FCM token
   Future<void> registerFCMToken(String fcmToken) async {
     final url = Uri.parse('$baseUrl/register-fcm-token');
     print("[ApiService] registerFCMToken: Calling POST $url");
@@ -49,7 +50,7 @@ class ApiService {
         url,
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${_getToken()}', // Uses the helper
+          'Authorization': 'Bearer ${_getToken()}',
         },
         body: json.encode({'fcm_token': fcmToken}),
       );
@@ -62,10 +63,8 @@ class ApiService {
       print("[ApiService] registerFCMToken Error: $e");
     }
   }
-  // ============== FIX ENDS HERE ==============
 
-  /// Fetches the list of channels from the API.
-  Future<List<String>> fetchChannels() async {
+  Future<List<Channel>> fetchChannels() async {
     final url = Uri.parse('$baseUrl/channels');
     print("[ApiService] fetchChannels: Calling GET $url with token: $_token");
     try {
@@ -78,7 +77,7 @@ class ApiService {
       final data = jsonDecode(response.body);
       if (response.statusCode == 200 && data['success'] == true) {
         final List<dynamic> apiChannels = data['channels'] ?? [];
-        return apiChannels.map((c) => c['name'].toString()).toList();
+        return apiChannels.map((c) => Channel.fromJson(c)).toList();
       } else {
         throw Exception(data['message'] ?? "Failed to load channels");
       }
@@ -88,7 +87,6 @@ class ApiService {
     }
   }
 
-  /// Fetches messages for a specific channel from the API.
   Future<List<Map<String, dynamic>>> fetchChannelMessages(String channelName) async {
     print("[ApiService] fetchChannelMessages: Attempting to fetch messages for $channelName");
     if (channelName.isEmpty) {
@@ -107,7 +105,6 @@ class ApiService {
         headers: {'Authorization': 'Bearer $token'},
       );
       print("[ApiService] fetchChannelMessages: Received status code ${response.statusCode} for $channelName");
-      print("[ApiService] fetchChannelMessages: Raw response body: ${response.body}");
 
       final data = jsonDecode(response.body);
 
@@ -169,7 +166,6 @@ class ApiService {
     }
   }
 
-  // New method to upload avatar
   Future<Map<String, dynamic>> uploadAvatar(File imageFile, String token) async {
     final uri = Uri.parse('$baseUrl/upload-avatar');
     print("[ApiService] uploadAvatar: Calling POST $uri for avatar upload.");

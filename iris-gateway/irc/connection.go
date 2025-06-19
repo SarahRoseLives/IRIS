@@ -12,23 +12,22 @@ import (
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
 	"iris-gateway/events"
-	"iris-gateway/push" // <-- Import the push package
-	"iris-gateway/session" // <-- Import session to find user by name
+	"iris-gateway/push"
+	"iris-gateway/session"
 )
 
-// ... (IRCClient and ChannelStateUpdater remain the same) ...
 type IRCClient = ircevent.Connection
 
+// MODIFIED: ChannelStateUpdater interface to handle member list accumulation.
 type ChannelStateUpdater interface {
 	AddChannelToSession(channelName string)
 	RemoveChannelFromSession(channelName string)
-	UpdateChannelMembers(channelName string, members []string)
 	AddMessageToChannel(channelName, sender, messageContent string)
+	AccumulateChannelMembers(channelName string, members []string) // NEW
+	FinalizeChannelMembers(channelName string)                     // NEW
 }
 
-// ... (AuthenticateWithNickServ function signature remains the same) ...
 func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdater ChannelStateUpdater) (*IRCClient, error) {
-    // ... (no changes to the connection logic) ...
 	ircServerAddr := config.Cfg.IRCServer
 	conn, err := net.DialTimeout("tcp", ircServerAddr, 10*time.Second)
 	if err != nil {
@@ -88,14 +87,14 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 				log.Printf("[IRC Proxy] Error copying data from IRC client to IRC server: %v", err)
 			}
 			done <- struct{}{}
-		}() // Added missing closing parenthesis and brace
+		}()
 		go func() {
 			_, err := io.Copy(clientConnFromIRC, conn)
 			if err != nil && err != io.EOF {
 				log.Printf("[IRC Proxy] Error copying data from IRC server to IRC client: %v", err)
 			}
 			done <- struct{}{}
-		}() // Added missing closing parenthesis and brace
+		}()
 
 		<-done
 		clientConnFromIRC.Close()
@@ -121,25 +120,25 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 		case saslDone <- nil:
 		default:
 		}
-	}) // Added missing closing parenthesis and brace
+	})
 
 	connClient.AddCallback("904", func(e *ircevent.Event) {
 		saslDone <- fmt.Errorf("SASL authentication failed")
-	}) // Added missing closing parenthesis and brace
+	})
 	connClient.AddCallback("905", func(e *ircevent.Event) {
 		saslDone <- fmt.Errorf("SASL authentication aborted")
-	}) // Added missing closing parenthesis and brace
+	})
 
 	connClient.AddCallback("001", func(e *ircevent.Event) {
 		fmt.Println("Received 001, connection established")
-	}) // Added missing closing parenthesis and brace
+	})
 	connClient.AddCallback("376", func(e *ircevent.Event) {
 		fmt.Println("Received End of MOTD (376)")
 		select {
 		case saslDone <- nil:
 		default:
 		}
-	}) // Added missing closing parenthesis and brace
+	})
 
 	connClient.AddCallback("JOIN", func(e *ircevent.Event) {
 		channelName := e.Arguments[0]
@@ -147,13 +146,13 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 		log.Printf("[IRC] User %s JOINED %s\n", userName, channelName)
 
 		if sessionUpdater != nil {
-			sessionUpdater.AddChannelToSession(channelName) // This calls a method that normalizes
+			sessionUpdater.AddChannelToSession(channelName)
 		}
 		events.SendEvent("channel_join", map[string]string{
 			"name": channelName,
 			"user": userName,
-		}) // Added missing closing brace
-	}) // Added missing closing parenthesis
+		})
+	})
 
 	connClient.AddCallback("PART", func(e *ircevent.Event) {
 		channelName := e.Arguments[0]
@@ -161,17 +160,14 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 		log.Printf("[IRC] User %s PARTED %s\n", userName, channelName)
 
 		if sessionUpdater != nil {
-			sessionUpdater.RemoveChannelFromSession(channelName) // This calls a method that normalizes
+			sessionUpdater.RemoveChannelFromSession(channelName)
 		}
 		events.SendEvent("channel_part", map[string]string{
 			"name": channelName,
 			"user": userName,
-		}) // Added missing closing brace
-	}) // Added missing closing parenthesis
+		})
+	})
 
-	// =========================================================================
-	// MODIFIED PRIVMSG CALLBACK
-	// =========================================================================
 	connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
 		target := e.Arguments[0]
 		messageContent := e.Arguments[1]
@@ -179,89 +175,112 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 		log.Printf("[IRC] Message from %s in %s: %s\n", sender, target, messageContent)
 
 		normalizedTarget := strings.ToLower(target)
-
-		// This handles private messages as well as channel messages
 		isChannelMessage := strings.HasPrefix(target, "#")
-		var recipientUsername string
 
-		if isChannelMessage {
-			// For channel messages, we don't send push notifications directly
-			// to avoid spamming. This could be changed if desired.
-			recipientUsername = "" // Or loop through all users in the channel
-		} else {
-			// This is a private message, target is the recipient's username
-			recipientUsername = target
-		}
-
+		// First, add the message to the session history if it's a channel message
 		if sessionUpdater != nil && isChannelMessage {
 			sessionUpdater.AddMessageToChannel(normalizedTarget, sender, messageContent)
 		}
 
+		// Second, broadcast the message via WebSocket so active clients see it immediately
 		events.SendEvent("message", map[string]string{
 			"channel_name": normalizedTarget,
 			"sender":       sender,
 			"text":         messageContent,
 		})
 
-		// If it's a PM, check if the recipient is online. If not, send a push notification.
-		if !isChannelMessage && recipientUsername != "" {
-			token, found := session.FindSessionTokenByUsername(recipientUsername)
-			if !found {
-				log.Printf("[Push] Cannot send notification, user session not found for %s", recipientUsername)
-				return
-			}
+		// --- START OF PUSH NOTIFICATION LOGIC ---
 
-			userSession, _ := session.GetSession(token)
-			if userSession != nil && !userSession.IsActive() && userSession.FCMToken != "" {
-				log.Printf("[Push] User %s is offline, sending push notification.", recipientUsername)
-				// Send a push notification
-				err := push.SendPushNotification(
-					userSession.FCMToken,
-					fmt.Sprintf("New message from %s", sender),
-					messageContent,
-					map[string]string{
-						"sender": sender,
-						"type": "private_message",
-					},
-				)
-				if err != nil {
-					log.Printf("[Push] Failed to send push notification to %s: %v", recipientUsername, err)
+		if isChannelMessage {
+			// LOGIC FOR CHANNEL MENTIONS
+			// Iterate over all active sessions to see if any user was mentioned
+			session.ForEachSession(func(s *session.UserSession) {
+				// Check if:
+				// 1. The message content contains the user's name.
+				// 2. The user is currently offline (no active WebSocket).
+				// 3. The user has a valid FCM token registered.
+				// 4. The sender is not the user themselves (don't get notifications for your own messages).
+				if strings.Contains(messageContent, s.Username) && !s.IsActive() && s.FCMToken != "" && s.Username != sender {
+					log.Printf("[Push] User %s was mentioned in %s while offline, sending push notification.", s.Username, target)
+					notificationTitle := fmt.Sprintf("New mention in %s", target)
+					notificationBody := fmt.Sprintf("%s: %s", sender, messageContent)
+
+					err := push.SendPushNotification(
+						s.FCMToken,
+						notificationTitle,
+						notificationBody,
+						map[string]string{
+							"sender":       sender,
+							"channel_name": target,
+							"type":         "channel_mention", // Custom type for client-side handling
+						},
+					)
+					if err != nil {
+						log.Printf("[Push] Failed to send mention notification to %s: %v", s.Username, err)
+					}
 				}
-			} else {
-				if userSession != nil && userSession.IsActive() {
-					log.Printf("[Push] User %s is online, skipping push notification.", recipientUsername)
+			})
+		} else {
+			// LOGIC FOR PRIVATE MESSAGES (QUERIES)
+			recipientUsername := target
+			if recipientUsername != "" {
+				token, found := session.FindSessionTokenByUsername(recipientUsername)
+				if !found {
+					log.Printf("[Push] Cannot send PM notification, user session not found for %s", recipientUsername)
+					return
 				}
+
+				userSession, _ := session.GetSession(token)
+				// Check if:
+				// 1. The user session exists.
+				// 2. The user is offline.
+				// 3. The user has a valid FCM token.
+				if userSession != nil && !userSession.IsActive() && userSession.FCMToken != "" {
+					log.Printf("[Push] User %s is offline, sending push notification for PM.", recipientUsername)
+					err := push.SendPushNotification(
+						userSession.FCMToken,
+						fmt.Sprintf("New message from %s", sender), // Title
+						messageContent,                           // Body
+						map[string]string{
+							"sender": sender,
+							"type":   "private_message", // Custom type for client-side handling
+						},
+					)
+					if err != nil {
+						log.Printf("[Push] Failed to send PM push notification to %s: %v", recipientUsername, err)
+					}
+				} else if userSession != nil && userSession.IsActive() {
+					log.Printf("[Push] User %s is online, skipping PM push notification.", recipientUsername)
+				}
+			}
+		}
+		// --- END OF PUSH NOTIFICATION LOGIC ---
+	})
+
+	// MODIFIED: 353 (RPL_NAMREPLY) callback to accumulate raw member names.
+	connClient.AddCallback("353", func(e *ircevent.Event) {
+		if len(e.Arguments) >= 4 {
+			channelName := e.Arguments[len(e.Arguments)-2]
+			membersString := e.Arguments[len(e.Arguments)-1]
+			members := strings.Fields(membersString) // Raw members with prefixes
+
+			log.Printf("[IRC] Received NAMES chunk for channel %s. Members: %v", channelName, members)
+			if sessionUpdater != nil {
+				sessionUpdater.AccumulateChannelMembers(channelName, members)
 			}
 		}
 	})
-	// =========================================================================
-	// END OF MODIFIED PRIVMSG CALLBACK
-	// =========================================================================
 
-	connClient.AddCallback("353", func(e *ircevent.Event) {
-		if len(e.Arguments) >= 3 {
-			channelName := e.Arguments[len(e.Arguments)-2]
-			membersString := e.Arguments[len(e.Arguments)-1]
-			members := strings.Fields(strings.TrimPrefix(membersString, ":"))
-			cleanedMembers := make([]string, 0, len(members))
-			for _, member := range members {
-				cleanedMembers = append(cleanedMembers, strings.TrimLeftFunc(member, func(r rune) bool {
-					return strings.ContainsRune("@+%", r)
-				})) // Added missing closing parenthesis
-			}
-
-			log.Printf("[IRC] Received NAMES for channel %s. Members: %v", channelName, cleanedMembers)
+	// MODIFIED: 366 (RPL_ENDOFNAMES) callback to finalize the member list.
+	connClient.AddCallback("366", func(e *ircevent.Event) {
+		if len(e.Arguments) >= 2 {
+			channelName := e.Arguments[1]
+			log.Printf("[IRC] End of NAMES list for %s. Finalizing.", channelName)
 			if sessionUpdater != nil {
-				sessionUpdater.UpdateChannelMembers(channelName, cleanedMembers) // This calls a method that normalizes
+				sessionUpdater.FinalizeChannelMembers(channelName)
 			}
 		}
-	}) // Added missing closing parenthesis and brace
-
-	// End of NAMES list (RPL_ENDOFNAMES - 366)
-	connClient.AddCallback("366", func(e *ircevent.Event) {
-		channelName := e.Arguments[1]
-		log.Printf("[IRC] End of NAMES list for %s", channelName)
-	}) // Added missing closing parenthesis and brace
+	})
 
 	if err := connClient.Connect(localProxyAddr); err != nil {
 		conn.Close()

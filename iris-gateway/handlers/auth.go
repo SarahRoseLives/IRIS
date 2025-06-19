@@ -21,11 +21,10 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
-// LoginResponse will be used for LoginHandler
 type LoginResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
-	Token   string `json:"token,omitempty"` // Add token to the response
+	Token   string `json:"token,omitempty"`
 }
 
 func LoginHandler(c *gin.Context) {
@@ -41,7 +40,6 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	// Check if there is already a session for this username
 	existingToken, found := session.FindSessionTokenByUsername(req.Username)
 	if found {
 		c.JSON(http.StatusOK, LoginResponse{
@@ -52,7 +50,6 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	// Authenticate with Ergo
 	body := map[string]string{
 		"accountName": req.Username,
 		"passphrase":  req.Password,
@@ -95,18 +92,14 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	// Extract the client's IP address
 	clientIP, _, err := net.SplitHostPort(c.Request.RemoteAddr)
 	if err != nil {
 		clientIP = c.Request.RemoteAddr
 		log.Printf("Could not split host port for RemoteAddr '%s', using full address as IP: %v", c.Request.RemoteAddr, err)
 	}
 
-	// Create the UserSession *before* connecting to IRC so it can be passed in
-	userSession := &session.UserSession{
-		Username: req.Username,
-		Channels: make(map[string]*session.ChannelState),
-	}
+	// MODIFIED: Use the new constructor function instead of a struct literal.
+	userSession := session.NewUserSession(req.Username)
 
 	// Connect to IRC, passing the userSession itself as the ChannelStateUpdater
 	client, err := irc.AuthenticateWithNickServ(req.Username, req.Password, clientIP, userSession)
@@ -118,17 +111,13 @@ func LoginHandler(c *gin.Context) {
 
 	log.Printf("[SESSION] IRC pointer for user %s: %p", req.Username, client)
 
-	userSession.IRC = client // Assign the IRC client to the session
+	userSession.IRC = client
 
-	// Optional: Join fallback default channel
 	defaultChannel := "#welcome"
 	client.Join(defaultChannel)
 
-    // Eagerly add the channel to the session's internal map, using lowercased name.
-    // This ensures the channel appears immediately in API responses.
-    userSession.AddChannelToSession(defaultChannel)
-    log.Printf("[LoginHandler] Immediately added %s to session for user %s", defaultChannel, userSession.Username)
-
+	userSession.AddChannelToSession(defaultChannel)
+	log.Printf("[LoginHandler] Immediately added %s to session for user %s", defaultChannel, userSession.Username)
 
 	token := uuid.New().String()
 	session.AddSession(token, userSession)

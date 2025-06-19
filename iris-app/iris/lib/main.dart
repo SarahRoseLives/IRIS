@@ -3,29 +3,49 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:provider/provider.dart';
 
 // Firebase Imports
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:iris/firebase_options.dart';
-import 'package:iris/services/notification_service.dart';
 
+import 'package:get_it/get_it.dart';
+import 'package:iris/services/notification_service.dart';
 import 'main_layout.dart';
 import 'services/api_service.dart';
 import 'models/login_response.dart';
-import 'viewmodels/main_layout_viewmodel.dart';
-
-// ** NEW: Use a service locator pattern like get_it for easier access to singletons **
-// This avoids passing the instance around everywhere.
-import 'package:get_it/get_it.dart';
 
 final getIt = GetIt.instance;
 
 void setupLocator() {
-  getIt.registerSingleton<FlutterLocalNotificationsPlugin>(FlutterLocalNotificationsPlugin());
-  getIt.registerSingleton<NotificationService>(NotificationService());
+  // Use a factory for NotificationService if it depends on runtime data,
+  // or a singleton if it's truly independent. Singleton is fine here.
+  if (!getIt.isRegistered<FlutterLocalNotificationsPlugin>()) {
+    getIt.registerSingleton<FlutterLocalNotificationsPlugin>(FlutterLocalNotificationsPlugin());
+  }
+  if (!getIt.isRegistered<NotificationService>()) {
+    getIt.registerSingleton<NotificationService>(NotificationService());
+  }
 }
-// ** END NEW **
+
+// 1. DEFINE THE BACKGROUND HANDLER HERE (TOP-LEVEL FUNCTION)
+@pragma('vm:entry-point')
+Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // If you're going to use other Firebase services in the background, such as Firestore,
+  // make sure you call `initializeApp` before using them.
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+
+  // You cannot use GetIt here if it relies on async setup from the main isolate.
+  // It's safer to instantiate what you need directly.
+  final notificationService = NotificationService();
+  await notificationService.setupLocalNotifications();
+
+  print("Handling a background message: ${message.messageId}");
+  print("Message data: ${message.data}");
+
+  // Show the local notification
+  notificationService.showFlutterNotification(message);
+}
 
 // This callback is for flutter_local_notifications when a notification is tapped
 @pragma('vm:entry-point')
@@ -45,38 +65,22 @@ void onDidReceiveNotificationResponse(NotificationResponse notificationResponse)
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // ** NEW: Initialize Firebase **
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // ** NEW: Setup service locators **
+  // 2. REGISTER THE BACKGROUND HANDLER
+  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+
   setupLocator();
 
-  // ** NEW: Initialize Notification Service **
+  // Initialize Notification Service (which handles foreground, taps, etc.)
   await getIt<NotificationService>().init();
-
-  const AndroidInitializationSettings initializationSettingsAndroid =
-      AndroidInitializationSettings('@mipmap/ic_launcher');
-
-  final DarwinInitializationSettings initializationSettingsDarwin =
-      DarwinInitializationSettings();
-
-  final InitializationSettings initializationSettings = InitializationSettings(
-    android: initializationSettingsAndroid,
-    iOS: initializationSettingsDarwin,
-  );
-
-  // Initialize flutter_local_notifications
-  await getIt<FlutterLocalNotificationsPlugin>().initialize(
-    initializationSettings,
-    onDidReceiveNotificationResponse: onDidReceiveNotificationResponse,
-    onDidReceiveBackgroundNotificationResponse: onDidReceiveNotificationResponse,
-  );
 
   runApp(const IRISApp());
 }
 
+// The rest of your main.dart file remains the same.
 class IRISApp extends StatelessWidget {
   const IRISApp({super.key});
 
@@ -84,7 +88,6 @@ class IRISApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'IRIS',
-      // The navigatorKey allows us to access the context from anywhere
       navigatorKey: AuthWrapper.globalKey,
       theme: ThemeData.dark().copyWith(
         colorScheme: const ColorScheme.dark(
@@ -92,19 +95,14 @@ class IRISApp extends StatelessWidget {
           secondary: Color(0xFF5865F2),
         ),
       ),
-      // AuthWrapper now uses the static key directly
       home: AuthWrapper(),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-// AuthWrapper now uses a GlobalKey<NavigatorState> for navigation context
 class AuthWrapper extends StatefulWidget {
-  // Use a NavigatorState key to get context from anywhere
   static final GlobalKey<NavigatorState> globalKey = GlobalKey<NavigatorState>();
-
-  // A separate key for the state if needed, though NavigatorState is more useful
   static final GlobalKey<_AuthWrapperState> stateKey = GlobalKey<_AuthWrapperState>();
 
   AuthWrapper() : super(key: stateKey);
@@ -117,8 +115,6 @@ class AuthWrapper extends StatefulWidget {
   State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
-// ... rest of AuthWrapper and LoginScreen remain the same ...
-// No changes are needed in the rest of the file.
 class _AuthWrapperState extends State<AuthWrapper> {
   bool _isLoading = true;
 
@@ -133,20 +129,17 @@ class _AuthWrapperState extends State<AuthWrapper> {
     final token = prefs.getString('auth_token');
     final username = prefs.getString('username');
 
-    if (token != null && username != null) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        // Pass username and token to IrisLayout
-        Navigator.of(context).pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => IrisLayout(username: username, token: token), // Pass token here
-          ),
-        );
+    if (mounted && token != null && username != null) {
+      Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => IrisLayout(username: username, token: token),
+        ),
+      );
+    } else {
+       setState(() {
+        _isLoading = false;
       });
     }
-
-    setState(() {
-      _isLoading = false;
-    });
   }
 
   Future<void> logoutAndShowLogin() async {
@@ -221,7 +214,7 @@ class _LoginScreenState extends State<LoginScreen> {
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
-              builder: (_) => IrisLayout(username: username, token: token), // Pass token here
+              builder: (_) => IrisLayout(username: username, token: token),
             ),
           );
         }
@@ -235,9 +228,11 @@ class _LoginScreenState extends State<LoginScreen> {
         _message = "Error: $e";
       });
     } finally {
-      setState(() {
-        _loading = false;
-      });
+      if(mounted) {
+        setState(() {
+          _loading = false;
+        });
+      }
     }
   }
 

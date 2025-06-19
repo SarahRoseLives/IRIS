@@ -14,7 +14,12 @@ import (
 	"iris-gateway/events"
 )
 
-// ... (Message and ChannelState structs remain the same) ...
+// NEW: ChannelMember struct holds the nickname and their IRC status prefix.
+type ChannelMember struct {
+	Nick   string `json:"nick"`
+	Prefix string `json:"prefix"`
+}
+
 type Message struct {
 	From    string    `json:"from"`
 	Content string    `json:"content"`
@@ -22,11 +27,11 @@ type Message struct {
 }
 
 type ChannelState struct {
-	Name       string    `json:"name"`
-	Members    []string  `json:"members"`
-	Messages   []Message `json:"messages"`
-	LastUpdate time.Time `json:"last_update"`
-	Topic      string    `json:"topic"`
+	Name       string          `json:"name"`
+	Members    []ChannelMember `json:"members"`
+	Messages   []Message       `json:"messages"`
+	LastUpdate time.Time       `json:"last_update"`
+	Topic      string          `json:"topic"`
 	msgMutex   sync.Mutex
 }
 
@@ -51,16 +56,27 @@ func (cs *ChannelState) GetMessages() []Message {
 	return messagesCopy
 }
 
-
 type UserSession struct {
-	Token      string
-	Username   string
-	FCMToken   string // <-- New field for FCM token
-	IRC        *ircevent.Connection
-	Channels   map[string]*ChannelState
-	WebSockets []*websocket.Conn
-	wsMutex    sync.Mutex
-	Mutex      sync.RWMutex
+	Token        string
+	Username     string
+	FCMToken     string
+	IRC          *ircevent.Connection
+	Channels     map[string]*ChannelState
+	pendingNames map[string][]string
+	namesMutex   sync.Mutex
+	WebSockets   []*websocket.Conn
+	wsMutex      sync.Mutex
+	Mutex        sync.RWMutex
+}
+
+// NEW: Add a constructor function to correctly initialize a UserSession,
+// including its unexported fields.
+func NewUserSession(username string) *UserSession {
+	return &UserSession{
+		Username:     username,
+		Channels:     make(map[string]*ChannelState),
+		pendingNames: make(map[string][]string),
+	}
 }
 
 // IsActive checks if the user has any active WebSocket connections.
@@ -70,41 +86,35 @@ func (s *UserSession) IsActive() bool {
 	return len(s.WebSockets) > 0
 }
 
-// ... (rest of the session.go file remains the same, but for completeness, it's included below)
 // AddChannelToSession adds or updates a channel's state in the user's session.
-// Channel names are normalized to lowercase before being stored as keys.
 func (s *UserSession) AddChannelToSession(channelName string) {
-	normalizedChannelName := strings.ToLower(channelName) // Normalize to lowercase
+	normalizedChannelName := strings.ToLower(channelName)
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 
 	if _, ok := s.Channels[normalizedChannelName]; !ok {
-		cs := &ChannelState{ // Create a new ChannelState pointer
-			Name:       normalizedChannelName, // Store normalized name in the struct
-			Members:    []string{},
+		cs := &ChannelState{
+			Name:       normalizedChannelName,
+			Members:    []ChannelMember{},
 			Messages:   []Message{},
 			LastUpdate: time.Now(),
 		}
-		s.Channels[normalizedChannelName] = cs // Assign the new pointer to the map
-		// New debug log
+		s.Channels[normalizedChannelName] = cs
 		log.Printf("[Session.AddChannelToSession] User %s added new channel '%s' (ptr: %p). Total channels: %d",
 			s.Username, normalizedChannelName, cs, len(s.Channels))
 	} else {
-		// New debug log
 		log.Printf("[Session.AddChannelToSession] User %s already has channel '%s' in session (ptr: %p). No new entry created.",
 			s.Username, normalizedChannelName, s.Channels[normalizedChannelName])
 	}
 }
 
 // RemoveChannelFromSession removes a channel's state from the user's session.
-// Channel names are normalized to lowercase for lookup.
 func (s *UserSession) RemoveChannelFromSession(channelName string) {
-	normalizedChannelName := strings.ToLower(channelName) // Normalize to lowercase
+	normalizedChannelName := strings.ToLower(channelName)
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 
 	if cs, ok := s.Channels[normalizedChannelName]; ok {
-		// New debug log
 		log.Printf("[Session.RemoveChannelFromSession] Removing channel '%s' (ptr: %p) for user %s. Messages count: %d",
 			normalizedChannelName, cs, s.Username, len(cs.Messages))
 		delete(s.Channels, normalizedChannelName)
@@ -114,29 +124,74 @@ func (s *UserSession) RemoveChannelFromSession(channelName string) {
 	}
 }
 
-// UpdateChannelMembers updates the list of members for a given channel.
-// Channel names are normalized to lowercase for lookup.
-func (s *UserSession) UpdateChannelMembers(channelName string, members []string) {
-	normalizedChannelName := strings.ToLower(channelName) // Normalize to lowercase
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
+// AccumulateChannelMembers stores raw member lists from 353 replies temporarily.
+func (s *UserSession) AccumulateChannelMembers(channelName string, members []string) {
+	normalizedChannelName := strings.ToLower(channelName)
+	s.namesMutex.Lock()
+	defer s.namesMutex.Unlock()
 
-	if ch, ok := s.Channels[normalizedChannelName]; ok {
-		ch.msgMutex.Lock() // Protect channel-specific data (Members)
-		ch.Members = members
-		ch.msgMutex.Unlock() // Release the channel's mutex
-		// New debug log
-		log.Printf("[Session.UpdateChannelMembers] Channel '%s' (ptr: %p) members updated. Count: %d", normalizedChannelName, ch, len(members))
+	if s.pendingNames == nil {
+		s.pendingNames = make(map[string][]string)
+	}
+
+	s.pendingNames[normalizedChannelName] = append(s.pendingNames[normalizedChannelName], members...)
+	log.Printf("[Session.AccumulateChannelMembers] Accumulated %d members for '%s'. Total pending: %d", len(members), normalizedChannelName, len(s.pendingNames[normalizedChannelName]))
+}
+
+// FinalizeChannelMembers processes the accumulated members, updates the channel state,
+// and broadcasts the final list to the client. This is called on RPL_ENDOFNAMES (366).
+func (s *UserSession) FinalizeChannelMembers(channelName string) {
+	normalizedChannelName := strings.ToLower(channelName)
+	s.namesMutex.Lock()
+	rawMembers, ok := s.pendingNames[normalizedChannelName]
+	if !ok {
+		s.namesMutex.Unlock()
+		log.Printf("[Session.FinalizeChannelMembers] No pending members for channel '%s'", normalizedChannelName)
+		return
+	}
+	delete(s.pendingNames, normalizedChannelName)
+	s.namesMutex.Unlock()
+
+	parsedMembers := make([]ChannelMember, 0, len(rawMembers))
+	validPrefixes := "~&@%+"
+	for _, rawNick := range rawMembers {
+		if rawNick == "" {
+			continue
+		}
+		prefix := ""
+		nick := rawNick
+		if strings.ContainsRune(validPrefixes, rune(rawNick[0])) {
+			prefix = string(rawNick[0])
+			nick = rawNick[1:]
+		}
+		parsedMembers = append(parsedMembers, ChannelMember{Nick: nick, Prefix: prefix})
+	}
+
+	s.Mutex.Lock()
+	channelState, exists := s.Channels[normalizedChannelName]
+	s.Mutex.Unlock()
+
+	if exists {
+		channelState.msgMutex.Lock()
+		channelState.Members = parsedMembers
+		channelState.LastUpdate = time.Now()
+		channelState.msgMutex.Unlock()
+		log.Printf("[Session.FinalizeChannelMembers] Finalized %d members for channel '%s'", len(parsedMembers), normalizedChannelName)
+
+		// Broadcast the updated member list to the client
+		go s.Broadcast("members_update", map[string]interface{}{
+			"channel_name": normalizedChannelName,
+			"members":      parsedMembers,
+		})
 	} else {
-		log.Printf("[Session.UpdateChannelMembers] Attempted to update members for non-existent channel '%s'", normalizedChannelName)
+		log.Printf("[Session.FinalizeChannelMembers] Channel '%s' not found in session.", normalizedChannelName)
 	}
 }
 
 // AddMessageToChannel adds a message to the specified channel's history in the session.
-// Channel names are normalized to lowercase for lookup.
 func (s *UserSession) AddMessageToChannel(channelName, sender, messageContent string) {
-	normalizedChannelName := strings.ToLower(channelName) // Normalize to lowercase
-	s.Mutex.RLock() // Use RLock for reading the Channels map
+	normalizedChannelName := strings.ToLower(channelName)
+	s.Mutex.RLock()
 	channelState, exists := s.Channels[normalizedChannelName]
 	s.Mutex.RUnlock()
 
@@ -146,26 +201,22 @@ func (s *UserSession) AddMessageToChannel(channelName, sender, messageContent st
 			Content: messageContent,
 			Time:    time.Now(),
 		})
-		// AddMessage already logs the details, no need for redundant log here unless different info needed
 	} else {
-		log.Printf("[Session.AddMessageToChannel] Attempted to add message to non-existent channel '%s' (normalized). Message: '%s'", normalizedChannelName, messageContent)
+		log.Printf("[Session.AddMessageToChannel] Attempted to add message to non-existent channel '%s'", normalizedChannelName)
 	}
 }
 
-
 var (
 	sessionMap = make(map[string]*UserSession)
-	mutex      = sync.RWMutex{} // Protects access to sessionMap
+	mutex      = sync.RWMutex{}
 )
 
-// AddSession adds a new user session to the map and registers its broadcaster function.
 func AddSession(token string, s *UserSession) {
 	mutex.Lock()
 	defer mutex.Unlock()
 	s.Token = token
 	sessionMap[token] = s
 	events.RegisterBroadcaster(token, s.Broadcast)
-	// New debug log
 	log.Printf("[Session.AddSession] Session added for user '%s' (token: %s, session_ptr: %p)", s.Username, token, s)
 }
 
@@ -174,7 +225,6 @@ func GetSession(token string) (*UserSession, bool) {
 	defer mutex.RUnlock()
 	s, ok := sessionMap[token]
 	if ok {
-		// New debug log
 		log.Printf("[Session.GetSession] Retrieved session for token '%s' (session_ptr: %p)", token, s)
 	} else {
 		log.Printf("[Session.GetSession] Session not found for token '%s'", token)
@@ -182,12 +232,10 @@ func GetSession(token string) (*UserSession, bool) {
 	return s, ok
 }
 
-// RemoveSession removes a user session.
 func RemoveSession(token string) {
 	mutex.Lock()
 	defer mutex.Unlock()
 	if sess, ok := sessionMap[token]; ok {
-		// New debug log
 		log.Printf("[Session.RemoveSession] Preparing to remove session for token '%s' (session_ptr: %p)", token, sess)
 		sess.Mutex.Lock()
 		for _, conn := range sess.WebSockets {
@@ -198,7 +246,6 @@ func RemoveSession(token string) {
 	}
 	delete(sessionMap, token)
 	events.UnregisterBroadcaster(token)
-	// New debug log
 	log.Printf("[Session.RemoveSession] Session removed for token '%s'", token)
 }
 
@@ -206,7 +253,6 @@ func (s *UserSession) AddWebSocket(conn *websocket.Conn) {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 	s.WebSockets = append(s.WebSockets, conn)
-	// New debug log
 	log.Printf("[Session.AddWebSocket] WebSocket added for user '%s' (session_ptr: %p). Total WS: %d", s.Username, s, len(s.WebSockets))
 }
 
@@ -220,12 +266,9 @@ func (s *UserSession) RemoveWebSocket(conn *websocket.Conn) {
 			break
 		}
 	}
-	// New debug log
 	log.Printf("[Session.RemoveWebSocket] WebSocket removed for user '%s' (session_ptr: %p). WS count changed from %d to %d", s.Username, s, initialCount, len(s.WebSockets))
 }
 
-// Broadcast sends a real-time event to all WebSocket connections
-// associated with this specific UserSession.
 func (s *UserSession) Broadcast(eventType string, payload any) {
 	s.Mutex.RLock()
 	defer s.Mutex.RUnlock()
@@ -252,7 +295,6 @@ func (s *UserSession) Broadcast(eventType string, payload any) {
 	}
 }
 
-// ForEachSession iterates over all active sessions, calling the provided callback.
 func ForEachSession(callback func(s *UserSession)) {
 	mutex.RLock()
 	defer mutex.RUnlock()
@@ -261,7 +303,6 @@ func ForEachSession(callback func(s *UserSession)) {
 	}
 }
 
-// FindSessionTokenByUsername returns the first session token matching the username (case-insensitive).
 func FindSessionTokenByUsername(username string) (string, bool) {
 	mutex.RLock()
 	defer mutex.RUnlock()

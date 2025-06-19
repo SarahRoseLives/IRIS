@@ -7,7 +7,7 @@ import '../widgets/left_drawer.dart';
 import '../widgets/right_drawer.dart';
 import '../widgets/message_list.dart';
 import '../widgets/message_input.dart';
-import '../screens/profile_screen.dart'; // Import ProfileScreen
+import '../screens/profile_screen.dart';
 
 class MainChatScreen extends StatelessWidget {
   const MainChatScreen({super.key});
@@ -16,18 +16,13 @@ class MainChatScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<MainLayoutViewModel>(
       builder: (context, viewModel, child) {
-        final List<Map<String, dynamic>> currentChannelMessages =
-            viewModel.channels.isNotEmpty && viewModel.selectedChannelIndex < viewModel.channels.length
-                ? viewModel.channelMessages[viewModel.channels[viewModel.selectedChannelIndex]] ?? []
-                : [];
-
         return Scaffold(
           backgroundColor: const Color(0xFF313338),
           body: Row(
             children: [
               LeftDrawer(
                 dms: viewModel.dms,
-                channels: viewModel.channels,
+                channels: viewModel.channelNames, // MODIFIED: Pass channel names
                 selectedChannelIndex: viewModel.selectedChannelIndex,
                 onChannelSelected: viewModel.onChannelSelected,
                 loadingChannels: viewModel.loadingChannels,
@@ -52,8 +47,9 @@ class MainChatScreen extends StatelessWidget {
                             Padding(
                               padding: const EdgeInsets.symmetric(horizontal: 8),
                               child: Text(
-                                viewModel.channels.isNotEmpty && viewModel.selectedChannelIndex < viewModel.channels.length
-                                    ? viewModel.channels[viewModel.selectedChannelIndex]
+                                viewModel.channelNames.isNotEmpty &&
+                                        viewModel.selectedChannelIndex < viewModel.channelNames.length
+                                    ? viewModel.channelNames[viewModel.selectedChannelIndex]
                                     : "#loading",
                                 style: const TextStyle(color: Colors.white, fontSize: 20),
                               ),
@@ -64,18 +60,12 @@ class MainChatScreen extends StatelessWidget {
                               tooltip: "Open Members Drawer",
                               onPressed: viewModel.toggleRightDrawer,
                             ),
-                            // Removed the logout button completely
-                            // IconButton(
-                            //   icon: const Icon(Icons.logout, color: Colors.white70),
-                            //   tooltip: "Logout",
-                            //   onPressed: () => viewModel.logout(), // Calls the public logout method
-                            // ),
                           ],
                         ),
                       ),
                       Expanded(
                         child: MessageList(
-                          messages: currentChannelMessages,
+                          messages: viewModel.currentChannelMessages,
                           scrollController: viewModel.scrollController,
                           userAvatars: viewModel.userAvatars,
                         ),
@@ -84,7 +74,6 @@ class MainChatScreen extends StatelessWidget {
                         controller: viewModel.msgController,
                         onSendMessage: viewModel.handleSendMessage,
                         onProfilePressed: () {
-                          // Navigate to ProfileScreen when the new profile button is pressed
                           Navigator.push(
                             context,
                             MaterialPageRoute(
@@ -98,7 +87,7 @@ class MainChatScreen extends StatelessWidget {
                 ),
               ),
               if (viewModel.showRightDrawer)
-                RightDrawer(members: viewModel.members),
+                RightDrawer(members: viewModel.members), // MODIFIED: Pass the list of ChannelMember objects
             ],
           ),
         );

@@ -1,53 +1,34 @@
 // lib/services/notification_service.dart
 import 'dart:convert';
-
-import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:get_it/get_it.dart';
-import 'package:iris/firebase_options.dart';
-import 'package:iris/main.dart'; // To access the global navigatorKey
-import 'package:iris/viewmodels/main_layout_viewmodel.dart'; // To call methods
+import 'package:iris/main.dart'; // To access AuthWrapper.globalKey
+import 'package:iris/viewmodels/main_layout_viewmodel.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 
-// This handler must be a top-level function (not a class method)
-@pragma('vm:entry-point')
-Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  print("Handling a background message: ${message.messageId}");
-
-  // Since this is a background isolate, we create a new instance to show the notification
-  final notificationService = NotificationService();
-  await notificationService.setupLocalNotifications(); // Ensure local notifications are setup
-  notificationService.showFlutterNotification(message);
-}
+// Note: The background handler is now a top-level function in main.dart
 
 class NotificationService {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin = GetIt.instance<FlutterLocalNotificationsPlugin>();
 
-  // A new setup method for local notifications to be called from the background isolate
-  Future<void> setupLocalNotifications() async {
-    const AndroidInitializationSettings initializationSettingsAndroid =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-    const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
-    const InitializationSettings initializationSettings = InitializationSettings(
-      android: initializationSettingsAndroid,
-      iOS: initializationSettingsIOS,
-    );
-    await _flutterLocalNotificationsPlugin.initialize(initializationSettings);
-  }
-
+  // A single init method to be called from main()
   Future<void> init() async {
-    await _firebaseMessaging.requestPermission(
-      alert: true,
-      badge: true,
-      sound: true,
-    );
+    // 1. REQUEST PERMISSION FOR ANDROID 13+
+    final status = await Permission.notification.request();
+    if (status.isGranted) {
+      print("Notification permission granted.");
+    } else {
+      print("Notification permission denied.");
+    }
 
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+    // This is all that's needed in this method for local notifications setup
+    await setupLocalNotifications();
 
+    // Set up listeners for different message states
     FirebaseMessaging.onMessage.listen((RemoteMessage message) {
       print('Got a message whilst in the foreground!');
       showFlutterNotification(message);
@@ -55,18 +36,36 @@ class NotificationService {
 
     FirebaseMessaging.onMessageOpenedApp.listen((RemoteMessage message) {
       print('A new onMessageOpenedApp event was published!');
-      // ** FIX: Call the now-public method **
       handleNotificationTap(message.data);
     });
 
     _firebaseMessaging.getInitialMessage().then((RemoteMessage? message) {
       if (message != null) {
         print('App opened from terminated state by a notification!');
-        // ** FIX: Call the now-public method **
         handleNotificationTap(message.data);
       }
     });
   }
+
+  // Can be called from main() or the background isolate
+  Future<void> setupLocalNotifications() async {
+    const AndroidInitializationSettings initializationSettingsAndroid =
+        AndroidInitializationSettings('@mipmap/ic_launcher');
+    const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
+
+    const InitializationSettings initializationSettings = InitializationSettings(
+      android: initializationSettingsAndroid,
+      iOS: initializationSettingsIOS,
+    );
+
+    // The onDidReceiveNotificationResponse is now passed in main.dart
+    await _flutterLocalNotificationsPlugin.initialize(
+      initializationSettings,
+      onDidReceiveNotificationResponse: onDidReceiveNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse: onDidReceiveNotificationResponse,
+    );
+  }
+
 
   Future<String?> getFCMToken() async {
     try {
@@ -79,8 +78,8 @@ class NotificationService {
     }
   }
 
+  // This method is now called by the foreground listener AND the background handler
   void showFlutterNotification(RemoteMessage message) {
-    // The Go backend sends a data-only payload, so we use the fields from `message.data`
     final String? title = message.data['title'];
     final String? body = message.data['body'];
 
@@ -91,41 +90,42 @@ class NotificationService {
         body,
         const NotificationDetails(
           android: AndroidNotificationDetails(
-            'iris_channel_id',
+            'iris_channel_id', // MUST MATCH the ID in AndroidManifest.xml
             'IRIS Messages',
             channelDescription: 'Notifications for new IRIS chat messages.',
             icon: '@mipmap/ic_launcher',
             importance: Importance.max,
             priority: Priority.high,
           ),
-           iOS: DarwinNotificationDetails(
+          iOS: DarwinNotificationDetails(
             presentAlert: true,
             presentBadge: true,
             presentSound: true,
           ),
         ),
+        // Encode the full data payload to handle taps correctly
         payload: jsonEncode(message.data),
       );
     }
   }
 
-  // ** FIX: Method is now public (no leading underscore) **
+  // Handles navigation when a notification is tapped, regardless of app state
   void handleNotificationTap(Map<String, dynamic> data) {
+    // This uses the navigatorKey from main.dart to get a valid context
     final BuildContext? context = AuthWrapper.globalKey.currentContext;
+
     if (context != null && context.mounted) {
       final String? sender = data['sender'];
-      // The gateway sends private messages with the recipient's name as the "channel"
       final String channelName = (data['type'] == 'private_message' && sender != null)
           ? '@$sender'
           : data['channel_name'] ?? '';
 
       if (channelName.isNotEmpty) {
         print("Handling notification tap for channel: $channelName");
-        // Use the Provider to find the MainLayoutViewModel and call the navigation method
         try {
+          // Use Provider to find the ViewModel and navigate
           final viewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
-          // Navigate and let the view model handle the rest
-          viewModel.handleNotificationTap(channelName, "0");
+          viewModel.handleNotificationTap(channelName, "0"); // "0" is a placeholder messageId
         } catch (e) {
           print("Could not find MainLayoutViewModel to handle notification tap: $e");
         }

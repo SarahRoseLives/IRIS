@@ -1,38 +1,81 @@
+// lib/widgets/right_drawer.dart
 import 'package:flutter/material.dart';
+import '../models/channel_member.dart'; // Import the new model
 
 class RightDrawer extends StatelessWidget {
-  final List<String> members;
+  final List<ChannelMember> members;
 
   const RightDrawer({
     super.key,
     required this.members,
   });
 
+  // Helper to determine the color based on the user's prefix
+  Color _getColorForPrefix(String prefix) {
+    switch (prefix) {
+      case '~':
+        return Colors.amber; // Owner
+      case '@':
+        return Colors.redAccent; // Operator
+      case '+':
+        return Colors.lightGreen; // Voiced
+      default:
+        return Colors.white70; // Regular member
+    }
+  }
+
+  // Helper to get an icon for the user's prefix
+  IconData _getIconForPrefix(String prefix) {
+    switch (prefix) {
+      case '~':
+        return Icons.shield; // Owner
+      case '@':
+        return Icons.star; // Operator
+      case '+':
+        return Icons.volume_up; // Voiced
+      default:
+        return Icons.person; // Regular member
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
-      width: 200,
+      width: 240, // A bit wider to accommodate prefixes
       color: const Color(0xFF2B2D31),
       child: SafeArea(
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const ListTile(
-              title: Text(
+            const Padding(
+              padding: EdgeInsets.all(16.0),
+              child: Text(
                 "Members",
                 style: TextStyle(
-                    color: Color(0xFF5865F2),
+                    color: Colors.white,
                     fontWeight: FontWeight.bold,
-                    fontSize: 22),
+                    fontSize: 20),
               ),
             ),
-            Expanded( // Wrap ListView.builder with Expanded
+            const Divider(color: Colors.white24, height: 1),
+            Expanded(
               child: ListView.builder(
                 itemCount: members.length,
                 itemBuilder: (context, idx) {
-                  final m = members[idx];
+                  final member = members[idx];
                   return ListTile(
-                    leading: CircleAvatar(child: Text(m[0])),
-                    title: Text(m, style: const TextStyle(color: Colors.white)),
+                    leading: Icon(
+                      _getIconForPrefix(member.prefix),
+                      color: _getColorForPrefix(member.prefix),
+                      size: 20,
+                    ),
+                    title: Text(
+                      member.nick, // Display nick directly
+                      style: TextStyle(
+                        color: _getColorForPrefix(member.prefix),
+                        fontWeight: member.prefix.isNotEmpty ? FontWeight.bold : FontWeight.normal,
+                      ),
+                    ),
                   );
                 },
               ),
