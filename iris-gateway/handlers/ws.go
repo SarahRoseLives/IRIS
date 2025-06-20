@@ -37,7 +37,6 @@ func WebSocketHandler(c *gin.Context) {
 	sess, ok := session.GetSession(token)
 	if !ok {
 		log.Printf("[WS] Unauthorized access attempt with token: %s", token)
-		// Return raw 401 Unauthorized BEFORE upgrade
 		c.Writer.WriteHeader(http.StatusUnauthorized)
 		c.Writer.Write([]byte("Unauthorized: Invalid session token"))
 		return
@@ -52,23 +51,15 @@ func WebSocketHandler(c *gin.Context) {
 	sess.AddWebSocket(conn)
 	log.Printf("[WS] WebSocket connected for user %s (token: %s). Total WS for user: %d\n", sess.Username, token, len(sess.WebSockets))
 
-	// --- START: MODIFIED SECTION ---
 	// Send initial state including full channel history upon connection.
-	// This ensures the client gets all available scrollback immediately.
 	sess.Mutex.RLock()
-	// The payload is now a map where keys are channel names and values are the full ChannelState.
-	// This provides the client with names, members, messages, etc., for each channel.
 	channelsPayload := make(map[string]*session.ChannelState)
 	for name, channelState := range sess.Channels {
-		// IMPORTANT: Use the thread-safe GetMessages() method to retrieve a copy
-		// of the message history. This prevents race conditions.
 		messages := channelState.GetMessages()
-
-		// Create a complete snapshot of the channel's state for the payload.
 		channelsPayload[name] = &session.ChannelState{
 			Name:       channelState.Name,
 			Members:    channelState.Members,
-			Messages:   messages, // Use the copied message slice
+			Messages:   messages,
 			LastUpdate: channelState.LastUpdate,
 			Topic:      channelState.Topic,
 		}
@@ -89,8 +80,10 @@ func WebSocketHandler(c *gin.Context) {
 	if err != nil {
 		log.Printf("[WS] Error sending initial_state to %s: %v", sess.Username, err)
 	}
-	// --- END: MODIFIED SECTION ---
 
+	// NEW: Once the initial state is sent, mark the session as fully synced.
+	// This signals that it can now receive real-time broadcasts.
+	sess.SetSyncing(false)
 
 	// Reader goroutine: continuously read messages from the client
 	go func() {
@@ -116,29 +109,21 @@ func WebSocketHandler(c *gin.Context) {
 			var clientMsg events.WsEvent
 			if err := json.Unmarshal(p, &clientMsg); err == nil {
 				if clientMsg.Type == "message" {
-					// Cast Payload to map[string]interface{}
 					if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
 						channelName, channelOk := payload["channel_name"].(string)
 						text, textOk := payload["text"].(string)
 
 						if channelOk && textOk {
-							// --- START MODIFICATION FOR MULTI-LINE IRC SENDING ---
-							// Split the message by newlines to adhere to IRC's single-line message structure
 							lines := strings.Split(text, "\n")
 							for _, line := range lines {
-								// If a line is empty after splitting (e.g., two newlines in a row), send a single space
-								// to preserve the empty line.
 								ircLine := line
 								if len(ircLine) == 0 {
-									ircLine = " " // Send a single space for empty lines
+									ircLine = " "
 								}
 								log.Printf("[WS] Sending IRC line to channel %s from %s: '%s'", channelName, sess.Username, ircLine)
 								sess.IRC.Privmsg(channelName, ircLine)
-								// Add a small delay between lines to avoid hitting IRC server flood limits.
 								time.Sleep(100 * time.Millisecond)
 							}
-							// --- END MODIFICATION FOR MULTI-LINE IRC SENDING ---
-
 						} else {
 							log.Printf("[WS] Received malformed 'message' payload from %s: %v", sess.Username, payload)
 						}
@@ -146,8 +131,9 @@ func WebSocketHandler(c *gin.Context) {
 						log.Printf("[WS] Invalid payload structure in 'message' from %s", sess.Username)
 					}
 				} else {
-					// For other event types, broadcast
-					events.SendEvent(clientMsg.Type, clientMsg.Payload)
+					// For other event types, we can still use a broadcast mechanism,
+					// but it should be called on the session.
+					sess.Broadcast(clientMsg.Type, clientMsg.Payload)
 				}
 			} else {
 				log.Printf("[WS] Failed to unmarshal incoming message from %s: %v", sess.Username, err)

@@ -1,12 +1,10 @@
-// lib/config.dart
-
 // Set this to true if you are running on an Android emulator
 // and your Go backend is running on your host machine.
 // '10.0.2.2' is a special alias for your host machine's localhost from within an Android emulator.
 const bool isAndroidEmulator = false; // <--- Set to true for Android Emulator/Device, false for Linux/Web/iOS Simulator
 
 // Define your API host and port
-const String _apiHostAddress = "192.168.1.240";
+const String _apiHostAddress = "transirc.chat"; // Update with your server IP or domain if needed
 const String _apiHostEmulator = "10.0.2.2"; // Android emulator's loopback to host
 const int apiPort = 8080; // Make this constant accessible
 

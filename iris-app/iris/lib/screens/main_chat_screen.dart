@@ -1,4 +1,3 @@
-// lib/screens/main_chat_screen.dart
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -83,6 +82,7 @@ class MainChatScreen extends StatelessWidget {
                             );
                           }
                         },
+                        onAttachmentSelected: viewModel.uploadAttachment, // <-- Added this line
                       ),
                     ],
                   ),

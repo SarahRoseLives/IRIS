@@ -1,4 +1,3 @@
-// irc/connection.go
 package irc
 
 import (
@@ -11,29 +10,29 @@ import (
 
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
-	"iris-gateway/events"
 	"iris-gateway/push"
 	"iris-gateway/session"
 )
 
 type IRCClient = ircevent.Connection
 
-// MODIFIED: ChannelStateUpdater interface to handle member list accumulation.
+// ChannelStateUpdater interface remains, as UserSession implements it.
 type ChannelStateUpdater interface {
 	AddChannelToSession(channelName string)
 	RemoveChannelFromSession(channelName string)
 	AddMessageToChannel(channelName, sender, messageContent string)
-	AccumulateChannelMembers(channelName string, members []string) // NEW
-	FinalizeChannelMembers(channelName string)                     // NEW
+	AccumulateChannelMembers(channelName string, members []string)
+	FinalizeChannelMembers(channelName string)
 }
 
-func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdater ChannelStateUpdater) (*IRCClient, error) {
+// MODIFIED: The function now accepts the full userSession, which satisfies the ChannelStateUpdater interface.
+func AuthenticateWithNickServ(username, password, clientIP string, userSession *session.UserSession) (*IRCClient, error) {
 	ircServerAddr := config.Cfg.IRCServer
 	conn, err := net.DialTimeout("tcp", ircServerAddr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial IRC server %s: %w", ircServerAddr, err)
 	}
-
+	// ... (the PROXY header logic remains unchanged)
 	srcIP := net.ParseIP(clientIP)
 	if srcIP == nil {
 		log.Printf("Warning: Could not parse client IP '%s', defaulting to 127.0.0.1 for PROXY header.", clientIP)
@@ -106,7 +105,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 	connClient.VerboseCallbackHandler = false
 	connClient.Debug = false
 	connClient.UseTLS = false
-
 	connClient.UseSASL = true
 	connClient.SASLLogin = username
 	connClient.SASLPassword = password
@@ -121,17 +119,9 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 		default:
 		}
 	})
-
-	connClient.AddCallback("904", func(e *ircevent.Event) {
-		saslDone <- fmt.Errorf("SASL authentication failed")
-	})
-	connClient.AddCallback("905", func(e *ircevent.Event) {
-		saslDone <- fmt.Errorf("SASL authentication aborted")
-	})
-
-	connClient.AddCallback("001", func(e *ircevent.Event) {
-		fmt.Println("Received 001, connection established")
-	})
+	connClient.AddCallback("904", func(e *ircevent.Event) { saslDone <- fmt.Errorf("SASL authentication failed") })
+	connClient.AddCallback("905", func(e *ircevent.Event) { saslDone <- fmt.Errorf("SASL authentication aborted") })
+	connClient.AddCallback("001", func(e *ircevent.Event) { fmt.Println("Received 001, connection established") })
 	connClient.AddCallback("376", func(e *ircevent.Event) {
 		fmt.Println("Received End of MOTD (376)")
 		select {
@@ -144,11 +134,8 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 		channelName := e.Arguments[0]
 		userName := e.Nick
 		log.Printf("[IRC] User %s JOINED %s\n", userName, channelName)
-
-		if sessionUpdater != nil {
-			sessionUpdater.AddChannelToSession(channelName)
-		}
-		events.SendEvent("channel_join", map[string]string{
+		userSession.AddChannelToSession(channelName)
+		userSession.Broadcast("channel_join", map[string]string{
 			"name": channelName,
 			"user": userName,
 		})
@@ -158,11 +145,8 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 		channelName := e.Arguments[0]
 		userName := e.Nick
 		log.Printf("[IRC] User %s PARTED %s\n", userName, channelName)
-
-		if sessionUpdater != nil {
-			sessionUpdater.RemoveChannelFromSession(channelName)
-		}
-		events.SendEvent("channel_part", map[string]string{
+		userSession.RemoveChannelFromSession(channelName)
+		userSession.Broadcast("channel_part", map[string]string{
 			"name": channelName,
 			"user": userName,
 		})
@@ -174,37 +158,51 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 		sender := e.Nick
 		log.Printf("[IRC] Message from %s in %s: %s\n", sender, target, messageContent)
 
+		// --- IMAGE LINK PATCH START ---
+		// If the message contains an image URL from our server, convert it to a full link
+		if strings.Contains(messageContent, "/images/") {
+			parts := strings.Split(messageContent, "/images/")
+			if len(parts) > 1 {
+				imageName := parts[1]
+				// TODO: Set your real domain here; for now, just use the pattern
+				messageContent = fmt.Sprintf("[image] https://yourdomain.com/images/%s", imageName)
+			}
+		}
+		// --- IMAGE LINK PATCH END ---
+
+		// Note: For a PM, the 'target' is the recipient's nick. For a channel, it's the channel name.
+		// The client will need to differentiate.
 		normalizedTarget := strings.ToLower(target)
 		isChannelMessage := strings.HasPrefix(target, "#")
 
-		// First, add the message to the session history if it's a channel message
-		if sessionUpdater != nil && isChannelMessage {
-			sessionUpdater.AddMessageToChannel(normalizedTarget, sender, messageContent)
+		if isChannelMessage {
+			// Store message in the channel's history
+			userSession.AddMessageToChannel(normalizedTarget, sender, messageContent)
+		} else {
+			// For PMs, we might want to store them in a special "channel" state as well, e.g., using the sender's name as the key
+			// This allows PM history to be persisted just like channel history.
+			// Let's assume the "channel" for a PM is the sender's name.
+			pmChannelKey := strings.ToLower(sender)
+			userSession.AddChannelToSession(pmChannelKey) // Ensures a state object exists for this PM
+			userSession.AddMessageToChannel(pmChannelKey, sender, messageContent)
 		}
 
-		// Second, broadcast the message via WebSocket so active clients see it immediately
-		events.SendEvent("message", map[string]string{
-			"channel_name": normalizedTarget,
+		// Broadcast the message via WebSocket to the user's active client(s).
+		// This now handles both channel messages and private messages for ONLINE users.
+		userSession.Broadcast("message", map[string]string{
+			"channel_name": normalizedTarget, // Client uses this to know where to put the message
 			"sender":       sender,
 			"text":         messageContent,
 		})
 
-		// --- START OF PUSH NOTIFICATION LOGIC ---
-
+		// --- PUSH NOTIFICATION LOGIC (For OFFLINE users) ---
 		if isChannelMessage {
-			// LOGIC FOR CHANNEL MENTIONS
-			// Iterate over all active sessions to see if any user was mentioned
+			// Logic for sending push notifications for channel mentions
 			session.ForEachSession(func(s *session.UserSession) {
-				// Check if:
-				// 1. The message content contains the user's name.
-				// 2. The user is currently offline (no active WebSocket).
-				// 3. The user has a valid FCM token registered.
-				// 4. The sender is not the user themselves (don't get notifications for your own messages).
 				if strings.Contains(messageContent, s.Username) && !s.IsActive() && s.FCMToken != "" && s.Username != sender {
 					log.Printf("[Push] User %s was mentioned in %s while offline, sending push notification.", s.Username, target)
 					notificationTitle := fmt.Sprintf("New mention in %s", target)
 					notificationBody := fmt.Sprintf("%s: %s", sender, messageContent)
-
 					err := push.SendPushNotification(
 						s.FCMToken,
 						notificationTitle,
@@ -212,7 +210,7 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 						map[string]string{
 							"sender":       sender,
 							"channel_name": target,
-							"type":         "channel_mention", // Custom type for client-side handling
+							"type":         "channel_mention",
 						},
 					)
 					if err != nil {
@@ -221,7 +219,7 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 				}
 			})
 		} else {
-			// LOGIC FOR PRIVATE MESSAGES (QUERIES)
+			// RESTORED: Logic for sending push notifications for private messages
 			recipientUsername := target
 			if recipientUsername != "" {
 				token, found := session.FindSessionTokenByUsername(recipientUsername)
@@ -230,55 +228,43 @@ func AuthenticateWithNickServ(username, password, clientIP string, sessionUpdate
 					return
 				}
 
-				userSession, _ := session.GetSession(token)
-				// Check if:
-				// 1. The user session exists.
-				// 2. The user is offline.
-				// 3. The user has a valid FCM token.
-				if userSession != nil && !userSession.IsActive() && userSession.FCMToken != "" {
+				recipientSession, _ := session.GetSession(token)
+				if recipientSession != nil && !recipientSession.IsActive() && recipientSession.FCMToken != "" {
 					log.Printf("[Push] User %s is offline, sending push notification for PM.", recipientUsername)
 					err := push.SendPushNotification(
-						userSession.FCMToken,
+						recipientSession.FCMToken,
 						fmt.Sprintf("New message from %s", sender), // Title
-						messageContent,                           // Body
+						messageContent,                             // Body
 						map[string]string{
 							"sender": sender,
-							"type":   "private_message", // Custom type for client-side handling
+							"type":   "private_message",
 						},
 					)
 					if err != nil {
 						log.Printf("[Push] Failed to send PM push notification to %s: %v", recipientUsername, err)
 					}
-				} else if userSession != nil && userSession.IsActive() {
+				} else if recipientSession != nil && recipientSession.IsActive() {
 					log.Printf("[Push] User %s is online, skipping PM push notification.", recipientUsername)
 				}
 			}
 		}
-		// --- END OF PUSH NOTIFICATION LOGIC ---
 	})
 
-	// MODIFIED: 353 (RPL_NAMREPLY) callback to accumulate raw member names.
 	connClient.AddCallback("353", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 4 {
 			channelName := e.Arguments[len(e.Arguments)-2]
 			membersString := e.Arguments[len(e.Arguments)-1]
-			members := strings.Fields(membersString) // Raw members with prefixes
-
+			members := strings.Fields(membersString)
 			log.Printf("[IRC] Received NAMES chunk for channel %s. Members: %v", channelName, members)
-			if sessionUpdater != nil {
-				sessionUpdater.AccumulateChannelMembers(channelName, members)
-			}
+			userSession.AccumulateChannelMembers(channelName, members)
 		}
 	})
 
-	// MODIFIED: 366 (RPL_ENDOFNAMES) callback to finalize the member list.
 	connClient.AddCallback("366", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 2 {
 			channelName := e.Arguments[1]
 			log.Printf("[IRC] End of NAMES list for %s. Finalizing.", channelName)
-			if sessionUpdater != nil {
-				sessionUpdater.FinalizeChannelMembers(channelName)
-			}
+			userSession.FinalizeChannelMembers(channelName)
 		}
 	})
 

@@ -14,7 +14,7 @@ import (
 	"iris-gateway/events"
 )
 
-// NEW: ChannelMember struct holds the nickname and their IRC status prefix.
+// ChannelMember struct holds the nickname and their IRC status prefix.
 type ChannelMember struct {
 	Nick   string `json:"nick"`
 	Prefix string `json:"prefix"`
@@ -67,15 +67,27 @@ type UserSession struct {
 	WebSockets   []*websocket.Conn
 	wsMutex      sync.Mutex
 	Mutex        sync.RWMutex
+	// NEW: Flag to indicate if the session is still syncing initial history
+	isSyncing bool
 }
 
-// NEW: Add a constructor function to correctly initialize a UserSession,
-// including its unexported fields.
+// NEW: Constructor to initialize a UserSession with isSyncing set to true.
 func NewUserSession(username string) *UserSession {
 	return &UserSession{
 		Username:     username,
 		Channels:     make(map[string]*ChannelState),
 		pendingNames: make(map[string][]string),
+		isSyncing:    true, // Start in syncing state by default
+	}
+}
+
+// NEW: Method to set the syncing status in a thread-safe way.
+func (s *UserSession) SetSyncing(syncing bool) {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	s.isSyncing = syncing
+	if !syncing {
+		log.Printf("[Session] User %s has completed initial history sync.", s.Username)
 	}
 }
 
@@ -138,8 +150,7 @@ func (s *UserSession) AccumulateChannelMembers(channelName string, members []str
 	log.Printf("[Session.AccumulateChannelMembers] Accumulated %d members for '%s'. Total pending: %d", len(members), normalizedChannelName, len(s.pendingNames[normalizedChannelName]))
 }
 
-// FinalizeChannelMembers processes the accumulated members, updates the channel state,
-// and broadcasts the final list to the client. This is called on RPL_ENDOFNAMES (366).
+// FinalizeChannelMembers processes the accumulated members and updates the channel state.
 func (s *UserSession) FinalizeChannelMembers(channelName string) {
 	normalizedChannelName := strings.ToLower(channelName)
 	s.namesMutex.Lock()
@@ -178,7 +189,6 @@ func (s *UserSession) FinalizeChannelMembers(channelName string) {
 		channelState.msgMutex.Unlock()
 		log.Printf("[Session.FinalizeChannelMembers] Finalized %d members for channel '%s'", len(parsedMembers), normalizedChannelName)
 
-		// Broadcast the updated member list to the client
 		go s.Broadcast("members_update", map[string]interface{}{
 			"channel_name": normalizedChannelName,
 			"members":      parsedMembers,
@@ -216,7 +226,6 @@ func AddSession(token string, s *UserSession) {
 	defer mutex.Unlock()
 	s.Token = token
 	sessionMap[token] = s
-	events.RegisterBroadcaster(token, s.Broadcast)
 	log.Printf("[Session.AddSession] Session added for user '%s' (token: %s, session_ptr: %p)", s.Username, token, s)
 }
 
@@ -245,7 +254,6 @@ func RemoveSession(token string) {
 		sess.Mutex.Unlock()
 	}
 	delete(sessionMap, token)
-	events.UnregisterBroadcaster(token)
 	log.Printf("[Session.RemoveSession] Session removed for token '%s'", token)
 }
 
@@ -269,13 +277,21 @@ func (s *UserSession) RemoveWebSocket(conn *websocket.Conn) {
 	log.Printf("[Session.RemoveWebSocket] WebSocket removed for user '%s' (session_ptr: %p). WS count changed from %d to %d", s.Username, s, initialCount, len(s.WebSockets))
 }
 
+// MODIFIED: The Broadcast method now contains the sync check.
 func (s *UserSession) Broadcast(eventType string, payload any) {
 	s.Mutex.RLock()
-	defer s.Mutex.RUnlock()
+	// CRITICAL CHANGE: If the session is syncing, DO NOT broadcast real-time messages.
+	// The client will get these messages as part of the initial history dump.
+	if s.isSyncing && eventType == "message" {
+		log.Printf("[Session.Broadcast] Skipping message broadcast for user '%s' (syncing)", s.Username)
+		s.Mutex.RUnlock() // Release lock before returning
+		return
+	}
+	s.Mutex.RUnlock() // Release lock after check
 
-	msg := map[string]any{
-		"type":    eventType,
-		"payload": payload,
+	msg := events.WsEvent{
+		Type:    eventType,
+		Payload: payload,
 	}
 
 	bytes, err := json.Marshal(msg)
@@ -284,6 +300,8 @@ func (s *UserSession) Broadcast(eventType string, payload any) {
 		return
 	}
 
+	s.Mutex.RLock()
+	defer s.Mutex.RUnlock()
 	for _, ws := range s.WebSockets {
 		s.wsMutex.Lock()
 		err := ws.WriteMessage(websocket.TextMessage, bytes)

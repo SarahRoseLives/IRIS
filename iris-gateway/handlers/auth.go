@@ -101,7 +101,7 @@ func LoginHandler(c *gin.Context) {
 	// MODIFIED: Use the new constructor function instead of a struct literal.
 	userSession := session.NewUserSession(req.Username)
 
-	// Connect to IRC, passing the userSession itself as the ChannelStateUpdater
+	// MODIFIED: Pass the entire userSession object, which also satisfies the ChannelStateUpdater interface.
 	client, err := irc.AuthenticateWithNickServ(req.Username, req.Password, clientIP, userSession)
 	if err != nil {
 		log.Printf("IRC login failed for user %s: %v", req.Username, err)
@@ -110,12 +110,10 @@ func LoginHandler(c *gin.Context) {
 	}
 
 	log.Printf("[SESSION] IRC pointer for user %s: %p", req.Username, client)
-
 	userSession.IRC = client
 
 	defaultChannel := "#welcome"
 	client.Join(defaultChannel)
-
 	userSession.AddChannelToSession(defaultChannel)
 	log.Printf("[LoginHandler] Immediately added %s to session for user %s", defaultChannel, userSession.Username)
 

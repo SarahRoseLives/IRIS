@@ -1,4 +1,3 @@
-// lib/services/websocket_service.dart
 import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -39,7 +38,6 @@ class WebSocketService {
   final StreamController<Map<String, dynamic>> _initialStateController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get initialStateStream => _initialStateController.stream;
 
-
   final StreamController<String> _errorController = StreamController<String>.broadcast();
   Stream<String> get errorStream => _errorController.stream;
 
@@ -67,6 +65,14 @@ class WebSocketService {
       _ws!.ready.then((_) {
         _statusController.add(WebSocketStatus.connected);
         print("[WebSocketService] Connected successfully to: $uri");
+
+        // NEW: Restore state after reconnect (optional, can be customized)
+        _ws!.sink.add(jsonEncode({
+          'type': 'restore_state',
+          'payload': {
+            'channels': _currentChannels,
+          }
+        }));
       }).catchError((e) {
         print("[WebSocketService] Initial connection error: $e");
         if (_isUnauthorized(e.toString())) {
@@ -93,11 +99,16 @@ class WebSocketService {
 
         switch (event['type']) {
           case 'initial_state':
-            // MODIFICATION: The payload now contains a map of full channel objects.
-            // We pass this entire map to the ViewModel to handle the logic.
-            final Map<String, dynamic> receivedChannelsMap = payload['channels'] as Map<String, dynamic>? ?? {};
-            _initialStateController.add(receivedChannelsMap);
-            print("[WebSocketService] Forwarded initial state payload with ${receivedChannelsMap.keys.length} channels.");
+            // ENHANCED: Forward the entire payload including channels and users for full state restoration.
+            if (payload is Map<String, dynamic>) {
+              final channels = payload['channels'] as Map<String, dynamic>? ?? {};
+              final users = payload['users'] as Map<String, dynamic>? ?? {};
+              _initialStateController.add({
+                'channels': channels,
+                'users': users,
+              });
+              print("[WebSocketService] Forwarded initial state payload with ${channels.keys.length} channels and ${users.keys.length} users.");
+            }
             break;
           case 'channel_join':
             final String channelName = payload['name'];
@@ -175,6 +186,8 @@ class WebSocketService {
           _currentWsStatus != WebSocketStatus.connected &&
           _currentWsStatus != WebSocketStatus.unauthorized) {
         print("[WebSocketService] Attempting to reconnect...");
+        // Only clear necessary state; preserve messages in the ViewModel.
+        // _currentChannels.clear(); // If you want to clear channels, do so here.
         connect(_token!);
       }
     });

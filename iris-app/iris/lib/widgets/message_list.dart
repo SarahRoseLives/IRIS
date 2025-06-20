@@ -1,12 +1,11 @@
-// lib/widgets/message_list.dart
 import 'package:flutter/material.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
 import '../models/channel.dart'; // Import the Message class
+import '../config.dart'; // Needed for apiHost and apiPort
 import 'link_preview.dart';
 
 class MessageList extends StatelessWidget {
-  // MODIFIED: This now accepts a list of strongly-typed Message objects.
   final List<Message> messages;
   final ScrollController scrollController;
   final Map<String, String> userAvatars;
@@ -33,7 +32,6 @@ class MessageList extends StatelessWidget {
       padding: const EdgeInsets.all(16.0),
       itemCount: messages.length,
       itemBuilder: (context, idx) {
-        // MODIFIED: Use the Message object directly.
         final message = messages[idx];
         final String? displayAvatarUrl = _getDisplayAvatarUrl(message.from);
 
@@ -64,7 +62,7 @@ class MessageList extends StatelessWidget {
                     Row(
                       children: [
                         Text(
-                          message.from, // Use message property
+                          message.from,
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.bold,
@@ -72,18 +70,12 @@ class MessageList extends StatelessWidget {
                         ),
                         const SizedBox(width: 8),
                         Text(
-                          // Format the DateTime object from the message
                           '${message.time.hour.toString().padLeft(2, '0')}:${message.time.minute.toString().padLeft(2, '0')}',
                           style: const TextStyle(color: Colors.white54, fontSize: 12),
                         ),
                       ],
                     ),
-                    RichText(
-                      text: TextSpan(
-                        children: _buildMessageSpans(message.content), // Use message property
-                        style: const TextStyle(color: Colors.white, fontSize: 16),
-                      ),
-                    ),
+                    _buildMessageContent(message.content),
                     ..._extractLinks(message.content).map((url) => LinkPreview(url: url)),
                   ],
                 ),
@@ -94,6 +86,66 @@ class MessageList extends StatelessWidget {
       },
     );
   }
+
+Widget _buildMessageContent(String content) {
+  // Check if this is an image URL by extension
+  final isImageUrl = content.toLowerCase().endsWith('.jpg') ||
+                     content.toLowerCase().endsWith('.jpeg') ||
+                     content.toLowerCase().endsWith('.png') ||
+                     content.toLowerCase().endsWith('.gif');
+
+  if (isImageUrl) {
+    print("[MessageList] Loading image from URL: $content");
+    return GestureDetector(
+      onTap: () {
+        // Could expand to show in full screen
+      },
+      child: Container(
+        margin: const EdgeInsets.only(top: 8),
+        constraints: const BoxConstraints(maxHeight: 200),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(8),
+          child: Image.network(
+            content,
+            fit: BoxFit.cover,
+            loadingBuilder: (context, child, loadingProgress) {
+              if (loadingProgress == null) return child;
+              return Center(
+                child: CircularProgressIndicator(
+                  value: loadingProgress.expectedTotalBytes != null
+                      ? loadingProgress.cumulativeBytesLoaded /
+                          loadingProgress.expectedTotalBytes!
+                      : null,
+                ),
+              );
+            },
+            errorBuilder: (context, error, stackTrace) {
+              print("[MessageList] Error loading image: $error");
+              // If image fails to load, show the URL as text
+              return Container(
+                padding: EdgeInsets.all(8),
+                child: Text(content,
+                  style: TextStyle(color: Colors.white70)),
+              );
+            },
+          ),
+        ),
+      ),
+    );
+  }
+
+  // Regular text message (may include code blocks)
+  return RichText(
+    text: TextSpan(
+      children: _buildMessageSpans(content),
+      style: const TextStyle(color: Colors.white, fontSize: 16),
+    ),
+  );
+}
 
   List<String> _extractLinks(String text) {
     final regex = RegExp(r'(https?:\/\/[^\s]+)', caseSensitive: false);

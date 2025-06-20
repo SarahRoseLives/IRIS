@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	"iris-gateway/events"
+	// "iris-gateway/events" // No longer needed here
 	"iris-gateway/session"
 )
 
@@ -39,7 +39,8 @@ func JoinChannelHandler(c *gin.Context) {
 
 	sess.IRC.Join(req.Channel)
 
-	events.SendEvent("channel_join", map[string]string{
+	// MODIFIED: Use the session's Broadcast method instead of the old events.SendEvent
+	sess.Broadcast("channel_join", map[string]string{
 		"name": req.Channel,
 		"user": sess.Username,
 	})
@@ -74,7 +75,8 @@ func PartChannelHandler(c *gin.Context) {
 
 	sess.IRC.Part(req.Channel)
 
-	events.SendEvent("channel_part", map[string]string{
+	// MODIFIED: Use the session's Broadcast method instead of the old events.SendEvent
+	sess.Broadcast("channel_part", map[string]string{
 		"name": req.Channel,
 		"user": sess.Username,
 	})
@@ -104,7 +106,6 @@ func ListChannelsHandler(c *gin.Context) {
 		sess,
 	)
 
-	// MODIFIED: The channelInfo struct to include the new member format.
 	type channelInfo struct {
 		Name       string                  `json:"name"`
 		LastUpdate time.Time               `json:"last_update"`
@@ -116,7 +117,7 @@ func ListChannelsHandler(c *gin.Context) {
 		channels = append(channels, channelInfo{
 			Name:       ch.Name,
 			LastUpdate: ch.LastUpdate,
-			Members:    ch.Members, // This now contains Nick and Prefix for each member
+			Members:    ch.Members,
 		})
 	}
 	sess.Mutex.RUnlock()

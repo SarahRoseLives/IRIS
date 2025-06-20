@@ -1,9 +1,10 @@
-// lib/viewmodels/main_layout_viewmodel.dart
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:iris/services/notification_service.dart';
 import 'package:get_it/get_it.dart';
 
@@ -22,11 +23,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   int _selectedChannelIndex = 0;
   bool _showLeftDrawer = false;
   bool _showRightDrawer = false;
-  bool _loadingChannels = true; // Still true initially
+  bool _loadingChannels = true;
   String? _channelError;
   String? _token;
 
-  // MODIFIED: This map now stores Message objects instead of generic Maps.
   final Map<String, List<Message>> _channelMessages = {};
 
   final TextEditingController _msgController = TextEditingController();
@@ -70,7 +70,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     return [];
   }
 
-  // MODIFIED: This now returns the new Message objects.
   List<Message> get currentChannelMessages {
     final target = selectedConversationTarget.toLowerCase();
     return _channelMessages[target] ?? [];
@@ -85,28 +84,105 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.addObserver(this);
 
     _listenToWebSocketStatus();
-    _listenToInitialState(); // NEW: Listen for the full initial state.
-    _listenToWebSocketChannels(); // Still useful for join/part updates.
+    _listenToInitialState();
+    _listenToWebSocketChannels();
     _listenToWebSocketMessages();
     _listenToMembersUpdate();
     _listenToWebSocketErrors();
 
     if (_token != null) {
-      // REMOVED: _fetchChannels() is no longer called here.
       _connectWebSocket();
       _loadAvatarForUser(username);
       _initNotifications();
+      _loadPersistedMessages();
     } else {
       _handleLogout();
     }
   }
 
+  // --- IMAGE ATTACHMENT UPLOAD ---
+  Future<void> uploadAttachment(String filePath) async {
+    print('[ViewModel] Starting attachment upload from $filePath');
+    try {
+      final file = File(filePath);
+      final fileName = file.path.split('/').last;
+      final mimeType = _getMimeType(fileName);
+
+      final request = http.MultipartRequest(
+        'POST',
+        Uri.parse('http://$apiHost:$apiPort/api/upload-attachment'),
+      );
+      request.headers['Authorization'] = 'Bearer $_token';
+      request.files.add(await http.MultipartFile.fromPath(
+        'file',
+        file.path,
+        contentType: mimeType != null ? MediaType.parse(mimeType) : null,
+      ));
+
+
+      final response = await request.send();
+      final responseBody = await response.stream.bytesToString();
+      final jsonResponse = json.decode(responseBody);
+
+      if (response.statusCode == 200 && jsonResponse['success'] == true) {
+        final imageUrl = jsonResponse['url'];
+        final fullImageUrl = 'http://$apiHost:$apiPort$imageUrl';
+
+        // Add the message to local display immediately
+        final currentConversation = selectedConversationTarget;
+        final sentMessage = Message(
+          from: username,
+          content: fullImageUrl,
+          time: DateTime.now(),
+          id: DateTime.now().millisecondsSinceEpoch.toString(),
+        );
+        _addMessageToDisplay(currentConversation.toLowerCase(), sentMessage);
+        print('[ViewModel] Added local message with URL: $fullImageUrl');
+        notifyListeners();
+
+        // Then send via WebSocket
+        final target = currentConversation.startsWith('@')
+            ? currentConversation.substring(1)
+            : currentConversation;
+        _webSocketService.sendMessage(target, fullImageUrl);
+        print('[ViewModel] Sent attachment via WebSocket to $target');
+      } else {
+        _addInfoMessageToCurrentChannel(
+            'Failed to upload attachment: ${jsonResponse['message'] ?? 'Unknown error'}');
+      }
+    } catch (e) {
+      _addInfoMessageToCurrentChannel('Attachment upload failed: $e');
+    }
+  }
+
+  String? _getMimeType(String filename) {
+    final ext = filename.split('.').last.toLowerCase();
+    switch (ext) {
+      case 'jpg':
+      case 'jpeg':
+        return 'image/jpeg';
+      case 'png':
+        return 'image/png';
+      case 'gif':
+        return 'image/gif';
+      default:
+        return null;
+    }
+  }
+
   // --- WEBSOCKET LISTENERS ---
 
-  /// NEW: Handles the 'initial_state' event which contains all channels, members, and message history.
   void _listenToInitialState() {
-    _webSocketService.initialStateStream.listen((channelsPayload) {
-      print("[ViewModel] Received initial state with ${channelsPayload.keys.length} channels.");
+    _webSocketService.initialStateStream.listen((payload) {
+      final channelsPayload = payload['channels'] as Map<String, dynamic>;
+      final usersPayload = payload['users'] as Map<String, dynamic>;
+
+      // Preserve existing messages for channels we already have
+      final Map<String, List<Message>> preservedMessages = {};
+      for (final entry in _channelMessages.entries) {
+        preservedMessages[entry.key] = List<Message>.from(entry.value);
+      }
+
       _channels.clear();
       _channelMessages.clear();
 
@@ -114,21 +190,23 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         final channel = Channel.fromJson(channelData as Map<String, dynamic>);
         _channels.add(channel);
 
-        // Populate messages for this channel
         final key = channel.name.toLowerCase();
-        _channelMessages[key] = channel.messages;
+        _channelMessages[key] = preservedMessages[key] ?? channel.messages;
 
-        // Load avatars for all members in the channel
         for (var member in channel.members) {
           _loadAvatarForUser(member.nick);
         }
-        // Load avatars for all message senders in the history
         for (var message in channel.messages) {
-           _loadAvatarForUser(message.from);
+          _loadAvatarForUser(message.from);
         }
       });
 
-      // Sort channels for consistent display
+      usersPayload.forEach((username, avatarUrl) {
+        if (avatarUrl != null && avatarUrl is String) {
+          _userAvatars[username] = avatarUrl;
+        }
+      });
+
       _channels.sort((a, b) => a.name.compareTo(b.name));
 
       if (_selectedChannelIndex >= _channels.length) {
@@ -139,6 +217,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _channelError = null;
       notifyListeners();
       _scrollToBottom();
+
+      _persistMessages();
     });
   }
 
@@ -154,15 +234,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void _listenToWebSocketChannels() {
     _webSocketService.channelsStream.listen((channels) async {
-       // This stream is now primarily for real-time join/part updates.
-       // We can trigger a full refresh to keep it simple.
-       await _fetchChannelsList();
+      await _fetchChannelsList();
     });
   }
 
   void _listenToWebSocketMessages() {
     _webSocketService.messageStream.listen((message) {
-      print("[ViewModel] Received message: ${message['text']}");
       String channelName = (message['channel_name'] ?? '').toLowerCase();
       final String sender = message['sender'] ?? 'Unknown';
       final bool isPrivateMessage = !channelName.startsWith('#');
@@ -180,26 +257,27 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       }
 
       final newMessage = Message.fromJson({
-          'from': sender,
-          'content': message['text'] ?? '',
-          'time': message['time'] ?? DateTime.now().toIso8601String(),
-          'id': message['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        'from': sender,
+        'content': message['text'] ?? '',
+        'time': message['time'] ?? DateTime.now().toIso8601String(),
+        'id': message['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
       });
 
       _addMessageToDisplay(conversationTarget.toLowerCase(), newMessage);
       _loadAvatarForUser(sender);
       notifyListeners();
+
+      _persistMessages();
     });
   }
 
- void _listenToMembersUpdate() {
+  void _listenToMembersUpdate() {
     _webSocketService.membersUpdateStream.listen((update) {
       final String channelName = update['channel_name'];
       final List<ChannelMember> newMembers = update['members'];
       try {
         final channel = _channels.firstWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
         channel.members = newMembers;
-        print("Updated members for $channelName. New count: ${newMembers.length}");
         notifyListeners();
       } catch (e) {
         print("Received member update for an unknown channel: $channelName");
@@ -215,15 +293,13 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   // --- DATA FETCHING & STATE MANAGEMENT ---
 
-  /// Fetches only the list of channels, without messages. Used after join/part.
   Future<void> _fetchChannelsList() async {
     _loadingChannels = true;
     notifyListeners();
     try {
       final freshChannels = await _apiService.fetchChannels();
-      // This is a naive update. A more sophisticated one would merge lists.
       _channels = freshChannels;
-       if (_selectedChannelIndex >= _channels.length) {
+      if (_selectedChannelIndex >= _channels.length) {
         _selectedChannelIndex = 0;
       }
       _channelError = null;
@@ -238,11 +314,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   void _addMessageToDisplay(String channelNameKey, Message newMessage) {
     final key = channelNameKey.toLowerCase();
     _channelMessages.putIfAbsent(key, () => []);
-
-    // Prevent duplicate messages from being added
-    if (_channelMessages[key]!.every((m) => m.id != newMessage.id)) {
-        _channelMessages[key]!.add(newMessage);
-        _scrollToBottom();
+    // Only add if message doesn't already exist
+    if (!_channelMessages[key]!.any((m) => m.id == newMessage.id)) {
+      _channelMessages[key]!.add(newMessage);
+      _scrollToBottom();
+      notifyListeners();
+      _persistMessages();
     }
   }
 
@@ -273,42 +350,32 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     final currentConversation = selectedConversationTarget;
     String target = currentConversation.startsWith('@') ? currentConversation.substring(1) : currentConversation;
 
-    // Add message to UI immediately for responsiveness
     final sentMessage = Message(
-        from: username,
-        content: text,
-        time: DateTime.now(),
-        id: DateTime.now().millisecondsSinceEpoch.toString(), // Temporary ID
+      from: username,
+      content: text,
+      time: DateTime.now(),
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
     );
     _addMessageToDisplay(currentConversation.toLowerCase(), sentMessage);
-    notifyListeners();
 
     try {
       _webSocketService.sendMessage(target, text);
     } catch (e) {
-        _addInfoMessageToCurrentChannel('Failed to send message: ${e.toString().replaceFirst('Exception: ', '')}');
+      _addInfoMessageToCurrentChannel('Failed to send message: ${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 
-  /// NEW (FIX): Add the missing method to handle notification taps.
   void handleNotificationTap(String channelName, String messageId) {
-    print("[ViewModel] Notification tapped: Navigating to channel $channelName");
-
-    // Ensure the channel exists if it's a DM, create it if not.
     if (channelName.startsWith('@') && _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase()) == -1) {
       _channels.add(Channel(name: channelName, members: [], messages: []));
       _channels.sort((a, b) => a.name.compareTo(b.name));
     }
-
     final int targetIndex = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
-
     if (targetIndex != -1) {
       _selectedChannelIndex = targetIndex;
-      // Close drawers for a better user experience on tap.
       _showLeftDrawer = false;
       _showRightDrawer = false;
       notifyListeners();
-      // After the UI updates, scroll to the bottom (or specific message if implemented).
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _scrollToBottom();
       });
@@ -333,6 +400,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     print("AppLifecycleState changed: $state");
     _isAppFocused = state == AppLifecycleState.resumed;
+
+    if (state == AppLifecycleState.paused) {
+      _persistMessages();
+    } else if (state == AppLifecycleState.resumed) {
+      _connectWebSocket();
+    }
   }
 
   void _connectWebSocket() {
@@ -373,7 +446,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _loadAvatarForUser(String username) async {
     if (username.isEmpty || _userAvatars.containsKey(username)) return;
 
-    _userAvatars[username] = ''; // Mark as checked
+    _userAvatars[username] = '';
 
     final List<String> possibleExtensions = ['.png', '.jpg', '.jpeg', '.gif'];
     String? foundUrl;
@@ -387,7 +460,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           break;
         }
       } catch (e) {
-        // Suppress errors for non-existent avatars
       }
     }
     if (foundUrl != null) {
@@ -404,7 +476,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         time: DateTime.now(),
         id: DateTime.now().millisecondsSinceEpoch.toString());
     _addMessageToDisplay(currentChannel.toLowerCase(), infoMessage);
-    notifyListeners();
   }
 
   Future<void> _handleCommand(String commandText) async {
@@ -434,12 +505,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
             await _fetchChannelsList();
           }
           break;
-        // ... Other commands
         default:
-         _addInfoMessageToCurrentChannel('Unknown command: /$command. Type /help for a list of commands.');
+          _addInfoMessageToCurrentChannel('Unknown command: /$command. Type /help for a list of commands.');
       }
     } catch (e) {
-       _addInfoMessageToCurrentChannel('Failed to execute /$command: ${e.toString().replaceFirst('Exception: ', '')}');
+      _addInfoMessageToCurrentChannel('Failed to execute /$command: ${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
 
@@ -448,6 +518,34 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     final fcmToken = await notificationService.getFCMToken();
     if (fcmToken != null) {
       await _apiService.registerFCMToken(fcmToken);
+    }
+  }
+
+  // --- MESSAGE PERSISTENCE ---
+
+  Future<void> _persistMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final messagesToSave = <String, dynamic>{};
+    _channelMessages.forEach((channel, messages) {
+      messagesToSave[channel] = messages.map((m) => m.toMap()).toList();
+    });
+    await prefs.setString('cached_messages', json.encode(messagesToSave));
+  }
+
+  Future<void> _loadPersistedMessages() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString('cached_messages');
+    if (saved != null) {
+      try {
+        final messagesMap = json.decode(saved) as Map<String, dynamic>;
+        messagesMap.forEach((channel, messages) {
+          final messageList = (messages as List).map((m) => Message.fromJson(m)).toList();
+          _channelMessages[channel] = messageList;
+        });
+        notifyListeners();
+      } catch (e) {
+        print('Error loading persisted messages: $e');
+      }
     }
   }
 
