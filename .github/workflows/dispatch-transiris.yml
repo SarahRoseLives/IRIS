@@ -17,4 +17,4 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             -H "Authorization: Bearer $GH_TOKEN" \
             https://api.github.com/repos/TransIRC/TransIRIS/dispatches \
-            -d '{"event_type":"build_apk","client_payload":{"tag":"${GITHUB_REF#refs/tags/}"}}'
+            -d "{\"event_type\":\"build_apk\",\"client_payload\":{\"tag\":\"${GITHUB_REF#refs/tags/}\"}}"
