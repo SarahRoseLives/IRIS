@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
-	// "iris-gateway/events" // No longer needed here
 	"iris-gateway/session"
 )
 
@@ -36,10 +34,8 @@ func JoinChannelHandler(c *gin.Context) {
 	}
 
 	sess.AddChannelToSession(req.Channel)
-
 	sess.IRC.Join(req.Channel)
 
-	// MODIFIED: Use the session's Broadcast method instead of the old events.SendEvent
 	sess.Broadcast("channel_join", map[string]string{
 		"name": req.Channel,
 		"user": sess.Username,
@@ -72,10 +68,8 @@ func PartChannelHandler(c *gin.Context) {
 	}
 
 	sess.RemoveChannelFromSession(req.Channel)
-
 	sess.IRC.Part(req.Channel)
 
-	// MODIFIED: Use the session's Broadcast method instead of the old events.SendEvent
 	sess.Broadcast("channel_part", map[string]string{
 		"name": req.Channel,
 		"user": sess.Username,
@@ -125,64 +119,5 @@ func ListChannelsHandler(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success":  true,
 		"channels": channels,
-	})
-}
-
-// GET /api/channels/:channelName/messages
-func GetChannelMessagesHandler(c *gin.Context) {
-	channelName := c.Param("channelName")
-	if channelName == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "Channel name required"})
-		return
-	}
-
-	token, ok := getToken(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Missing token"})
-		return
-	}
-
-	sess, found := session.GetSession(token)
-	if !found {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Invalid session"})
-		return
-	}
-
-	normalizedChannelName := strings.ToLower(channelName)
-
-	sess.Mutex.RLock()
-	channelState, exists := sess.Channels[normalizedChannelName]
-	sess.Mutex.RUnlock()
-
-	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": fmt.Sprintf("Channel '%s' not found", channelName)})
-		return
-	}
-
-	messages := channelState.GetMessages()
-
-	fmt.Printf("[GetChannelMessagesHandler] Channel '%s' has %d messages.\n", channelName, len(messages))
-	for i, msg := range messages {
-		if i < 5 {
-			fmt.Printf("  Message %d: From='%s', Content='%s', Time='%s'\n", i, msg.From, msg.Content, msg.Time.Format(time.RFC3339))
-		} else if i == 5 {
-			fmt.Printf("  ... (and %d more messages)\n", len(messages)-5)
-		}
-	}
-
-	var responseMessages []map[string]interface{}
-	for _, msg := range messages {
-		responseMessages = append(responseMessages, map[string]interface{}{
-			"from":    msg.From,
-			"content": msg.Content,
-			"time":    msg.Time.Format(time.RFC3339),
-		})
-	}
-
-	fmt.Printf("[GetChannelMessagesHandler] Sending JSON response for '%s': success=true, messages_count=%d\n", channelName, len(responseMessages))
-
-	c.JSON(http.StatusOK, gin.H{
-		"success":  true,
-		"messages": responseMessages,
 	})
 }

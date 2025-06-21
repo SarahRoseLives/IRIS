@@ -1,5 +1,3 @@
-// lib/models/channel.dart
-
 import 'channel_member.dart';
 
 /// Represents a single chat message.
@@ -40,31 +38,25 @@ class Message {
   }
 }
 
-/// Represents an IRC channel, including its members and message history.
+/// Represents an IRC channel, including its members.
+/// NOTE: messages list is removed; message history is managed elsewhere.
 class Channel {
   final String name;
   List<ChannelMember> members;
-  List<Message> messages; // MODIFIED: This now holds a list of Message objects.
 
   Channel({
     required this.name,
     required this.members,
-    required this.messages, // MODIFIED: Added to constructor.
   });
 
-  /// MODIFIED: Updated fromJson factory to parse the full channel state,
-  /// including the list of messages.
+  /// Updated fromJson factory to parse the channel members only.
   factory Channel.fromJson(Map<String, dynamic> json) {
     var memberList = json['members'] as List? ?? [];
     List<ChannelMember> members = memberList.map((i) => ChannelMember.fromJson(i)).toList();
 
-    var messageList = json['messages'] as List? ?? [];
-    List<Message> messages = messageList.map((m) => Message.fromJson(m)).toList();
-
     return Channel(
       name: json['name'] ?? '',
       members: members,
-      messages: messages, // Assign the parsed messages.
     );
   }
 }

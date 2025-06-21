@@ -20,7 +20,6 @@ type IRCClient = ircevent.Connection
 type ChannelStateUpdater interface {
 	AddChannelToSession(channelName string)
 	RemoveChannelFromSession(channelName string)
-	AddMessageToChannel(channelName, sender, messageContent string)
 	AccumulateChannelMembers(channelName string, members []string)
 	FinalizeChannelMembers(channelName string)
 }
@@ -152,50 +151,31 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		})
 	})
 
+	// PRIVMSG callback for regular and image messages
 	connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
 		target := e.Arguments[0]
 		messageContent := e.Arguments[1]
 		sender := e.Nick
-		log.Printf("[IRC] Message from %s in %s: %s\n", sender, target, messageContent)
 
 		// --- IMAGE LINK PATCH START ---
-		// If the message contains an image URL from our server, convert it to a full link
 		if strings.Contains(messageContent, "/images/") {
 			parts := strings.Split(messageContent, "/images/")
 			if len(parts) > 1 {
 				imageName := parts[1]
-				// TODO: Set your real domain here; for now, just use the pattern
 				messageContent = fmt.Sprintf("[image] https://yourdomain.com/images/%s", imageName)
 			}
 		}
 		// --- IMAGE LINK PATCH END ---
 
-		// Note: For a PM, the 'target' is the recipient's nick. For a channel, it's the channel name.
-		// The client will need to differentiate.
-		normalizedTarget := strings.ToLower(target)
-		isChannelMessage := strings.HasPrefix(target, "#")
-
-		if isChannelMessage {
-			// Store message in the channel's history
-			userSession.AddMessageToChannel(normalizedTarget, sender, messageContent)
-		} else {
-			// For PMs, we might want to store them in a special "channel" state as well, e.g., using the sender's name as the key
-			// This allows PM history to be persisted just like channel history.
-			// Let's assume the "channel" for a PM is the sender's name.
-			pmChannelKey := strings.ToLower(sender)
-			userSession.AddChannelToSession(pmChannelKey) // Ensures a state object exists for this PM
-			userSession.AddMessageToChannel(pmChannelKey, sender, messageContent)
-		}
-
 		// Broadcast the message via WebSocket to the user's active client(s).
-		// This now handles both channel messages and private messages for ONLINE users.
 		userSession.Broadcast("message", map[string]string{
-			"channel_name": normalizedTarget, // Client uses this to know where to put the message
+			"channel_name": strings.ToLower(target),
 			"sender":       sender,
 			"text":         messageContent,
 		})
 
 		// --- PUSH NOTIFICATION LOGIC (For OFFLINE users) ---
+		isChannelMessage := strings.HasPrefix(target, "#")
 		if isChannelMessage {
 			// Logic for sending push notifications for channel mentions
 			session.ForEachSession(func(s *session.UserSession) {
@@ -219,7 +199,7 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 				}
 			})
 		} else {
-			// RESTORED: Logic for sending push notifications for private messages
+			// Logic for sending push notifications for private messages
 			recipientUsername := target
 			if recipientUsername != "" {
 				token, found := session.FindSessionTokenByUsername(recipientUsername)
@@ -233,8 +213,8 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 					log.Printf("[Push] User %s is offline, sending push notification for PM.", recipientUsername)
 					err := push.SendPushNotification(
 						recipientSession.FCMToken,
-						fmt.Sprintf("New message from %s", sender), // Title
-						messageContent,                             // Body
+						fmt.Sprintf("New message from %s", sender),
+						messageContent,
 						map[string]string{
 							"sender": sender,
 							"type":   "private_message",
@@ -246,6 +226,27 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 				} else if recipientSession != nil && recipientSession.IsActive() {
 					log.Printf("[Push] User %s is online, skipping PM push notification.", recipientUsername)
 				}
+			}
+		}
+	})
+
+	// PRIVMSG callback for IRC history responses
+	connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
+		// Check if this is a history response (assuming server formats them with a prefix)
+		if strings.HasPrefix(e.Arguments[1], "[History]") {
+			parts := strings.SplitN(e.Arguments[1], " ", 3)
+			if len(parts) >= 3 {
+				channel := e.Arguments[0]
+				timestamp := parts[1]
+				message := parts[2]
+
+				// Broadcast as historical message
+				userSession.Broadcast("history_message", map[string]string{
+					"channel_name": strings.ToLower(channel),
+					"sender":       e.Nick,
+					"text":         message,
+					"timestamp":    timestamp,
+				})
 			}
 		}
 	})

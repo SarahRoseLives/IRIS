@@ -1,4 +1,3 @@
-// session/session.go
 package session
 
 import (
@@ -10,8 +9,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	ircevent "github.com/thoj/go-ircevent"
-	"iris-gateway/config"
 	"iris-gateway/events"
+	"iris-gateway/config"
 )
 
 // ChannelMember struct holds the nickname and their IRC status prefix.
@@ -20,40 +19,21 @@ type ChannelMember struct {
 	Prefix string `json:"prefix"`
 }
 
-type Message struct {
-	From    string    `json:"from"`
-	Content string    `json:"content"`
-	Time    time.Time `json:"time"`
-}
-
 type ChannelState struct {
 	Name       string          `json:"name"`
 	Members    []ChannelMember `json:"members"`
-	Messages   []Message       `json:"messages"`
 	LastUpdate time.Time       `json:"last_update"`
 	Topic      string          `json:"topic"`
-	msgMutex   sync.Mutex
+	mutex      sync.Mutex
 }
 
-func (cs *ChannelState) AddMessage(msg Message) {
-	cs.msgMutex.Lock()
-	defer cs.msgMutex.Unlock()
-
-	cs.Messages = append(cs.Messages, msg)
-	if len(cs.Messages) > config.Cfg.MaxHistoryLines {
-		cs.Messages = cs.Messages[len(cs.Messages)-config.Cfg.MaxHistoryLines:]
+// NewUserSession initializes a UserSession.
+func NewUserSession(username string) *UserSession {
+	return &UserSession{
+		Username:     username,
+		Channels:     make(map[string]*ChannelState),
+		pendingNames: make(map[string][]string),
 	}
-	cs.LastUpdate = time.Now()
-	log.Printf("[ChannelState.AddMessage] Added msg for '%s' (ptr: %p). Current messages count: %d. Last msg: '%s'",
-		cs.Name, cs, len(cs.Messages), msg.Content)
-}
-
-func (cs *ChannelState) GetMessages() []Message {
-	cs.msgMutex.Lock()
-	defer cs.msgMutex.Unlock()
-	messagesCopy := make([]Message, len(cs.Messages))
-	copy(messagesCopy, cs.Messages)
-	return messagesCopy
 }
 
 type UserSession struct {
@@ -67,28 +47,6 @@ type UserSession struct {
 	WebSockets   []*websocket.Conn
 	wsMutex      sync.Mutex
 	Mutex        sync.RWMutex
-	// NEW: Flag to indicate if the session is still syncing initial history
-	isSyncing bool
-}
-
-// NEW: Constructor to initialize a UserSession with isSyncing set to true.
-func NewUserSession(username string) *UserSession {
-	return &UserSession{
-		Username:     username,
-		Channels:     make(map[string]*ChannelState),
-		pendingNames: make(map[string][]string),
-		isSyncing:    true, // Start in syncing state by default
-	}
-}
-
-// NEW: Method to set the syncing status in a thread-safe way.
-func (s *UserSession) SetSyncing(syncing bool) {
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
-	s.isSyncing = syncing
-	if !syncing {
-		log.Printf("[Session] User %s has completed initial history sync.", s.Username)
-	}
 }
 
 // IsActive checks if the user has any active WebSocket connections.
@@ -99,24 +57,22 @@ func (s *UserSession) IsActive() bool {
 }
 
 // AddChannelToSession adds or updates a channel's state in the user's session.
+// On join, it also requests history from the IRC server.
 func (s *UserSession) AddChannelToSession(channelName string) {
 	normalizedChannelName := strings.ToLower(channelName)
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 
 	if _, ok := s.Channels[normalizedChannelName]; !ok {
-		cs := &ChannelState{
+		s.Channels[normalizedChannelName] = &ChannelState{
 			Name:       normalizedChannelName,
 			Members:    []ChannelMember{},
-			Messages:   []Message{},
 			LastUpdate: time.Now(),
 		}
-		s.Channels[normalizedChannelName] = cs
-		log.Printf("[Session.AddChannelToSession] User %s added new channel '%s' (ptr: %p). Total channels: %d",
-			s.Username, normalizedChannelName, cs, len(s.Channels))
-	} else {
-		log.Printf("[Session.AddChannelToSession] User %s already has channel '%s' in session (ptr: %p). No new entry created.",
-			s.Username, normalizedChannelName, s.Channels[normalizedChannelName])
+		log.Printf("[Session.AddChannelToSession] User %s added new channel '%s'", s.Username, normalizedChannelName)
+
+		// Request history when joining a channel
+		s.IRC.SendRawf("HISTORY %s %s", channelName, config.Cfg.HistoryDuration)
 	}
 }
 
@@ -126,9 +82,8 @@ func (s *UserSession) RemoveChannelFromSession(channelName string) {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 
-	if cs, ok := s.Channels[normalizedChannelName]; ok {
-		log.Printf("[Session.RemoveChannelFromSession] Removing channel '%s' (ptr: %p) for user %s. Messages count: %d",
-			normalizedChannelName, cs, s.Username, len(cs.Messages))
+	if _, ok := s.Channels[normalizedChannelName]; ok {
+		log.Printf("[Session.RemoveChannelFromSession] Removing channel '%s' for user %s.", normalizedChannelName, s.Username)
 		delete(s.Channels, normalizedChannelName)
 		log.Printf("[Session.RemoveChannelFromSession] User %s removed channel '%s' from session. Total channels: %d", s.Username, normalizedChannelName, len(s.Channels))
 	} else {
@@ -183,10 +138,10 @@ func (s *UserSession) FinalizeChannelMembers(channelName string) {
 	s.Mutex.Unlock()
 
 	if exists {
-		channelState.msgMutex.Lock()
+		channelState.mutex.Lock()
 		channelState.Members = parsedMembers
 		channelState.LastUpdate = time.Now()
-		channelState.msgMutex.Unlock()
+		channelState.mutex.Unlock()
 		log.Printf("[Session.FinalizeChannelMembers] Finalized %d members for channel '%s'", len(parsedMembers), normalizedChannelName)
 
 		go s.Broadcast("members_update", map[string]interface{}{
@@ -195,24 +150,6 @@ func (s *UserSession) FinalizeChannelMembers(channelName string) {
 		})
 	} else {
 		log.Printf("[Session.FinalizeChannelMembers] Channel '%s' not found in session.", normalizedChannelName)
-	}
-}
-
-// AddMessageToChannel adds a message to the specified channel's history in the session.
-func (s *UserSession) AddMessageToChannel(channelName, sender, messageContent string) {
-	normalizedChannelName := strings.ToLower(channelName)
-	s.Mutex.RLock()
-	channelState, exists := s.Channels[normalizedChannelName]
-	s.Mutex.RUnlock()
-
-	if exists {
-		channelState.AddMessage(Message{
-			From:    sender,
-			Content: messageContent,
-			Time:    time.Now(),
-		})
-	} else {
-		log.Printf("[Session.AddMessageToChannel] Attempted to add message to non-existent channel '%s'", normalizedChannelName)
 	}
 }
 
@@ -277,18 +214,7 @@ func (s *UserSession) RemoveWebSocket(conn *websocket.Conn) {
 	log.Printf("[Session.RemoveWebSocket] WebSocket removed for user '%s' (session_ptr: %p). WS count changed from %d to %d", s.Username, s, initialCount, len(s.WebSockets))
 }
 
-// MODIFIED: The Broadcast method now contains the sync check.
 func (s *UserSession) Broadcast(eventType string, payload any) {
-	s.Mutex.RLock()
-	// CRITICAL CHANGE: If the session is syncing, DO NOT broadcast real-time messages.
-	// The client will get these messages as part of the initial history dump.
-	if s.isSyncing && eventType == "message" {
-		log.Printf("[Session.Broadcast] Skipping message broadcast for user '%s' (syncing)", s.Username)
-		s.Mutex.RUnlock() // Release lock before returning
-		return
-	}
-	s.Mutex.RUnlock() // Release lock after check
-
 	msg := events.WsEvent{
 		Type:    eventType,
 		Payload: payload,

@@ -1,4 +1,3 @@
-// handlers/ws.go
 package handlers
 
 import (
@@ -49,41 +48,20 @@ func WebSocketHandler(c *gin.Context) {
 	}
 
 	sess.AddWebSocket(conn)
-	log.Printf("[WS] WebSocket connected for user %s (token: %s). Total WS for user: %d\n", sess.Username, token, len(sess.WebSockets))
+	log.Printf("[WS] WebSocket connected for user %s (token: %s)", sess.Username, token)
 
-	// Send initial state including full channel history upon connection.
-	sess.Mutex.RLock()
-	channelsPayload := make(map[string]*session.ChannelState)
-	for name, channelState := range sess.Channels {
-		messages := channelState.GetMessages()
-		channelsPayload[name] = &session.ChannelState{
-			Name:       channelState.Name,
-			Members:    channelState.Members,
-			Messages:   messages,
-			LastUpdate: channelState.LastUpdate,
-			Topic:      channelState.Topic,
-		}
-		log.Printf("[WS] Preparing initial state for channel '%s' with %d messages for user %s.", name, len(messages), sess.Username)
-	}
-	sess.Mutex.RUnlock()
-
-	// Send the comprehensive initial state to the newly connected client.
+	// Send welcome message only (no initial state or channel history)
 	err = conn.WriteJSON(events.WsEvent{
-		Type: "initial_state",
+		Type: "connected",
 		Payload: map[string]interface{}{
 			"message":  fmt.Sprintf("Connected to IRIS as %s", sess.Username),
 			"username": sess.Username,
 			"time":     time.Now().Format(time.RFC3339),
-			"channels": channelsPayload, // This payload now contains the full history for all channels.
 		},
 	})
 	if err != nil {
-		log.Printf("[WS] Error sending initial_state to %s: %v", sess.Username, err)
+		log.Printf("[WS] Error sending connected message to %s: %v", sess.Username, err)
 	}
-
-	// NEW: Once the initial state is sent, mark the session as fully synced.
-	// This signals that it can now receive real-time broadcasts.
-	sess.SetSyncing(false)
 
 	// Reader goroutine: continuously read messages from the client
 	go func() {

@@ -7,5 +7,12 @@ type WsEvent struct {
 	Payload interface{} `json:"payload"`
 }
 
-// All broadcasting and channel logic has been moved to the session package
-// to handle the sync state correctly and avoid circular import dependencies.
+// Define expected event types
+const (
+	EventTypeMessage        = "message"
+	EventTypeHistoryMessage = "history_message"
+	EventTypeChannelJoin    = "channel_join"
+	EventTypeChannelPart    = "channel_part"
+	EventTypeMembersUpdate  = "members_update"
+	EventTypeConnected      = "connected"
+)

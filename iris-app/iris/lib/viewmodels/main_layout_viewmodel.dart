@@ -57,10 +57,15 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _channels.where((c) => c.name.startsWith('@')).map((c) => c.name).toList();
 
   String get selectedConversationTarget {
+    if (_wsStatus != WebSocketStatus.connected) {
+      return _wsStatus == WebSocketStatus.connecting
+          ? "Connecting..."
+          : "Disconnected";
+    }
     if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length) {
       return _channels[_selectedChannelIndex].name;
     }
-    return _loadingChannels ? "Connecting..." : "No channels";
+    return _channels.isNotEmpty ? _channels[0].name : "No channels";
   }
 
   List<ChannelMember> get members {
@@ -119,7 +124,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         contentType: mimeType != null ? MediaType.parse(mimeType) : null,
       ));
 
-
       final response = await request.send();
       final responseBody = await response.stream.bytesToString();
       final jsonResponse = json.decode(responseBody);
@@ -177,12 +181,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final channelsPayload = payload['channels'] as Map<String, dynamic>;
       final usersPayload = payload['users'] as Map<String, dynamic>;
 
-      // Preserve existing messages for channels we already have
-      final Map<String, List<Message>> preservedMessages = {};
-      for (final entry in _channelMessages.entries) {
-        preservedMessages[entry.key] = List<Message>.from(entry.value);
-      }
-
       _channels.clear();
       _channelMessages.clear();
 
@@ -190,14 +188,14 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         final channel = Channel.fromJson(channelData as Map<String, dynamic>);
         _channels.add(channel);
 
-        final key = channel.name.toLowerCase();
-        _channelMessages[key] = preservedMessages[key] ?? channel.messages;
+        // Request history for each channel
+        if (channel.name.startsWith('#')) {
+          // Changed from sendRawMessage to sendHistoryRequest to fix gateway JSON requirement
+          _webSocketService.sendHistoryRequest(channel.name, "1d");
+        }
 
         for (var member in channel.members) {
           _loadAvatarForUser(member.nick);
-        }
-        for (var message in channel.messages) {
-          _loadAvatarForUser(message.from);
         }
       });
 
@@ -217,15 +215,21 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _channelError = null;
       notifyListeners();
       _scrollToBottom();
-
-      _persistMessages();
+    }).onError((e) {
+      // If initial state fails, still mark as loaded
+      _loadingChannels = false;
+      notifyListeners();
     });
   }
 
   void _listenToWebSocketStatus() {
     _webSocketService.statusStream.listen((status) {
       _wsStatus = status;
-      if (status == WebSocketStatus.unauthorized) {
+      if (status == WebSocketStatus.connected) {
+        // When connected, immediately set loading to false
+        _loadingChannels = false;
+        _channelError = null;
+      } else if (status == WebSocketStatus.unauthorized) {
         _handleLogout();
       }
       notifyListeners();
@@ -243,13 +247,14 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       String channelName = (message['channel_name'] ?? '').toLowerCase();
       final String sender = message['sender'] ?? 'Unknown';
       final bool isPrivateMessage = !channelName.startsWith('#');
+      final bool isHistory = message['is_history'] ?? false;
 
       String conversationTarget;
       if (isPrivateMessage) {
         final String conversationPartner = (sender.toLowerCase() == username.toLowerCase()) ? channelName : sender;
         conversationTarget = '@$conversationPartner';
         if (_channels.indexWhere((c) => c.name.toLowerCase() == conversationTarget.toLowerCase()) == -1) {
-          _channels.add(Channel(name: conversationTarget, members: [], messages: []));
+          _channels.add(Channel(name: conversationTarget, members: []));
           _channels.sort((a, b) => a.name.compareTo(b.name));
         }
       } else {
@@ -263,12 +268,38 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         'id': message['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
       });
 
-      _addMessageToDisplay(conversationTarget.toLowerCase(), newMessage);
+      if (isHistory) {
+        _prependMessageToDisplay(conversationTarget.toLowerCase(), newMessage);
+      } else {
+        _addMessageToDisplay(conversationTarget.toLowerCase(), newMessage);
+      }
+
       _loadAvatarForUser(sender);
       notifyListeners();
 
       _persistMessages();
     });
+  }
+
+  void _prependMessageToDisplay(String channelNameKey, Message newMessage) {
+    final key = channelNameKey.toLowerCase();
+    _channelMessages.putIfAbsent(key, () => []);
+    if (!_channelMessages[key]!.any((m) => m.id == newMessage.id)) {
+      _channelMessages[key]!.insert(0, newMessage);
+      notifyListeners();
+      _persistMessages();
+    }
+  }
+
+  void _addMessageToDisplay(String channelNameKey, Message newMessage) {
+    final key = channelNameKey.toLowerCase();
+    _channelMessages.putIfAbsent(key, () => []);
+    if (!_channelMessages[key]!.any((m) => m.id == newMessage.id)) {
+      _channelMessages[key]!.add(newMessage);
+      _scrollToBottom();
+      notifyListeners();
+      _persistMessages();
+    }
   }
 
   void _listenToMembersUpdate() {
@@ -311,18 +342,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  void _addMessageToDisplay(String channelNameKey, Message newMessage) {
-    final key = channelNameKey.toLowerCase();
-    _channelMessages.putIfAbsent(key, () => []);
-    // Only add if message doesn't already exist
-    if (!_channelMessages[key]!.any((m) => m.id == newMessage.id)) {
-      _channelMessages[key]!.add(newMessage);
-      _scrollToBottom();
-      notifyListeners();
-      _persistMessages();
-    }
-  }
-
   // --- USER ACTIONS ---
 
   void onChannelSelected(String channelName) => _selectConversation(channelName);
@@ -334,6 +353,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _selectedChannelIndex = index;
       _scrollToBottom();
       notifyListeners();
+
+      // Request history when joining a channel
+      if (conversationName.startsWith('#')) {
+        // Changed from sendRawMessage to sendHistoryRequest to fix gateway JSON requirement
+        _webSocketService.sendHistoryRequest(conversationName, "1d");
+      }
     }
   }
 
@@ -367,7 +392,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void handleNotificationTap(String channelName, String messageId) {
     if (channelName.startsWith('@') && _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase()) == -1) {
-      _channels.add(Channel(name: channelName, members: [], messages: []));
+      _channels.add(Channel(name: channelName, members: []));
       _channels.sort((a, b) => a.name.compareTo(b.name));
     }
     final int targetIndex = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
@@ -411,6 +436,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   void _connectWebSocket() {
     if (_token != null && (_wsStatus == WebSocketStatus.disconnected || _wsStatus == WebSocketStatus.error)) {
       _webSocketService.connect(_token!);
+      Future.delayed(const Duration(seconds: 5), () {
+        if (_loadingChannels && _wsStatus == WebSocketStatus.connected) {
+          _loadingChannels = false;
+          notifyListeners();
+        }
+      });
     }
   }
 

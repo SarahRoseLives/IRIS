@@ -24,7 +24,6 @@ class WebSocketService {
   final StreamController<WebSocketStatus> _statusController = StreamController<WebSocketStatus>.broadcast();
   Stream<WebSocketStatus> get statusStream => _statusController.stream;
 
-  // MODIFIED: This stream is no longer populated by 'initial_state'.
   final StreamController<List<String>> _channelsController = StreamController<List<String>>.broadcast();
   Stream<List<String>> get channelsStream => _channelsController.stream;
 
@@ -34,7 +33,6 @@ class WebSocketService {
   final StreamController<Map<String, dynamic>> _membersUpdateController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get membersUpdateStream => _membersUpdateController.stream;
 
-  // NEW: A stream to pass the entire initial state payload to the view model.
   final StreamController<Map<String, dynamic>> _initialStateController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get initialStateStream => _initialStateController.stream;
 
@@ -66,7 +64,6 @@ class WebSocketService {
         _statusController.add(WebSocketStatus.connected);
         print("[WebSocketService] Connected successfully to: $uri");
 
-        // NEW: Restore state after reconnect (optional, can be customized)
         _ws!.sink.add(jsonEncode({
           'type': 'restore_state',
           'payload': {
@@ -99,7 +96,6 @@ class WebSocketService {
 
         switch (event['type']) {
           case 'initial_state':
-            // ENHANCED: Forward the entire payload including channels and users for full state restoration.
             if (payload is Map<String, dynamic>) {
               final channels = payload['channels'] as Map<String, dynamic>? ?? {};
               final users = payload['users'] as Map<String, dynamic>? ?? {};
@@ -134,6 +130,16 @@ class WebSocketService {
               'time': payload['time'] ?? DateTime.now().toIso8601String(),
             });
             print("[WebSocketService] ADDED MESSAGE TO STREAM: ${payload['text']}");
+            break;
+          case 'history_message':
+            _messageController.add({
+              'channel_name': payload['channel_name'],
+              'sender': payload['sender'],
+              'text': payload['text'],
+              'time': payload['timestamp'] ?? DateTime.now().toIso8601String(),
+              'is_history': true,
+            });
+            print("[WebSocketService] ADDED HISTORY MESSAGE TO STREAM: ${payload['text']}");
             break;
           case 'members_update':
             final String channelName = payload['channel_name'];
@@ -186,8 +192,6 @@ class WebSocketService {
           _currentWsStatus != WebSocketStatus.connected &&
           _currentWsStatus != WebSocketStatus.unauthorized) {
         print("[WebSocketService] Attempting to reconnect...");
-        // Only clear necessary state; preserve messages in the ViewModel.
-        // _currentChannels.clear(); // If you want to clear channels, do so here.
         connect(_token!);
       }
     });
@@ -214,6 +218,35 @@ class WebSocketService {
     print("[WebSocketService] Sent message: $messageToSend");
   }
 
+  /// Send a history request for a channel in JSON format (recommended).
+  void sendHistoryRequest(String channelName, String duration) {
+    if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
+      _errorController.add("Cannot send history request: WebSocket not connected.");
+      print("[WebSocketService] Cannot send history request: WS not connected.");
+      return;
+    }
+    final historyReq = jsonEncode({
+      'type': 'history',
+      'payload': {
+        'channel_name': channelName,
+        'duration': duration,
+      },
+    });
+    _ws?.sink.add(historyReq);
+    print("[WebSocketService] Sent history request: $historyReq");
+  }
+
+  /// Deprecated: Use sendHistoryRequest for commands; only use for literal text if server expects it.
+  void sendRawMessage(String message) {
+    if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
+      _errorController.add("Cannot send raw message: WebSocket not connected.");
+      print("[WebSocketService] Cannot send raw message: WS not connected.");
+      return;
+    }
+    _ws?.sink.add(message);
+    print("[WebSocketService] Sent raw message: $message");
+  }
+
   void disconnect() {
     _ws?.sink.close();
     _reconnectTimer?.cancel();
@@ -227,7 +260,7 @@ class WebSocketService {
     _channelsController.close();
     _messageController.close();
     _membersUpdateController.close();
-    _initialStateController.close(); // NEW: Close the new controller.
+    _initialStateController.close();
     _errorController.close();
   }
 }
