@@ -3,6 +3,7 @@ package irc
 import (
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,13 @@ var (
 	historyMutex    sync.RWMutex
 	historyDuration = 7 * 24 * time.Hour // Default 7 days
 )
+
+// Helper function for mention detection (case-insensitive, word boundary, NO @ required)
+func mentionInMessage(username, text string) bool {
+	pattern := fmt.Sprintf(`(?i)\b%s\b`, regexp.QuoteMeta(username))
+	matched, _ := regexp.MatchString(pattern, text)
+	return matched
+}
 
 // Call this once at startup (from main.go)
 func InitGatewayBot() error {
@@ -63,7 +71,6 @@ func InitGatewayBot() error {
 		historyDuration = duration
 	}
 
-	// Set up callbacks
 	ircConn.AddCallback("001", func(e *ircevent.Event) {
 		log.Println("[Gateway] Connected to IRC server")
 	})
@@ -72,10 +79,6 @@ func InitGatewayBot() error {
 		channel := e.Arguments[0]
 		sender := e.Nick
 		messageContent := e.Arguments[1]
-
-		if !strings.HasPrefix(channel, "#") {
-			return // Gateway bot only handles channel messages for history and notifications
-		}
 
 		log.Printf("[Gateway] Logging message in %s from %s: %s", channel, sender, messageContent)
 
@@ -86,75 +89,95 @@ func InitGatewayBot() error {
 			Timestamp: time.Now(),
 		}
 
-		channelKey := strings.ToLower(channel) // normalize channel name for map key
-
-		historyMutex.Lock()
-		chHistory, exists := historyMap[channelKey]
-		if !exists {
-			chHistory = &ChannelHistory{
-				Messages: make([]Message, 0),
+		// History only for channels
+		if strings.HasPrefix(channel, "#") {
+			channelKey := strings.ToLower(channel)
+			historyMutex.Lock()
+			chHistory, exists := historyMap[channelKey]
+			if !exists {
+				chHistory = &ChannelHistory{
+					Messages: make([]Message, 0),
+				}
+				historyMap[channelKey] = chHistory
+				log.Printf("[Gateway] Created new history slice for channel: %s", channelKey)
 			}
-			historyMap[channelKey] = chHistory
-			log.Printf("[Gateway] Created new history slice for channel: %s", channelKey)
-		}
-		historyMutex.Unlock()
+			historyMutex.Unlock()
 
-		chHistory.mutex.Lock()
-		chHistory.Messages = append(chHistory.Messages, message)
-		log.Printf("[Gateway] Appended message to channel %s, total now: %d", channelKey, len(chHistory.Messages))
+			chHistory.mutex.Lock()
+			chHistory.Messages = append(chHistory.Messages, message)
+			log.Printf("[Gateway] Appended message to channel %s, total now: %d", channelKey, len(chHistory.Messages))
 
-		// Clean up old messages
-		cutoff := time.Now().Add(-historyDuration)
-		var firstValidIndex = -1
-		for i, msg := range chHistory.Messages {
-			if msg.Timestamp.After(cutoff) {
-				firstValidIndex = i
-				break
+			// Clean up old messages
+			cutoff := time.Now().Add(-historyDuration)
+			var firstValidIndex = -1
+			for i, msg := range chHistory.Messages {
+				if msg.Timestamp.After(cutoff) {
+					firstValidIndex = i
+					break
+				}
 			}
+			if firstValidIndex > 0 {
+				log.Printf("[Gateway] Pruned %d old messages from %s", firstValidIndex, channelKey)
+				chHistory.Messages = chHistory.Messages[firstValidIndex:]
+			} else if firstValidIndex == -1 && len(chHistory.Messages) > 0 {
+				chHistory.Messages = []Message{} // All messages are old
+			}
+			chHistory.mutex.Unlock()
 		}
-		if firstValidIndex > 0 {
-			log.Printf("[Gateway] Pruned %d old messages from %s", firstValidIndex, channelKey)
-			chHistory.Messages = chHistory.Messages[firstValidIndex:]
-		} else if firstValidIndex == -1 && len(chHistory.Messages) > 0 {
-			chHistory.Messages = []Message{} // All messages are old
-		}
-		chHistory.mutex.Unlock()
 
-		// --- REVISED PUSH NOTIFICATION LOGIC ---
-		normalizedChannel := strings.ToLower(channel)
+		// --- UPDATED PUSH NOTIFICATION LOGIC ---
+
 		session.ForEachSession(func(s *session.UserSession) {
 			s.Mutex.RLock()
+			normalizedChannel := strings.ToLower(channel)
 			_, inChannel := s.Channels[normalizedChannel]
 			fcmToken := s.FCMToken
 			username := s.Username
 			s.Mutex.RUnlock()
 
-			// Conditions for sending a notification:
-			// 1. User is in the channel.
-			// 2. User is not the one who sent the message.
-			// 3. User has registered an FCM token.
-			// The !isActive check is REMOVED to ensure delivery.
-			if inChannel && username != sender && fcmToken != "" {
-				log.Printf("[Push Gateway] Conditions met for user %s in channel %s. Attempting to send push notification.", username, channel)
-
-				notificationTitle := fmt.Sprintf("New message in %s", channel)
-				notificationBody := fmt.Sprintf("%s: %s", sender, messageContent)
-				data := map[string]string{
-					"sender":       sender,
-					"channel_name": channel,
-					"type":         "channel_message",
-				}
-
-				// Use a goroutine to avoid blocking the message loop
-				go func(token, title, body string, payload map[string]string) {
-					err := push.SendPushNotification(token, title, body, payload)
-					if err != nil {
-						log.Printf("[Push Gateway] Failed to send notification to %s: %v", username, err)
+			// DM (private message): channel is the recipient's nick
+			if !strings.HasPrefix(channel, "#") {
+				// Notify only the DM recipient (not sender), if logged in and has FCM token
+				if strings.EqualFold(channel, username) && fcmToken != "" && username != sender {
+					log.Printf("[Push Gateway] Notifying user %s of DM from %s", username, sender)
+					notificationTitle := fmt.Sprintf("Direct message from %s", sender)
+					notificationBody := messageContent
+					data := map[string]string{
+						"sender":       sender,
+						"channel_name": channel,
+						"type":         "dm",
 					}
-				}(fcmToken, notificationTitle, notificationBody, data)
+					go func(token, title, body string, payload map[string]string) {
+						err := push.SendPushNotification(token, title, body, payload)
+						if err != nil {
+							log.Printf("[Push Gateway] Failed to send DM notification to %s: %v", username, err)
+						}
+					}(fcmToken, notificationTitle, notificationBody, data)
+				}
+				return
+			}
+
+			// Channel message: Notify only if username is mentioned (case-insensitive, word boundary)
+			if inChannel && username != sender && fcmToken != "" {
+				if mentionInMessage(username, messageContent) {
+					log.Printf("[Push Gateway] Notifying user %s (mention) in %s", username, channel)
+					notificationTitle := fmt.Sprintf("Mention in %s", channel)
+					notificationBody := fmt.Sprintf("%s: %s", sender, messageContent)
+					data := map[string]string{
+						"sender":       sender,
+						"channel_name": channel,
+						"type":         "mention",
+					}
+					go func(token, title, body string, payload map[string]string) {
+						err := push.SendPushNotification(token, title, body, payload)
+						if err != nil {
+							log.Printf("[Push Gateway] Failed to send mention notification to %s: %v", username, err)
+						}
+					}(fcmToken, notificationTitle, notificationBody, data)
+				}
 			}
 		})
-		// --- END REVISED LOGIC ---
+		// --- END UPDATED LOGIC ---
 	})
 
 	ircConn.AddCallback("INVITE", func(e *ircevent.Event) {
