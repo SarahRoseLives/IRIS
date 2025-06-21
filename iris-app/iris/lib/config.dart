@@ -4,7 +4,7 @@
 const bool isAndroidEmulator = false; // <--- Set to true for Android Emulator/Device, false for Linux/Web/iOS Simulator
 
 // Define your API host and port
-const String _apiHostAddress = "192.168.1.206"; // Update with your server IP or domain if needed
+const String _apiHostAddress = "192.168.1.29"; // Update with your server IP or domain if needed
 const String _apiHostEmulator = "10.0.2.2"; // Android emulator's loopback to host
 const int apiPort = 8080; // Make this constant accessible
 

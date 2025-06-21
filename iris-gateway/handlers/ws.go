@@ -71,16 +71,15 @@ func WebSocketHandler(c *gin.Context) {
 
 	// Send current channel state to client for restoration
 	sess.Mutex.RLock()
-	channels := make([]string, 0, len(sess.Channels))
-	for channel := range sess.Channels {
-		channels = append(channels, channel)
-	}
+	// The frontend expects a map of channel objects, which sess.Channels already is.
+	// This includes the channel name and its list of members.
+	channelsPayload := sess.Channels
 	sess.Mutex.RUnlock()
 
 	err = conn.WriteJSON(events.WsEvent{
 		Type: "restore_state",
 		Payload: map[string]interface{}{
-			"channels": channels,
+			"channels": channelsPayload,
 		},
 	})
 	if err != nil {

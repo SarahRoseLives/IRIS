@@ -206,25 +206,15 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           final channel = Channel.fromJson(channelData as Map<String, dynamic>);
           _channels.add(channel);
 
-          // Remove old WebSocket history request
-          // // Request history for each channel
-          // if (channel.name.startsWith('#')) {
-          //   _webSocketService.sendHistoryRequest(channel.name, "1d");
-          // }
-
+          // Load avatars for all members in this channel
           for (var member in channel.members) {
             _loadAvatarForUser(member.nick);
           }
         });
       }
 
-      if (usersPayload != null) {
-        usersPayload.forEach((username, avatarUrl) {
-          if (avatarUrl != null && avatarUrl is String) {
-            _userAvatars[username] = avatarUrl;
-          }
-        });
-      }
+      // Always check our own avatar again
+      _loadAvatarForUser(username);
 
       _channels.sort((a, b) => a.name.compareTo(b.name));
 
@@ -287,6 +277,13 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           final key = channelName.toLowerCase();
           _channelMessages.putIfAbsent(key, () => []);
           _channelMessages[key]!.insertAll(0, messages);
+
+          // --- FIX: Load avatars for ALL unique senders in the loaded history
+          final senders = messages.map((m) => m.from).toSet();
+          for (final sender in senders) {
+            _loadAvatarForUser(sender);
+          }
+
           notifyListeners();
           _persistMessages();
         }
@@ -329,6 +326,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         _addMessageToDisplay(conversationTarget.toLowerCase(), newMessage);
       }
 
+      // Always load avatar for the sender
       _loadAvatarForUser(sender);
       notifyListeners();
 
@@ -364,6 +362,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       try {
         final channel = _channels.firstWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
         channel.members = newMembers;
+
+        // Load avatars for new members
+        for (var member in newMembers) {
+          _loadAvatarForUser(member.nick);
+        }
+
         notifyListeners();
       } catch (e) {
         print("Received member update for an unknown channel: $channelName");
@@ -545,10 +549,13 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  // --- AVATAR LOADING MECHANISM FIXED & IMPROVED ---
   Future<void> _loadAvatarForUser(String username) async {
     if (username.isEmpty || _userAvatars.containsKey(username)) return;
 
+    // Set a temporary empty value to prevent duplicate requests
     _userAvatars[username] = '';
+    notifyListeners();
 
     final List<String> possibleExtensions = ['.png', '.jpg', '.jpeg', '.gif'];
     String? foundUrl;
@@ -556,18 +563,24 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     for (final ext in possibleExtensions) {
       final String potentialAvatarUrl = 'http://$apiHost:$apiPort/avatars/$username$ext';
       try {
+        print("Checking avatar URL: $potentialAvatarUrl");
         final response = await http.head(Uri.parse(potentialAvatarUrl));
         if (response.statusCode == 200) {
           foundUrl = potentialAvatarUrl;
+          print("Found avatar for $username at $foundUrl");
           break;
         }
       } catch (e) {
+        print("Error checking avatar URL for $username: $e");
       }
     }
+
     if (foundUrl != null) {
       _userAvatars[username] = foundUrl;
+      notifyListeners();
+    } else {
+      print("No avatar found for $username");
     }
-    notifyListeners();
   }
 
   void _addInfoMessageToCurrentChannel(String message) {
