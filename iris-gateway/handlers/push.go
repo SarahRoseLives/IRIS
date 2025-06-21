@@ -1,4 +1,3 @@
-// handlers/push.go
 package handlers
 
 import (
@@ -43,6 +42,5 @@ func RegisterFCMTokenHandler(c *gin.Context) {
 	sess.Mutex.Unlock()
 
 	log.Printf("[FCM] Registered FCM token for user %s", sess.Username)
-
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "FCM token registered successfully"})
 }

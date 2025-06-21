@@ -206,10 +206,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           final channel = Channel.fromJson(channelData as Map<String, dynamic>);
           _channels.add(channel);
 
-          // Request history for each channel
-          if (channel.name.startsWith('#')) {
-            _webSocketService.sendHistoryRequest(channel.name, "1d");
-          }
+          // Remove old WebSocket history request
+          // // Request history for each channel
+          // if (channel.name.startsWith('#')) {
+          //   _webSocketService.sendHistoryRequest(channel.name, "1d");
+          // }
 
           for (var member in channel.members) {
             _loadAvatarForUser(member.nick);
@@ -260,6 +261,41 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
+  // --- NEW: HTTP-based history loading ---
+  Future<void> loadChannelHistory(String channelName, {int limit = 100}) async {
+    if (!channelName.startsWith('#')) return; // Only load history for channels
+
+    try {
+      final response = await http.get(
+        Uri.parse('http://$apiHost:$apiPort/api/history/${Uri.encodeComponent(channelName)}?limit=$limit'),
+        headers: {'Authorization': 'Bearer $_token'},
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        if (data['success'] == true) {
+          final List<dynamic> history = data['history'] ?? [];
+          final messages = history.map((item) => Message(
+            from: item['sender'] ?? 'Unknown',
+            content: item['text'] ?? '',
+            time: DateTime.tryParse(item['timestamp'] ?? '')?.toLocal() ?? DateTime.now(),
+            id: 'hist-${item['timestamp']}-${item['sender']}',
+            isHistorical: true,
+          )).toList();
+
+          // Prepend historical messages
+          final key = channelName.toLowerCase();
+          _channelMessages.putIfAbsent(key, () => []);
+          _channelMessages[key]!.insertAll(0, messages);
+          notifyListeners();
+          _persistMessages();
+        }
+      }
+    } catch (e) {
+      print('Error loading channel history: $e');
+    }
+  }
+
   void _listenToWebSocketMessages() {
     _webSocketService.messageStream.listen((message) {
       String channelName = (message['channel_name'] ?? '').toLowerCase();
@@ -284,6 +320,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         'content': message['text'] ?? '',
         'time': message['time'] ?? DateTime.now().toIso8601String(),
         'id': message['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        'isHistorical': isHistory,
       });
 
       if (isHistory) {
@@ -376,6 +413,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void onDmSelected(String dmChannelName) => _selectConversation(dmChannelName);
 
+  // --- UPDATED: Select conversation loads gateway-based history for channels ---
   void _selectConversation(String conversationName) {
     final index = _channels.indexWhere((c) => c.name.toLowerCase() == conversationName.toLowerCase());
     if (index != -1) {
@@ -383,9 +421,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _scrollToBottom();
       notifyListeners();
 
-      // Request history when joining a channel
+      // Load history when joining a channel
       if (conversationName.startsWith('#')) {
-        _webSocketService.sendHistoryRequest(conversationName, "1d");
+        loadChannelHistory(conversationName);
       }
     }
   }

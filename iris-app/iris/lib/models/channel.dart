@@ -7,12 +7,14 @@ class Message {
   final DateTime time;
   // A unique ID is helpful for list keys and other operations.
   final String id;
+  final bool isHistorical; // New field to distinguish historical messages
 
   Message({
     required this.from,
     required this.content,
     required this.time,
     required this.id,
+    this.isHistorical = false, // Default to false for new messages
   });
 
   /// Creates a Message object from a JSON map.
@@ -24,6 +26,7 @@ class Message {
       time: DateTime.tryParse(json['time'] ?? '')?.toLocal() ?? DateTime.now(),
       // If an ID isn't provided by the backend, create a fallback unique value.
       id: (json['id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
+      isHistorical: json['isHistorical'] ?? false,
     );
   }
 
@@ -34,6 +37,7 @@ class Message {
       'content': content,
       'time': time.toIso8601String(),
       'id': id,
+      'isHistorical': isHistorical,
     };
   }
 }

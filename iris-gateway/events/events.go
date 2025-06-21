@@ -15,4 +15,6 @@ const (
 	EventTypeChannelPart    = "channel_part"
 	EventTypeMembersUpdate  = "members_update"
 	EventTypeConnected      = "connected"
+    EventTypeUserAway       = "user_away"
+    EventTypeUserBack       = "user_back"
 )

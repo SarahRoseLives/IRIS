@@ -10,12 +10,18 @@ import (
 	"github.com/gin-gonic/gin"
 	"iris-gateway/config"
 	"iris-gateway/handlers"
+	"iris-gateway/irc"
 	"iris-gateway/push"
 )
 
 func main() {
 	// Initialize Firebase Cloud Messaging
 	push.InitFCM() // <-- Initialize FCM
+
+	// Initialize the IRC gateway bot
+	if err := irc.InitGatewayBot(); err != nil {
+		log.Fatalf("Failed to initialize IRC gateway bot: %v", err)
+	}
 
 	// Clean up any files older than 12 hours on startup
 	go func() {
@@ -62,6 +68,9 @@ func main() {
 
 	// New route for registering FCM token
 	router.POST("/api/register-fcm-token", handlers.RegisterFCMTokenHandler)
+
+	// New route for channel history
+	router.GET("/api/history/:channel", handlers.ChannelHistoryHandler)
 
 	router.Run(config.Cfg.ListenAddr)
 }

@@ -35,8 +35,8 @@ class MessageList extends StatelessWidget {
         final message = messages[idx];
         final String? displayAvatarUrl = _getDisplayAvatarUrl(message.from);
 
-        // Show loading indicator when we reach the top of history
-        if (idx == 0 && messages.length >= 50) { // Adjust threshold as needed
+        // Show loading indicator when we reach the top of history and the message is historical
+        if (idx == 0 && message.isHistorical) {
           return Column(
             children: [
               const Center(child: CircularProgressIndicator()),

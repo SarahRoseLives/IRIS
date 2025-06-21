@@ -50,6 +50,12 @@ func WebSocketHandler(c *gin.Context) {
 	sess.AddWebSocket(conn)
 	log.Printf("[WS] WebSocket connected for user %s (token: %s)", sess.Username, token)
 
+	// Immediately remove away status (send /BACK) when any WebSocket connects
+	if sess.IRC != nil {
+		sess.IRC.SendRaw("BACK")
+		log.Printf("[IRC] Sent BACK command (empty) for %s", sess.Username)
+	}
+
 	// Send welcome message
 	err = conn.WriteJSON(events.WsEvent{
 		Type: "connected",
@@ -83,9 +89,20 @@ func WebSocketHandler(c *gin.Context) {
 
 	go func() {
 		defer func() {
+			// On disconnect, remove websocket and check if last one
 			sess.RemoveWebSocket(conn)
 			conn.Close()
 			log.Printf("[WS] WebSocket disconnected for user %s (token: %s)\n", sess.Username, token)
+
+			// If no more WebSockets connected, set user as away
+			sess.Mutex.RLock()
+			hasClients := len(sess.WebSockets) > 0
+			sess.Mutex.RUnlock()
+
+			if !hasClients && sess.IRC != nil {
+				sess.IRC.SendRaw("AWAY :IRSI")
+				log.Printf("[IRC] Sent AWAY command for %s (no more clients connected)", sess.Username)
+			}
 		}()
 
 		for {

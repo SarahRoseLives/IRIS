@@ -10,7 +10,6 @@ import (
 	"github.com/gorilla/websocket"
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/events"
-	"iris-gateway/config"
 )
 
 // ChannelMember struct holds the nickname and their IRC status prefix.
@@ -47,6 +46,8 @@ type UserSession struct {
 	WebSockets   []*websocket.Conn
 	wsMutex      sync.Mutex
 	Mutex        sync.RWMutex
+	IsAway       bool
+	AwayMessage  string
 }
 
 // IsActive checks if the user has any active WebSocket connections.
@@ -57,7 +58,6 @@ func (s *UserSession) IsActive() bool {
 }
 
 // AddChannelToSession adds or updates a channel's state in the user's session.
-// On join, it also requests history from the IRC server.
 func (s *UserSession) AddChannelToSession(channelName string) {
 	normalizedChannelName := strings.ToLower(channelName)
 	s.Mutex.Lock()
@@ -70,9 +70,7 @@ func (s *UserSession) AddChannelToSession(channelName string) {
 			LastUpdate: time.Now(),
 		}
 		log.Printf("[Session.AddChannelToSession] User %s added new channel '%s'", s.Username, normalizedChannelName)
-
-		// Request history when joining a channel
-		s.IRC.SendRawf("HISTORY %s %s", channelName, config.Cfg.HistoryDuration)
+		// Removed: Request history when joining a channel
 	}
 }
 
@@ -278,4 +276,32 @@ func FindSessionTokenByUsername(username string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+//  Sets away and back status
+func (s *UserSession) SetAway(message string) {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	s.IsAway = true
+	s.AwayMessage = message
+	if s.IRC != nil {
+		s.IRC.SendRawf("AWAY :%s", message)
+	}
+	s.Broadcast("user_away", map[string]string{
+		"username": s.Username,
+		"message":  message,
+	})
+}
+
+func (s *UserSession) SetBack() {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	s.IsAway = false
+	s.AwayMessage = ""
+	if s.IRC != nil {
+		s.IRC.SendRaw("BACK")
+	}
+	s.Broadcast("user_back", map[string]string{
+		"username": s.Username,
+	})
 }
