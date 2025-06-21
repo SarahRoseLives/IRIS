@@ -109,6 +109,7 @@ class MainChatScreen extends StatelessWidget {
                         unjoinedChannels: viewModel.unjoinedPublicChannelNames,
                         selectedConversationTarget: viewModel.selectedConversationTarget,
                         onChannelSelected: viewModel.onChannelSelected,
+                        onChannelPart: viewModel.partChannel, // <-- pass part handler
                         onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
                         onDmSelected: viewModel.onDmSelected,
                         onIrisTap: viewModel.selectMainView,

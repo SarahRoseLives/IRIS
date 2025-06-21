@@ -17,13 +17,11 @@ import '../config.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
 
-
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   final String username;
   late ApiService _apiService;
   late WebSocketService _webSocketService;
 
-  // ... other properties are unchanged ...
   int _selectedChannelIndex = 0;
   bool _showLeftDrawer = false;
   bool _showRightDrawer = false;
@@ -86,7 +84,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     return _channelMessages[target] ?? [];
   }
 
-
   MainLayoutViewModel({required this.username, String? initialToken}) {
     _token = initialToken;
     _apiService = ApiService(_token!);
@@ -115,6 +112,30 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _handleLogout();
     }
   }
+
+  // --- NEW: Part channel handler for "Leave Channel" ---
+  Future<void> partChannel(String channelName) async {
+    if (!channelName.startsWith('#')) {
+      _addInfoMessageToCurrentChannel('You can only part public channels');
+      return;
+    }
+
+    try {
+      await _apiService.partChannel(channelName);
+      await _fetchChannelsList();
+      //_addInfoMessageToCurrentChannel('Left channel $channelName');
+      // If we're currently viewing the channel we just left, switch to another
+      if (selectedConversationTarget == channelName) {
+        if (_channels.isNotEmpty) {
+          _selectedChannelIndex = 0;
+          notifyListeners();
+        }
+      }
+    } catch (e) {
+      _addInfoMessageToCurrentChannel('Failed to leave channel: ${e.toString()}');
+    }
+  }
+  // --- END PART CHANNEL HANDLER ---
 
   // NEW METHOD to check for and handle a buffered notification tap
   void _handlePendingNotification() {

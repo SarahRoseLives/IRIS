@@ -18,6 +18,7 @@ class LeftDrawer extends StatelessWidget {
   final VoidCallback onCloseDrawer;
   final bool unjoinedExpanded;
   final VoidCallback onToggleUnjoined;
+  final ValueChanged<String> onChannelPart; // <-- ADDED
 
   const LeftDrawer({
     super.key,
@@ -27,6 +28,7 @@ class LeftDrawer extends StatelessWidget {
     required this.unjoinedChannels,
     required this.selectedConversationTarget,
     required this.onChannelSelected,
+    required this.onChannelPart, // <-- ADDED
     required this.onUnjoinedChannelTap,
     required this.onDmSelected,
     required this.onIrisTap,
@@ -162,6 +164,31 @@ class LeftDrawer extends StatelessWidget {
                                   onTap: () {
                                     onChannelSelected(channel);
                                     onCloseDrawer();
+                                  },
+                                  onLongPress: () {
+                                    showDialog(
+                                      context: context,
+                                      builder: (BuildContext context) {
+                                        return AlertDialog(
+                                          title: Text('Leave Channel'),
+                                          content: Text('Are you sure you want to leave $channel?'),
+                                          actions: <Widget>[
+                                            TextButton(
+                                              child: Text('Cancel'),
+                                              onPressed: () => Navigator.of(context).pop(),
+                                            ),
+                                            TextButton(
+                                              child: Text('Leave', style: TextStyle(color: Colors.red)),
+                                              onPressed: () {
+                                                Navigator.of(context).pop();
+                                                onChannelPart(channel);
+                                                onCloseDrawer();
+                                              },
+                                            ),
+                                          ],
+                                        );
+                                      },
+                                    );
                                   },
                                 );
                               }).toList(),
