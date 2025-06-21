@@ -12,7 +12,6 @@ import (
 	"iris-gateway/events"
 )
 
-// ChannelMember struct holds the nickname and their IRC status prefix.
 type ChannelMember struct {
 	Nick   string `json:"nick"`
 	Prefix string `json:"prefix"`
@@ -22,11 +21,9 @@ type ChannelState struct {
 	Name       string          `json:"name"`
 	Members    []ChannelMember `json:"members"`
 	LastUpdate time.Time       `json:"last_update"`
-	Topic      string          `json:"topic"`
 	mutex      sync.Mutex
 }
 
-// NewUserSession initializes a UserSession.
 func NewUserSession(username string) *UserSession {
 	return &UserSession{
 		Username:     username,
@@ -50,14 +47,12 @@ type UserSession struct {
 	AwayMessage  string
 }
 
-// IsActive checks if the user has any active WebSocket connections.
 func (s *UserSession) IsActive() bool {
 	s.Mutex.RLock()
 	defer s.Mutex.RUnlock()
 	return len(s.WebSockets) > 0
 }
 
-// AddChannelToSession adds or updates a channel's state in the user's session.
 func (s *UserSession) AddChannelToSession(channelName string) {
 	normalizedChannelName := strings.ToLower(channelName)
 	s.Mutex.Lock()
@@ -70,11 +65,10 @@ func (s *UserSession) AddChannelToSession(channelName string) {
 			LastUpdate: time.Now(),
 		}
 		log.Printf("[Session.AddChannelToSession] User %s added new channel '%s'", s.Username, normalizedChannelName)
-		// Removed: Request history when joining a channel
+		// REMOVED: No request for history here!
 	}
 }
 
-// RemoveChannelFromSession removes a channel's state from the user's session.
 func (s *UserSession) RemoveChannelFromSession(channelName string) {
 	normalizedChannelName := strings.ToLower(channelName)
 	s.Mutex.Lock()
@@ -89,19 +83,15 @@ func (s *UserSession) RemoveChannelFromSession(channelName string) {
 	}
 }
 
-// SyncChannels synchronizes the session's channel state with the IRC server's view.
-// Adds any channels from the provided list that are not already present.
 func (s *UserSession) SyncChannels(channels []string) {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
 
-	// Create a map of existing channels for quick lookup
 	existing := make(map[string]bool)
 	for ch := range s.Channels {
 		existing[ch] = true
 	}
 
-	// Add any new channels from the server
 	for _, ch := range channels {
 		nc := strings.ToLower(ch)
 		if !existing[nc] {
@@ -111,7 +101,6 @@ func (s *UserSession) SyncChannels(channels []string) {
 	}
 }
 
-// AccumulateChannelMembers stores raw member lists from 353 replies temporarily.
 func (s *UserSession) AccumulateChannelMembers(channelName string, members []string) {
 	normalizedChannelName := strings.ToLower(channelName)
 	s.namesMutex.Lock()
@@ -125,7 +114,6 @@ func (s *UserSession) AccumulateChannelMembers(channelName string, members []str
 	log.Printf("[Session.AccumulateChannelMembers] Accumulated %d members for '%s'. Total pending: %d", len(members), normalizedChannelName, len(s.pendingNames[normalizedChannelName]))
 }
 
-// FinalizeChannelMembers processes the accumulated members and updates the channel state.
 func (s *UserSession) FinalizeChannelMembers(channelName string) {
 	normalizedChannelName := strings.ToLower(channelName)
 	s.namesMutex.Lock()
@@ -278,7 +266,6 @@ func FindSessionTokenByUsername(username string) (string, bool) {
 	return "", false
 }
 
-//  Sets away and back status
 func (s *UserSession) SetAway(message string) {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()

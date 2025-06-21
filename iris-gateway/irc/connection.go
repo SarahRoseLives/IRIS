@@ -16,7 +16,6 @@ import (
 
 type IRCClient = ircevent.Connection
 
-// ChannelStateUpdater interface remains, as UserSession implements it.
 type ChannelStateUpdater interface {
 	AddChannelToSession(channelName string)
 	RemoveChannelFromSession(channelName string)
@@ -24,14 +23,12 @@ type ChannelStateUpdater interface {
 	FinalizeChannelMembers(channelName string)
 }
 
-// MODIFIED: The function now accepts the full userSession, which satisfies the ChannelStateUpdater interface.
 func AuthenticateWithNickServ(username, password, clientIP string, userSession *session.UserSession) (*IRCClient, error) {
 	ircServerAddr := config.Cfg.IRCServer
 	conn, err := net.DialTimeout("tcp", ircServerAddr, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial IRC server %s: %w", ircServerAddr, err)
 	}
-	// ... (the PROXY header logic remains unchanged)
 	srcIP := net.ParseIP(clientIP)
 	if srcIP == nil {
 		log.Printf("Warning: Could not parse client IP '%s', defaulting to 127.0.0.1 for PROXY header.", clientIP)
@@ -123,7 +120,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 	connClient.AddCallback("001", func(e *ircevent.Event) { fmt.Println("Received 001, connection established") })
 	connClient.AddCallback("376", func(e *ircevent.Event) {
 		fmt.Println("Received End of MOTD (376)")
-		// After MOTD, request channel list to sync state
 		connClient.SendRaw("LIST")
 		log.Printf("[IRC] Requested channel list for %s after SASL auth", username)
 		select {
@@ -132,7 +128,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		}
 	})
 
-	// Handle the LIST response to sync channels
 	connClient.AddCallback("322", func(e *ircevent.Event) { // LIST response
 		if len(e.Arguments) >= 2 {
 			channel := e.Arguments[1]
@@ -141,9 +136,7 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		}
 	})
 
-	// --- JOIN CALLBACK: Only process our own JOINs (after SASL/auth) ---
 	connClient.AddCallback("JOIN", func(e *ircevent.Event) {
-		// Only process our own JOINs (the user this client is connected as)
 		if e.Nick == username {
 			channelName := e.Arguments[0]
 			log.Printf("[IRC] Auto-joined to channel %s via SASL", channelName)
@@ -152,7 +145,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 				"name": channelName,
 				"user": username,
 			})
-			// Have the gateway join this channel to log messages
 			JoinChannel(channelName)
 		}
 	})
@@ -168,23 +160,20 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		})
 	})
 
-	// PRIVMSG callback for regular and image messages
+	// Only handle real-time messages, not history
 	connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
 		target := e.Arguments[0]
 		messageContent := e.Arguments[1]
 		sender := e.Nick
 
-		// Broadcast the message via WebSocket to the user's active client(s).
 		userSession.Broadcast("message", map[string]string{
 			"channel_name": strings.ToLower(target),
 			"sender":       sender,
-			"text":         messageContent, // Raw unmodified message
+			"text":         messageContent,
 		})
 
-		// --- PUSH NOTIFICATION LOGIC (For OFFLINE users) ---
 		isChannelMessage := strings.HasPrefix(target, "#")
 		if isChannelMessage {
-			// Logic for sending push notifications for channel mentions
 			session.ForEachSession(func(s *session.UserSession) {
 				if strings.Contains(messageContent, s.Username) && !s.IsActive() && s.FCMToken != "" && s.Username != sender {
 					log.Printf("[Push] User %s was mentioned in %s while offline, sending push notification.", s.Username, target)
@@ -206,7 +195,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 				}
 			})
 		} else {
-			// Logic for sending push notifications for private messages
 			recipientUsername := target
 			if recipientUsername != "" {
 				token, found := session.FindSessionTokenByUsername(recipientUsername)
@@ -237,8 +225,7 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		}
 	})
 
-	// Remove: PRIVMSG callback for IRC history responses (old history logic)
-	// Remove: any other history-fetching logic here
+	// No old history callbacks remain!
 
 	connClient.AddCallback("353", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 4 {

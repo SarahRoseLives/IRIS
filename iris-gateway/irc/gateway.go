@@ -9,6 +9,7 @@ import (
 
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
+	"iris-gateway/session"
 )
 
 type Message struct {
@@ -32,13 +33,26 @@ var (
 
 // Call this once at startup (from main.go)
 func InitGatewayBot() error {
-	conn := ircevent.IRC(config.Cfg.GatewayNick, "iris-gateway")
-	conn.VerboseCallbackHandler = false
-	conn.Debug = false
-	conn.UseTLS = false
-	conn.UseSASL = true
-	conn.SASLLogin = config.Cfg.GatewayNick
-	conn.SASLPassword = config.Cfg.GatewayPassword
+	// Create a dummy session for the gateway
+	gatewaySession := session.NewUserSession(config.Cfg.GatewayNick)
+	gatewaySession.IRC = nil // Will be set by AuthenticateWithNickServ
+
+	clientIP := "127.0.0.1" // Gateway connects from localhost
+
+	// Use the same authentication flow as clients
+	ircConn, err := AuthenticateWithNickServ(
+		config.Cfg.GatewayNick,
+		config.Cfg.GatewayPassword,
+		clientIP,
+		gatewaySession,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to authenticate gateway bot: %w", err)
+	}
+
+	// Set up the gateway connection
+	gatewayConn = ircConn
+	gatewaySession.IRC = ircConn
 
 	// Parse history duration from config
 	duration, err := time.ParseDuration(config.Cfg.HistoryDuration)
@@ -48,11 +62,12 @@ func InitGatewayBot() error {
 		historyDuration = duration
 	}
 
-	conn.AddCallback("001", func(e *ircevent.Event) {
+	// Set up callbacks
+	ircConn.AddCallback("001", func(e *ircevent.Event) {
 		log.Println("[Gateway] Connected to IRC server")
 	})
 
-	conn.AddCallback("PRIVMSG", func(e *ircevent.Event) {
+	ircConn.AddCallback("PRIVMSG", func(e *ircevent.Event) {
 		channel := e.Arguments[0]
 		if !strings.HasPrefix(channel, "#") {
 			return // Only log channel messages
@@ -98,21 +113,15 @@ func InitGatewayBot() error {
 		chHistory.mutex.Unlock()
 	})
 
-	conn.AddCallback("INVITE", func(e *ircevent.Event) {
+	ircConn.AddCallback("INVITE", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 2 {
 			channel := e.Arguments[1]
 			log.Printf("[Gateway] Received invite to %s, joining", channel)
-			conn.Join(channel)
+			ircConn.Join(channel)
 		}
 	})
 
-	err = conn.Connect(config.Cfg.IRCServer)
-	if err != nil {
-		return fmt.Errorf("failed to connect gateway bot: %w", err)
-	}
-
-	gatewayConn = conn
-	go conn.Loop()
+	go ircConn.Loop()
 	return nil
 }
 
