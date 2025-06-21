@@ -19,7 +19,7 @@ dependencies:
   image_picker: ^1.0.4      # <-- required for picking images
   http_parser: ^4.0.2       # <-- required for multipart uploads (already present)
   provider: ^6.0.5
-  flutter_local_notifications: ^17.1.2
+  flutter_local_notifications: ^19.2.1 #^17.1.2
   permission_handler: ^11.3.0
   cupertino_icons: ^1.0.6
   firebase_core: ^3.4.0

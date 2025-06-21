@@ -1,3 +1,5 @@
+// lib/viewmodels/main_layout_viewmodel.dart
+
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -10,38 +12,34 @@ import 'package:get_it/get_it.dart';
 
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
-import '../main.dart';
+import '../main.dart'; // Import main.dart to get PendingNotification
 import '../config.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
+
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   final String username;
   late ApiService _apiService;
   late WebSocketService _webSocketService;
 
+  // ... other properties are unchanged ...
   int _selectedChannelIndex = 0;
   bool _showLeftDrawer = false;
   bool _showRightDrawer = false;
   bool _loadingChannels = true;
   String? _channelError;
   String? _token;
-
   final Map<String, List<Message>> _channelMessages = {};
-
   final TextEditingController _msgController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
-
   List<Channel> _channels = [];
   WebSocketStatus _wsStatus = WebSocketStatus.disconnected;
   final Map<String, String> _userAvatars = {};
-
   bool _isAppFocused = true;
-
-  // UI state for unjoined channel collapse
   bool unjoinedChannelsExpanded = false;
 
-  // --- GETTERS ---
+  // --- GETTERS (unchanged) ---
   int get selectedChannelIndex => _selectedChannelIndex;
   bool get showLeftDrawer => _showLeftDrawer;
   bool get showRightDrawer => _showRightDrawer;
@@ -52,26 +50,20 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   ScrollController get scrollController => _scrollController;
   WebSocketStatus get wsStatus => _wsStatus;
   Map<String, String> get userAvatars => _userAvatars;
-
-  // Joined channels = channels with members
   List<String> get joinedPublicChannelNames =>
       _channels
-        .where((c) => c.name.startsWith('#') && c.members.isNotEmpty)
-        .map((c) => c.name)
-        .toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-
-  // Unjoined channels = channels with NO members
+          .where((c) => c.name.startsWith('#') && c.members.isNotEmpty)
+          .map((c) => c.name)
+          .toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
   List<String> get unjoinedPublicChannelNames =>
       _channels
-        .where((c) => c.name.startsWith('#') && c.members.isEmpty)
-        .map((c) => c.name)
-        .toList()
-      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-
+          .where((c) => c.name.startsWith('#') && c.members.isEmpty)
+          .map((c) => c.name)
+          .toList()
+        ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
   List<String> get dmChannelNames =>
       _channels.where((c) => c.name.startsWith('@')).map((c) => c.name).toList();
-
   String get selectedConversationTarget {
     if (_wsStatus != WebSocketStatus.connected) {
       return _wsStatus == WebSocketStatus.connecting
@@ -83,20 +75,18 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
     return _channels.isNotEmpty ? _channels[0].name : "No channels";
   }
-
   List<ChannelMember> get members {
     if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length) {
       return _channels[_selectedChannelIndex].members;
     }
     return [];
   }
-
   List<Message> get currentChannelMessages {
     final target = selectedConversationTarget.toLowerCase();
     return _channelMessages[target] ?? [];
   }
 
-  // --- CONSTRUCTOR & INITIALIZATION ---
+
   MainLayoutViewModel({required this.username, String? initialToken}) {
     _token = initialToken;
     _apiService = ApiService(_token!);
@@ -115,14 +105,57 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _connectWebSocket();
       _loadAvatarForUser(username);
       _initNotifications();
-      _loadPersistedMessages();
-      _fetchChannelsList();
+      // Chain the initial data loading, and then handle any pending notification.
+      _loadPersistedMessages()
+          .then((_) => _fetchChannelsList())
+          .then((_) {
+            _handlePendingNotification();
+          });
     } else {
       _handleLogout();
     }
   }
 
-  // --- IMAGE ATTACHMENT UPLOAD ---
+  // NEW METHOD to check for and handle a buffered notification tap
+  void _handlePendingNotification() {
+    if (PendingNotification.channelToNavigateTo != null) {
+      final channelName = PendingNotification.channelToNavigateTo!;
+      print('[ViewModel] Handling buffered notification tap for channel: $channelName');
+
+      // Use a post-frame callback to ensure the widget tree is built before navigating.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        handleNotificationTap(channelName, "0");
+        // Clear the pending notification after handling it.
+        PendingNotification.channelToNavigateTo = null;
+      });
+    }
+  }
+
+  // The existing handleNotificationTap method is already correct and does not need changes.
+  void handleNotificationTap(String channelName, String messageId) {
+    if (channelName.startsWith('@') &&
+        _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase()) == -1) {
+      _channels.add(Channel(name: channelName, members: []));
+      _channels.sort((a, b) => a.name.compareTo(b.name));
+    }
+
+    final int targetIndex = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
+
+    if (targetIndex != -1) {
+      _selectedChannelIndex = targetIndex;
+      _showLeftDrawer = false;
+      _showRightDrawer = false;
+      notifyListeners();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _scrollToBottom();
+      });
+    } else {
+      print('[ViewModel] Could not find channel "$channelName" to navigate to.');
+    }
+  }
+
+  // ... All other methods in the ViewModel remain the same.
+  // ... (uploadAttachment, _listenToWebSocketStatus, handleSendMessage, etc.)
   Future<void> uploadAttachment(String filePath) async {
     print('[ViewModel] Starting attachment upload from $filePath');
     try {
@@ -148,8 +181,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       if (response.statusCode == 200 && jsonResponse['success'] == true) {
         final imageUrl = jsonResponse['url'];
         final fullImageUrl = 'http://$apiHost:$apiPort$imageUrl';
-
-        // Add the message to local display immediately
         final currentConversation = selectedConversationTarget;
         final sentMessage = Message(
           from: username,
@@ -160,8 +191,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         _addMessageToDisplay(currentConversation.toLowerCase(), sentMessage);
         print('[ViewModel] Added local message with URL: $fullImageUrl');
         notifyListeners();
-
-        // Then send via WebSocket
         final target = currentConversation.startsWith('@')
             ? currentConversation.substring(1)
             : currentConversation;
@@ -191,37 +220,25 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // --- WEBSOCKET LISTENERS ---
-
   void _listenToInitialState() {
     _webSocketService.initialStateStream.listen((payload) {
       final channelsPayload = payload['channels'] as Map<String, dynamic>?;
-      final usersPayload = payload['users'] as Map<String, dynamic>?;
-
       _channels.clear();
       _channelMessages.clear();
-
       if (channelsPayload != null) {
         channelsPayload.forEach((channelName, channelData) {
           final channel = Channel.fromJson(channelData as Map<String, dynamic>);
           _channels.add(channel);
-
-          // Load avatars for all members in this channel
           for (var member in channel.members) {
             _loadAvatarForUser(member.nick);
           }
         });
       }
-
-      // Always check our own avatar again
       _loadAvatarForUser(username);
-
       _channels.sort((a, b) => a.name.compareTo(b.name));
-
       if (_selectedChannelIndex >= _channels.length) {
         _selectedChannelIndex = 0;
       }
-
       _loadingChannels = false;
       _channelError = null;
       notifyListeners();
@@ -251,16 +268,13 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  // --- NEW: HTTP-based history loading ---
   Future<void> loadChannelHistory(String channelName, {int limit = 100}) async {
-    if (!channelName.startsWith('#')) return; // Only load history for channels
-
+    if (!channelName.startsWith('#')) return;
     try {
       final response = await http.get(
         Uri.parse('http://$apiHost:$apiPort/api/history/${Uri.encodeComponent(channelName)}?limit=$limit'),
         headers: {'Authorization': 'Bearer $_token'},
       );
-
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
         if (data['success'] == true) {
@@ -272,18 +286,13 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
             id: 'hist-${item['timestamp']}-${item['sender']}',
             isHistorical: true,
           )).toList();
-
-          // Prepend historical messages
           final key = channelName.toLowerCase();
           _channelMessages.putIfAbsent(key, () => []);
           _channelMessages[key]!.insertAll(0, messages);
-
-          // --- FIX: Load avatars for ALL unique senders in the loaded history
           final senders = messages.map((m) => m.from).toSet();
           for (final sender in senders) {
             _loadAvatarForUser(sender);
           }
-
           notifyListeners();
           _persistMessages();
         }
@@ -299,7 +308,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final String sender = message['sender'] ?? 'Unknown';
       final bool isPrivateMessage = !channelName.startsWith('#');
       final bool isHistory = message['is_history'] ?? false;
-
       String conversationTarget;
       if (isPrivateMessage) {
         final String conversationPartner = (sender.toLowerCase() == username.toLowerCase()) ? channelName : sender;
@@ -311,7 +319,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       } else {
         conversationTarget = channelName;
       }
-
       final newMessage = Message.fromJson({
         'from': sender,
         'content': message['text'] ?? '',
@@ -319,17 +326,13 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         'id': message['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
         'isHistorical': isHistory,
       });
-
       if (isHistory) {
         _prependMessageToDisplay(conversationTarget.toLowerCase(), newMessage);
       } else {
         _addMessageToDisplay(conversationTarget.toLowerCase(), newMessage);
       }
-
-      // Always load avatar for the sender
       _loadAvatarForUser(sender);
       notifyListeners();
-
       _persistMessages();
     });
   }
@@ -362,12 +365,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       try {
         final channel = _channels.firstWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
         channel.members = newMembers;
-
-        // Load avatars for new members
         for (var member in newMembers) {
           _loadAvatarForUser(member.nick);
         }
-
         notifyListeners();
       } catch (e) {
         print("Received member update for an unknown channel: $channelName");
@@ -380,8 +380,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       print("[ViewModel] WebSocket Error: $error");
     });
   }
-
-  // --- DATA FETCHING & STATE MANAGEMENT ---
 
   Future<void> _fetchChannelsList() async {
     _loadingChannels = true;
@@ -401,8 +399,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // --- USER ACTIONS ---
-
   void onChannelSelected(String channelName) => _selectConversation(channelName);
 
   void onUnjoinedChannelTap(String channelName) async {
@@ -417,15 +413,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void onDmSelected(String dmChannelName) => _selectConversation(dmChannelName);
 
-  // --- UPDATED: Select conversation loads gateway-based history for channels ---
   void _selectConversation(String conversationName) {
     final index = _channels.indexWhere((c) => c.name.toLowerCase() == conversationName.toLowerCase());
     if (index != -1) {
       _selectedChannelIndex = index;
       _scrollToBottom();
       notifyListeners();
-
-      // Load history when joining a channel
       if (conversationName.startsWith('#')) {
         loadChannelHistory(conversationName);
       }
@@ -436,15 +429,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     final text = _msgController.text.trim();
     if (text.isEmpty || _token == null) return;
     _msgController.clear();
-
     if (text.startsWith('/')) {
       await _handleCommand(text);
       return;
     }
-
     final currentConversation = selectedConversationTarget;
     String target = currentConversation.startsWith('@') ? currentConversation.substring(1) : currentConversation;
-
     final sentMessage = Message(
       from: username,
       content: text,
@@ -452,32 +442,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       id: DateTime.now().millisecondsSinceEpoch.toString(),
     );
     _addMessageToDisplay(currentConversation.toLowerCase(), sentMessage);
-
     try {
       _webSocketService.sendMessage(target, text);
     } catch (e) {
       _addInfoMessageToCurrentChannel('Failed to send message: ${e.toString().replaceFirst('Exception: ', '')}');
     }
   }
-
-  void handleNotificationTap(String channelName, String messageId) {
-    if (channelName.startsWith('@') && _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase()) == -1) {
-      _channels.add(Channel(name: channelName, members: []));
-      _channels.sort((a, b) => a.name.compareTo(b.name));
-    }
-    final int targetIndex = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
-    if (targetIndex != -1) {
-      _selectedChannelIndex = targetIndex;
-      _showLeftDrawer = false;
-      _showRightDrawer = false;
-      notifyListeners();
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        _scrollToBottom();
-      });
-    }
-  }
-
-  // --- HELPER & LIFECYCLE METHODS ---
 
   void toggleUnjoinedChannelsExpanded() {
     unjoinedChannelsExpanded = !unjoinedChannelsExpanded;
@@ -500,7 +470,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) {
     print("AppLifecycleState changed: $state");
     _isAppFocused = state == AppLifecycleState.resumed;
-
     if (state == AppLifecycleState.paused) {
       _persistMessages();
     } else if (state == AppLifecycleState.resumed) {
@@ -549,37 +518,27 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  // --- AVATAR LOADING MECHANISM FIXED & IMPROVED ---
   Future<void> _loadAvatarForUser(String username) async {
     if (username.isEmpty || _userAvatars.containsKey(username)) return;
-
-    // Set a temporary empty value to prevent duplicate requests
     _userAvatars[username] = '';
     notifyListeners();
-
     final List<String> possibleExtensions = ['.png', '.jpg', '.jpeg', '.gif'];
     String? foundUrl;
-
     for (final ext in possibleExtensions) {
       final String potentialAvatarUrl = 'http://$apiHost:$apiPort/avatars/$username$ext';
       try {
-        print("Checking avatar URL: $potentialAvatarUrl");
         final response = await http.head(Uri.parse(potentialAvatarUrl));
         if (response.statusCode == 200) {
           foundUrl = potentialAvatarUrl;
-          print("Found avatar for $username at $foundUrl");
           break;
         }
       } catch (e) {
-        print("Error checking avatar URL for $username: $e");
+        // print("Error checking avatar URL for $username: $e");
       }
     }
-
     if (foundUrl != null) {
       _userAvatars[username] = foundUrl;
       notifyListeners();
-    } else {
-      print("No avatar found for $username");
     }
   }
 
@@ -635,8 +594,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       await _apiService.registerFCMToken(fcmToken);
     }
   }
-
-  // --- MESSAGE PERSISTENCE ---
 
   Future<void> _persistMessages() async {
     final prefs = await SharedPreferences.getInstance();

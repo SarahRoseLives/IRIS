@@ -102,13 +102,16 @@ class WebSocketService {
 
         switch (event['type']) {
           case 'restore_state':
-            if (payload is Map<String, dynamic>) {
-              final channels = payload['channels'] as List<dynamic>? ?? [];
-              _currentChannels = List<String>.from(channels);
-              _channelsController.add(List.from(_currentChannels));
-              print("[WebSocketService] Updated channels from restore_state: $_currentChannels");
-            }
-            break;
+              if (payload is Map<String, dynamic>) {
+                  // 1. Correctly parse the payload as a Map.
+                  final channelData = payload['channels'] as Map<String, dynamic>? ?? {};
+                  // 2. Extract the keys (the channel names) into a List.
+                  final channels = channelData.keys.toList();
+                  _currentChannels = List<String>.from(channels);
+                  _channelsController.add(List.from(_currentChannels));
+                  print("[WebSocketService] Updated channels from restore_state: $_currentChannels");
+              }
+              break;
           case 'initial_state':
             if (payload is Map<String, dynamic>) {
               final channels = payload['channels'] as Map<String, dynamic>? ?? {};

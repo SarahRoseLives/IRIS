@@ -9,6 +9,7 @@ import (
 
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
+	"iris-gateway/push"
 	"iris-gateway/session"
 )
 
@@ -69,16 +70,19 @@ func InitGatewayBot() error {
 
 	ircConn.AddCallback("PRIVMSG", func(e *ircevent.Event) {
 		channel := e.Arguments[0]
+		sender := e.Nick
+		messageContent := e.Arguments[1]
+
 		if !strings.HasPrefix(channel, "#") {
-			return // Only log channel messages
+			return // Gateway bot only handles channel messages for history and notifications
 		}
 
-		log.Printf("[Gateway] Logging message in %s from %s: %s", channel, e.Nick, e.Arguments[1])
+		log.Printf("[Gateway] Logging message in %s from %s: %s", channel, sender, messageContent)
 
 		message := Message{
 			Channel:   channel,
-			Sender:    e.Nick,
-			Text:      e.Arguments[1],
+			Sender:    sender,
+			Text:      messageContent,
 			Timestamp: time.Now(),
 		}
 
@@ -101,16 +105,56 @@ func InitGatewayBot() error {
 
 		// Clean up old messages
 		cutoff := time.Now().Add(-historyDuration)
+		var firstValidIndex = -1
 		for i, msg := range chHistory.Messages {
 			if msg.Timestamp.After(cutoff) {
-				if i > 0 {
-					log.Printf("[Gateway] Pruned %d old messages from %s", i, channelKey)
-				}
-				chHistory.Messages = chHistory.Messages[i:]
+				firstValidIndex = i
 				break
 			}
 		}
+		if firstValidIndex > 0 {
+			log.Printf("[Gateway] Pruned %d old messages from %s", firstValidIndex, channelKey)
+			chHistory.Messages = chHistory.Messages[firstValidIndex:]
+		} else if firstValidIndex == -1 && len(chHistory.Messages) > 0 {
+			chHistory.Messages = []Message{} // All messages are old
+		}
 		chHistory.mutex.Unlock()
+
+		// --- REVISED PUSH NOTIFICATION LOGIC ---
+		normalizedChannel := strings.ToLower(channel)
+		session.ForEachSession(func(s *session.UserSession) {
+			s.Mutex.RLock()
+			_, inChannel := s.Channels[normalizedChannel]
+			fcmToken := s.FCMToken
+			username := s.Username
+			s.Mutex.RUnlock()
+
+			// Conditions for sending a notification:
+			// 1. User is in the channel.
+			// 2. User is not the one who sent the message.
+			// 3. User has registered an FCM token.
+			// The !isActive check is REMOVED to ensure delivery.
+			if inChannel && username != sender && fcmToken != "" {
+				log.Printf("[Push Gateway] Conditions met for user %s in channel %s. Attempting to send push notification.", username, channel)
+
+				notificationTitle := fmt.Sprintf("New message in %s", channel)
+				notificationBody := fmt.Sprintf("%s: %s", sender, messageContent)
+				data := map[string]string{
+					"sender":       sender,
+					"channel_name": channel,
+					"type":         "channel_message",
+				}
+
+				// Use a goroutine to avoid blocking the message loop
+				go func(token, title, body string, payload map[string]string) {
+					err := push.SendPushNotification(token, title, body, payload)
+					if err != nil {
+						log.Printf("[Push Gateway] Failed to send notification to %s: %v", username, err)
+					}
+				}(fcmToken, notificationTitle, notificationBody, data)
+			}
+		})
+		// --- END REVISED LOGIC ---
 	})
 
 	ircConn.AddCallback("INVITE", func(e *ircevent.Event) {

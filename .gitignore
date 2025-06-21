@@ -1,2 +1,4 @@
 /iris-gateway/serviceAccountKey.json
 /tag_and_push.sh
+!/iris-gateway/avatars/
+!/iris-gateway/images/

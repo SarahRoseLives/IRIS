@@ -160,72 +160,67 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		})
 	})
 
-	// Only handle real-time messages, not history
+	// This callback handles messages sent directly to the user (PMs)
 	connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
 		target := e.Arguments[0]
 		messageContent := e.Arguments[1]
 		sender := e.Nick
 
+		// Always broadcast the message over WebSocket for active clients
 		userSession.Broadcast("message", map[string]string{
 			"channel_name": strings.ToLower(target),
 			"sender":       sender,
 			"text":         messageContent,
 		})
 
-		isChannelMessage := strings.HasPrefix(target, "#")
-		if isChannelMessage {
-			session.ForEachSession(func(s *session.UserSession) {
-				if strings.Contains(messageContent, s.Username) && !s.IsActive() && s.FCMToken != "" && s.Username != sender {
-					log.Printf("[Push] User %s was mentioned in %s while offline, sending push notification.", s.Username, target)
-					notificationTitle := fmt.Sprintf("New mention in %s", target)
-					notificationBody := fmt.Sprintf("%s: %s", sender, messageContent)
-					err := push.SendPushNotification(
-						s.FCMToken,
-						notificationTitle,
-						notificationBody,
-						map[string]string{
-							"sender":       sender,
-							"channel_name": target,
-							"type":         "channel_mention",
-						},
-					)
-					if err != nil {
-						log.Printf("[Push] Failed to send mention notification to %s: %v", s.Username, err)
-					}
-				}
-			})
-		} else {
-			recipientUsername := target
-			if recipientUsername != "" {
-				token, found := session.FindSessionTokenByUsername(recipientUsername)
-				if !found {
-					log.Printf("[Push] Cannot send PM notification, user session not found for %s", recipientUsername)
-					return
-				}
+		// If it's a channel message, the central gateway bot handles it. Do nothing here.
+		if strings.HasPrefix(target, "#") {
+			return
+		}
 
-				recipientSession, _ := session.GetSession(token)
-				if recipientSession != nil && !recipientSession.IsActive() && recipientSession.FCMToken != "" {
-					log.Printf("[Push] User %s is offline, sending push notification for PM.", recipientUsername)
-					err := push.SendPushNotification(
-						recipientSession.FCMToken,
-						fmt.Sprintf("New message from %s", sender),
-						messageContent,
-						map[string]string{
-							"sender": sender,
-							"type":   "private_message",
-						},
-					)
-					if err != nil {
-						log.Printf("[Push] Failed to send PM push notification to %s: %v", recipientUsername, err)
-					}
-				} else if recipientSession != nil && recipientSession.IsActive() {
-					log.Printf("[Push] User %s is online, skipping PM push notification.", recipientUsername)
+		// --- REVISED PM NOTIFICATION LOGIC ---
+		// This event fires on the recipient's connection.
+		// The `target` is the recipient's own username.
+		// The `userSession` in this scope is the recipient's session.
+
+		// 1. Check if the event is for a message this user received (not one they sent).
+		if !strings.EqualFold(userSession.Username, target) {
+			return
+		}
+
+		// 2. Check if the user is messaging themselves.
+		if strings.EqualFold(userSession.Username, sender) {
+			return
+		}
+
+		log.Printf("[Push PM] Processing inbound PM for %s from %s", target, sender)
+
+		// 3. Get the FCM token from the current user's session.
+		userSession.Mutex.RLock()
+		fcmToken := userSession.FCMToken
+		userSession.Mutex.RUnlock()
+
+		// 4. If a token exists, send the notification.
+		if fcmToken != "" {
+			log.Printf("[Push PM] Recipient %s has FCM token. Attempting to send push notification.", userSession.Username)
+			go func() {
+				err := push.SendPushNotification(
+					fcmToken,
+					fmt.Sprintf("New message from %s", sender),
+					messageContent,
+					map[string]string{
+						"sender": sender,
+						"type":   "private_message",
+					},
+				)
+				if err != nil {
+					log.Printf("[Push PM] Failed to send PM push notification to %s: %v", userSession.Username, err)
 				}
-			}
+			}()
+		} else {
+			log.Printf("[Push PM] Recipient %s does not have an FCM token. Skipping push.", userSession.Username)
 		}
 	})
-
-	// No old history callbacks remain!
 
 	connClient.AddCallback("353", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 4 {

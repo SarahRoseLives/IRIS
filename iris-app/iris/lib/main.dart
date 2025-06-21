@@ -1,3 +1,5 @@
+// lib/main.dart
+
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -17,6 +19,13 @@ import 'models/login_response.dart';
 // Add this import for update checking
 import 'package:iris/services/update_service.dart'; // <--- update check
 
+
+// Simple static class to hold a pending navigation action from a notification tap.
+class PendingNotification {
+  static String? channelToNavigateTo;
+}
+
+
 final getIt = GetIt.instance;
 
 void setupLocator() {
@@ -31,10 +40,13 @@ void setupLocator() {
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  final notificationService = NotificationService();
+
+  // We need to re-setup the locator for this separate isolate.
+  setupLocator();
+
+  final notificationService = getIt<NotificationService>();
   await notificationService.setupLocalNotifications();
   print("Handling a background message: ${message.messageId}");
-  print("Message data: ${message.data}");
   notificationService.showFlutterNotification(message);
 }
 
@@ -44,8 +56,9 @@ void onDidReceiveNotificationResponse(NotificationResponse notificationResponse)
   if (payload != null) {
     try {
       final Map<String, dynamic> data = jsonDecode(payload);
-      final notificationService = getIt<NotificationService>();
-      notificationService.handleNotificationTap(data);
+      // Can't use GetIt here directly in a static context easily, so we create a new instance
+      // and let it buffer the tap.
+      NotificationService().handleNotificationTap(data);
     } catch (e) {
       print("Error in onDidReceiveNotificationResponse: $e");
     }
@@ -68,6 +81,7 @@ Future<void> main() async {
   runApp(const IRISApp());
 }
 
+// ... Rest of the file is unchanged (IRISApp, AuthWrapper, LoginScreen)
 class IRISApp extends StatelessWidget {
   const IRISApp({super.key});
 
