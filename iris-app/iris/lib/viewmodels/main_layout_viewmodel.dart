@@ -38,6 +38,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   bool _isAppFocused = true;
 
+  // UI state for unjoined channel collapse
+  bool unjoinedChannelsExpanded = false;
+
   // --- GETTERS ---
   int get selectedChannelIndex => _selectedChannelIndex;
   bool get showLeftDrawer => _showLeftDrawer;
@@ -50,8 +53,21 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   WebSocketStatus get wsStatus => _wsStatus;
   Map<String, String> get userAvatars => _userAvatars;
 
-  List<String> get publicChannelNames =>
-      _channels.where((c) => c.name.startsWith('#')).map((c) => c.name).toList();
+  // Joined channels = channels with members
+  List<String> get joinedPublicChannelNames =>
+      _channels
+        .where((c) => c.name.startsWith('#') && c.members.isNotEmpty)
+        .map((c) => c.name)
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+  // Unjoined channels = channels with NO members
+  List<String> get unjoinedPublicChannelNames =>
+      _channels
+        .where((c) => c.name.startsWith('#') && c.members.isEmpty)
+        .map((c) => c.name)
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
   List<String> get dmChannelNames =>
       _channels.where((c) => c.name.startsWith('@')).map((c) => c.name).toList();
@@ -100,6 +116,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _loadAvatarForUser(username);
       _initNotifications();
       _loadPersistedMessages();
+      _fetchChannelsList();
     } else {
       _handleLogout();
     }
@@ -178,32 +195,35 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void _listenToInitialState() {
     _webSocketService.initialStateStream.listen((payload) {
-      final channelsPayload = payload['channels'] as Map<String, dynamic>;
-      final usersPayload = payload['users'] as Map<String, dynamic>;
+      final channelsPayload = payload['channels'] as Map<String, dynamic>?;
+      final usersPayload = payload['users'] as Map<String, dynamic>?;
 
       _channels.clear();
       _channelMessages.clear();
 
-      channelsPayload.forEach((channelName, channelData) {
-        final channel = Channel.fromJson(channelData as Map<String, dynamic>);
-        _channels.add(channel);
+      if (channelsPayload != null) {
+        channelsPayload.forEach((channelName, channelData) {
+          final channel = Channel.fromJson(channelData as Map<String, dynamic>);
+          _channels.add(channel);
 
-        // Request history for each channel
-        if (channel.name.startsWith('#')) {
-          // Changed from sendRawMessage to sendHistoryRequest to fix gateway JSON requirement
-          _webSocketService.sendHistoryRequest(channel.name, "1d");
-        }
+          // Request history for each channel
+          if (channel.name.startsWith('#')) {
+            _webSocketService.sendHistoryRequest(channel.name, "1d");
+          }
 
-        for (var member in channel.members) {
-          _loadAvatarForUser(member.nick);
-        }
-      });
+          for (var member in channel.members) {
+            _loadAvatarForUser(member.nick);
+          }
+        });
+      }
 
-      usersPayload.forEach((username, avatarUrl) {
-        if (avatarUrl != null && avatarUrl is String) {
-          _userAvatars[username] = avatarUrl;
-        }
-      });
+      if (usersPayload != null) {
+        usersPayload.forEach((username, avatarUrl) {
+          if (avatarUrl != null && avatarUrl is String) {
+            _userAvatars[username] = avatarUrl;
+          }
+        });
+      }
 
       _channels.sort((a, b) => a.name.compareTo(b.name));
 
@@ -216,7 +236,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
       _scrollToBottom();
     }).onError((e) {
-      // If initial state fails, still mark as loaded
       _loadingChannels = false;
       notifyListeners();
     });
@@ -226,7 +245,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _webSocketService.statusStream.listen((status) {
       _wsStatus = status;
       if (status == WebSocketStatus.connected) {
-        // When connected, immediately set loading to false
         _loadingChannels = false;
         _channelError = null;
       } else if (status == WebSocketStatus.unauthorized) {
@@ -345,6 +363,17 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // --- USER ACTIONS ---
 
   void onChannelSelected(String channelName) => _selectConversation(channelName);
+
+  void onUnjoinedChannelTap(String channelName) async {
+    try {
+      await _apiService.joinChannel(channelName);
+      await _fetchChannelsList();
+      _selectConversation(channelName);
+    } catch (e) {
+      _addInfoMessageToCurrentChannel('Failed to join channel: $channelName');
+    }
+  }
+
   void onDmSelected(String dmChannelName) => _selectConversation(dmChannelName);
 
   void _selectConversation(String conversationName) {
@@ -356,7 +385,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
       // Request history when joining a channel
       if (conversationName.startsWith('#')) {
-        // Changed from sendRawMessage to sendHistoryRequest to fix gateway JSON requirement
         _webSocketService.sendHistoryRequest(conversationName, "1d");
       }
     }
@@ -408,6 +436,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   // --- HELPER & LIFECYCLE METHODS ---
+
+  void toggleUnjoinedChannelsExpanded() {
+    unjoinedChannelsExpanded = !unjoinedChannelsExpanded;
+    notifyListeners();
+  }
 
   void _scrollToBottom() {
     WidgetsBinding.instance.addPostFrameCallback((_) {

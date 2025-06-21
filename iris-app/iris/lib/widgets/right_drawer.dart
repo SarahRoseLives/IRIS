@@ -1,4 +1,3 @@
-// lib/widgets/right_drawer.dart
 import 'package:flutter/material.dart';
 import '../models/channel_member.dart'; // Import the new model
 
@@ -40,47 +39,52 @@ class RightDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 240, // A bit wider to accommodate prefixes
-      color: const Color(0xFF2B2D31),
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(16.0),
-              child: Text(
-                "Members",
-                style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 20),
+    return Material(
+      color: Colors.transparent,
+      child: Container(
+        width: 240,
+        color: const Color(0xFF2B2D31),
+        child: SafeArea(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(16.0),
+                child: Text(
+                  "Members",
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20),
+                ),
               ),
-            ),
-            const Divider(color: Colors.white24, height: 1),
-            Expanded(
-              child: ListView.builder(
-                itemCount: members.length,
-                itemBuilder: (context, idx) {
-                  final member = members[idx];
-                  return ListTile(
-                    leading: Icon(
-                      _getIconForPrefix(member.prefix),
-                      color: _getColorForPrefix(member.prefix),
-                      size: 20,
-                    ),
-                    title: Text(
-                      member.nick, // Display nick directly
-                      style: TextStyle(
+              const Divider(color: Colors.white24, height: 1),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: members.length,
+                  itemBuilder: (context, idx) {
+                    final member = members[idx];
+                    return ListTile(
+                      leading: Icon(
+                        _getIconForPrefix(member.prefix),
                         color: _getColorForPrefix(member.prefix),
-                        fontWeight: member.prefix.isNotEmpty ? FontWeight.bold : FontWeight.normal,
+                        size: 20,
                       ),
-                    ),
-                  );
-                },
+                      title: Text(
+                        member.nick,
+                        style: TextStyle(
+                          color: _getColorForPrefix(member.prefix),
+                          fontWeight: member.prefix.isNotEmpty
+                              ? FontWeight.bold
+                              : FontWeight.normal,
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
       ),
     );

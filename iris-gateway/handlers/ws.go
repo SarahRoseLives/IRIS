@@ -50,7 +50,7 @@ func WebSocketHandler(c *gin.Context) {
 	sess.AddWebSocket(conn)
 	log.Printf("[WS] WebSocket connected for user %s (token: %s)", sess.Username, token)
 
-	// Send welcome message only (no initial state or channel history)
+	// Send welcome message
 	err = conn.WriteJSON(events.WsEvent{
 		Type: "connected",
 		Payload: map[string]interface{}{
@@ -63,7 +63,24 @@ func WebSocketHandler(c *gin.Context) {
 		log.Printf("[WS] Error sending connected message to %s: %v", sess.Username, err)
 	}
 
-	// Reader goroutine: continuously read messages from the client
+	// Send current channel state to client for restoration
+	sess.Mutex.RLock()
+	channels := make([]string, 0, len(sess.Channels))
+	for channel := range sess.Channels {
+		channels = append(channels, channel)
+	}
+	sess.Mutex.RUnlock()
+
+	err = conn.WriteJSON(events.WsEvent{
+		Type: "restore_state",
+		Payload: map[string]interface{}{
+			"channels": channels,
+		},
+	})
+	if err != nil {
+		log.Printf("[WS] Error sending initial state to %s: %v", sess.Username, err)
+	}
+
 	go func() {
 		defer func() {
 			sess.RemoveWebSocket(conn)
@@ -86,7 +103,21 @@ func WebSocketHandler(c *gin.Context) {
 
 			var clientMsg events.WsEvent
 			if err := json.Unmarshal(p, &clientMsg); err == nil {
-				if clientMsg.Type == "message" {
+				// Handle restore_state from client (for multi-client/channel sync)
+				if clientMsg.Type == "restore_state" {
+					if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
+						if chs, ok := payload["channels"].([]interface{}); ok {
+							channels := make([]string, 0)
+							for _, ch := range chs {
+								if chstr, ok := ch.(string); ok {
+									channels = append(channels, chstr)
+								}
+							}
+							// Optionally: sess.SyncChannels(channels) if you want to reconcile state
+							log.Printf("[WS] Client %s sent restore_state with channels: %v", sess.Username, channels)
+						}
+					}
+				} else if clientMsg.Type == "message" {
 					if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
 						channelName, channelOk := payload["channel_name"].(string)
 						text, textOk := payload["text"].(string)
@@ -109,8 +140,7 @@ func WebSocketHandler(c *gin.Context) {
 						log.Printf("[WS] Invalid payload structure in 'message' from %s", sess.Username)
 					}
 				} else {
-					// For other event types, we can still use a broadcast mechanism,
-					// but it should be called on the session.
+					// For other event types, use a broadcast mechanism
 					sess.Broadcast(clientMsg.Type, clientMsg.Payload)
 				}
 			} else {

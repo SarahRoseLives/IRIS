@@ -91,6 +91,28 @@ func (s *UserSession) RemoveChannelFromSession(channelName string) {
 	}
 }
 
+// SyncChannels synchronizes the session's channel state with the IRC server's view.
+// Adds any channels from the provided list that are not already present.
+func (s *UserSession) SyncChannels(channels []string) {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+
+	// Create a map of existing channels for quick lookup
+	existing := make(map[string]bool)
+	for ch := range s.Channels {
+		existing[ch] = true
+	}
+
+	// Add any new channels from the server
+	for _, ch := range channels {
+		nc := strings.ToLower(ch)
+		if !existing[nc] {
+			s.AddChannelToSession(nc)
+			log.Printf("[Session] Synced channel %s for %s", nc, s.Username)
+		}
+	}
+}
+
 // AccumulateChannelMembers stores raw member lists from 353 replies temporarily.
 func (s *UserSession) AccumulateChannelMembers(channelName string, members []string) {
 	normalizedChannelName := strings.ToLower(channelName)

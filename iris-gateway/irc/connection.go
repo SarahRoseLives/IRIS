@@ -123,21 +123,36 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 	connClient.AddCallback("001", func(e *ircevent.Event) { fmt.Println("Received 001, connection established") })
 	connClient.AddCallback("376", func(e *ircevent.Event) {
 		fmt.Println("Received End of MOTD (376)")
+		// After MOTD, request channel list to sync state
+		connClient.SendRaw("LIST")
+		log.Printf("[IRC] Requested channel list for %s after SASL auth", username)
 		select {
 		case saslDone <- nil:
 		default:
 		}
 	})
 
+	// Handle the LIST response to sync channels
+	connClient.AddCallback("322", func(e *ircevent.Event) { // LIST response
+		if len(e.Arguments) >= 2 {
+			channel := e.Arguments[1]
+			userSession.AddChannelToSession(channel)
+			log.Printf("[IRC] Auto-joined channel detected: %s", channel)
+		}
+	})
+
+	// --- JOIN CALLBACK: Only process our own JOINs (after SASL/auth) ---
 	connClient.AddCallback("JOIN", func(e *ircevent.Event) {
-		channelName := e.Arguments[0]
-		userName := e.Nick
-		log.Printf("[IRC] User %s JOINED %s\n", userName, channelName)
-		userSession.AddChannelToSession(channelName)
-		userSession.Broadcast("channel_join", map[string]string{
-			"name": channelName,
-			"user": userName,
-		})
+		// Only process our own JOINs (the user this client is connected as)
+		if e.Nick == username {
+			channelName := e.Arguments[0]
+			log.Printf("[IRC] Auto-joined to channel %s via SASL", channelName)
+			userSession.AddChannelToSession(channelName)
+			userSession.Broadcast("channel_join", map[string]string{
+				"name": channelName,
+				"user": username,
+			})
+		}
 	})
 
 	connClient.AddCallback("PART", func(e *ircevent.Event) {
@@ -153,82 +168,72 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 
 	// PRIVMSG callback for regular and image messages
 	connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
-		target := e.Arguments[0]
-		messageContent := e.Arguments[1]
-		sender := e.Nick
+    target := e.Arguments[0]
+    messageContent := e.Arguments[1]
+    sender := e.Nick
 
-		// --- IMAGE LINK PATCH START ---
-		if strings.Contains(messageContent, "/images/") {
-			parts := strings.Split(messageContent, "/images/")
-			if len(parts) > 1 {
-				imageName := parts[1]
-				messageContent = fmt.Sprintf("[image] https://yourdomain.com/images/%s", imageName)
-			}
-		}
-		// --- IMAGE LINK PATCH END ---
+    // Broadcast the message via WebSocket to the user's active client(s).
+    userSession.Broadcast("message", map[string]string{
+        "channel_name": strings.ToLower(target),
+        "sender":       sender,
+        "text":         messageContent, // Raw unmodified message
+    })
 
-		// Broadcast the message via WebSocket to the user's active client(s).
-		userSession.Broadcast("message", map[string]string{
-			"channel_name": strings.ToLower(target),
-			"sender":       sender,
-			"text":         messageContent,
-		})
+    // --- PUSH NOTIFICATION LOGIC (For OFFLINE users) ---
+    isChannelMessage := strings.HasPrefix(target, "#")
+    if isChannelMessage {
+        // Logic for sending push notifications for channel mentions
+        session.ForEachSession(func(s *session.UserSession) {
+            if strings.Contains(messageContent, s.Username) && !s.IsActive() && s.FCMToken != "" && s.Username != sender {
+                log.Printf("[Push] User %s was mentioned in %s while offline, sending push notification.", s.Username, target)
+                notificationTitle := fmt.Sprintf("New mention in %s", target)
+                notificationBody := fmt.Sprintf("%s: %s", sender, messageContent)
+                err := push.SendPushNotification(
+                    s.FCMToken,
+                    notificationTitle,
+                    notificationBody,
+                    map[string]string{
+                        "sender":       sender,
+                        "channel_name": target,
+                        "type":         "channel_mention",
+                    },
+                )
+                if err != nil {
+                    log.Printf("[Push] Failed to send mention notification to %s: %v", s.Username, err)
+                }
+            }
+        })
+    } else {
+        // Logic for sending push notifications for private messages
+        recipientUsername := target
+        if recipientUsername != "" {
+            token, found := session.FindSessionTokenByUsername(recipientUsername)
+            if !found {
+                log.Printf("[Push] Cannot send PM notification, user session not found for %s", recipientUsername)
+                return
+            }
 
-		// --- PUSH NOTIFICATION LOGIC (For OFFLINE users) ---
-		isChannelMessage := strings.HasPrefix(target, "#")
-		if isChannelMessage {
-			// Logic for sending push notifications for channel mentions
-			session.ForEachSession(func(s *session.UserSession) {
-				if strings.Contains(messageContent, s.Username) && !s.IsActive() && s.FCMToken != "" && s.Username != sender {
-					log.Printf("[Push] User %s was mentioned in %s while offline, sending push notification.", s.Username, target)
-					notificationTitle := fmt.Sprintf("New mention in %s", target)
-					notificationBody := fmt.Sprintf("%s: %s", sender, messageContent)
-					err := push.SendPushNotification(
-						s.FCMToken,
-						notificationTitle,
-						notificationBody,
-						map[string]string{
-							"sender":       sender,
-							"channel_name": target,
-							"type":         "channel_mention",
-						},
-					)
-					if err != nil {
-						log.Printf("[Push] Failed to send mention notification to %s: %v", s.Username, err)
-					}
-				}
-			})
-		} else {
-			// Logic for sending push notifications for private messages
-			recipientUsername := target
-			if recipientUsername != "" {
-				token, found := session.FindSessionTokenByUsername(recipientUsername)
-				if !found {
-					log.Printf("[Push] Cannot send PM notification, user session not found for %s", recipientUsername)
-					return
-				}
-
-				recipientSession, _ := session.GetSession(token)
-				if recipientSession != nil && !recipientSession.IsActive() && recipientSession.FCMToken != "" {
-					log.Printf("[Push] User %s is offline, sending push notification for PM.", recipientUsername)
-					err := push.SendPushNotification(
-						recipientSession.FCMToken,
-						fmt.Sprintf("New message from %s", sender),
-						messageContent,
-						map[string]string{
-							"sender": sender,
-							"type":   "private_message",
-						},
-					)
-					if err != nil {
-						log.Printf("[Push] Failed to send PM push notification to %s: %v", recipientUsername, err)
-					}
-				} else if recipientSession != nil && recipientSession.IsActive() {
-					log.Printf("[Push] User %s is online, skipping PM push notification.", recipientUsername)
-				}
-			}
-		}
-	})
+            recipientSession, _ := session.GetSession(token)
+            if recipientSession != nil && !recipientSession.IsActive() && recipientSession.FCMToken != "" {
+                log.Printf("[Push] User %s is offline, sending push notification for PM.", recipientUsername)
+                err := push.SendPushNotification(
+                    recipientSession.FCMToken,
+                    fmt.Sprintf("New message from %s", sender),
+                    messageContent,
+                    map[string]string{
+                        "sender": sender,
+                        "type":   "private_message",
+                    },
+                )
+                if err != nil {
+                    log.Printf("[Push] Failed to send PM push notification to %s: %v", recipientUsername, err)
+                }
+            } else if recipientSession != nil && recipientSession.IsActive() {
+                log.Printf("[Push] User %s is online, skipping PM push notification.", recipientUsername)
+            }
+        }
+    }
+})
 
 	// PRIVMSG callback for IRC history responses
 	connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {

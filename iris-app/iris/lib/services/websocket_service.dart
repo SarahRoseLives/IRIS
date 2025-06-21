@@ -45,6 +45,11 @@ class WebSocketService {
     });
   }
 
+  /// Public setter for updating the currently tracked channels from outside.
+  void updateCurrentChannels(List<String> channels) {
+    _currentChannels = channels;
+  }
+
   void connect(String token) {
     if (_ws != null && _currentWsStatus == WebSocketStatus.connected) {
       print("[WebSocketService] Already connected. Skipping new connection attempt.");
@@ -64,6 +69,7 @@ class WebSocketService {
         _statusController.add(WebSocketStatus.connected);
         print("[WebSocketService] Connected successfully to: $uri");
 
+        // Send current channels to restore state (fix)
         _ws!.sink.add(jsonEncode({
           'type': 'restore_state',
           'payload': {
@@ -95,6 +101,14 @@ class WebSocketService {
         final payload = event['payload'];
 
         switch (event['type']) {
+          case 'restore_state':
+            if (payload is Map<String, dynamic>) {
+              final channels = payload['channels'] as List<dynamic>? ?? [];
+              _currentChannels = List<String>.from(channels);
+              _channelsController.add(List.from(_currentChannels));
+              print("[WebSocketService] Updated channels from restore_state: $_currentChannels");
+            }
+            break;
           case 'initial_state':
             if (payload is Map<String, dynamic>) {
               final channels = payload['channels'] as Map<String, dynamic>? ?? {};
