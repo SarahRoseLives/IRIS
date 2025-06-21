@@ -1,4 +1,3 @@
-// lib/main.dart
 import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -15,11 +14,12 @@ import 'main_layout.dart';
 import 'services/api_service.dart';
 import 'models/login_response.dart';
 
+// Add this import for update checking
+import 'package:iris/services/update_service.dart'; // <--- update check
+
 final getIt = GetIt.instance;
 
 void setupLocator() {
-  // Use a factory for NotificationService if it depends on runtime data,
-  // or a singleton if it's truly independent. Singleton is fine here.
   if (!getIt.isRegistered<FlutterLocalNotificationsPlugin>()) {
     getIt.registerSingleton<FlutterLocalNotificationsPlugin>(FlutterLocalNotificationsPlugin());
   }
@@ -28,26 +28,16 @@ void setupLocator() {
   }
 }
 
-// 1. DEFINE THE BACKGROUND HANDLER HERE (TOP-LEVEL FUNCTION)
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // If you're going to use other Firebase services in the background, such as Firestore,
-  // make sure you call `initializeApp` before using them.
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  // You cannot use GetIt here if it relies on async setup from the main isolate.
-  // It's safer to instantiate what you need directly.
   final notificationService = NotificationService();
   await notificationService.setupLocalNotifications();
-
   print("Handling a background message: ${message.messageId}");
   print("Message data: ${message.data}");
-
-  // Show the local notification
   notificationService.showFlutterNotification(message);
 }
 
-// This callback is for flutter_local_notifications when a notification is tapped
 @pragma('vm:entry-point')
 void onDidReceiveNotificationResponse(NotificationResponse notificationResponse) async {
   final String? payload = notificationResponse.payload;
@@ -69,18 +59,15 @@ Future<void> main() async {
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // 2. REGISTER THE BACKGROUND HANDLER
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
   setupLocator();
 
-  // Initialize Notification Service (which handles foreground, taps, etc.)
   await getIt<NotificationService>().init();
 
   runApp(const IRISApp());
 }
 
-// The rest of your main.dart file remains the same.
 class IRISApp extends StatelessWidget {
   const IRISApp({super.key});
 
@@ -122,6 +109,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
   void initState() {
     super.initState();
     _checkLoginStatus();
+    _checkForUpdates(); // <--- update check
   }
 
   Future<void> _checkLoginStatus() async {
@@ -136,9 +124,17 @@ class _AuthWrapperState extends State<AuthWrapper> {
         ),
       );
     } else {
-       setState(() {
+      setState(() {
         _isLoading = false;
       });
+    }
+  }
+
+  // Add this method for update checking
+  Future<void> _checkForUpdates() async { // <--- update check
+    await Future.delayed(const Duration(seconds: 2));
+    if (mounted) {
+      await UpdateService.checkForUpdates(context);
     }
   }
 

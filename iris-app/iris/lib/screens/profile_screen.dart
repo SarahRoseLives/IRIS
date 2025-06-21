@@ -1,4 +1,3 @@
-// lib/screens/profile_screen.dart
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart'; // For picking images from gallery/camera
 import 'dart:io'; // For working with File objects
@@ -6,6 +5,7 @@ import '../services/api_service.dart';
 import 'package:shared_preferences/shared_preferences.dart'; // To get the username
 import 'package:http/http.dart' as http; // For checking avatar URL existence
 import '../config.dart'; // For base URL
+import 'package:iris/services/update_service.dart'; // <-- Add this import
 
 class ProfileScreen extends StatefulWidget {
   final String authToken;
@@ -180,6 +180,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       textStyle: const TextStyle(fontSize: 16),
                     ),
                   ),
+            const SizedBox(height: 20), // <-- Add spacing before the update button
+            ElevatedButton.icon(
+              onPressed: () async {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Checking for updates...')),
+                );
+                await UpdateService.checkForUpdates(context, forceCheck: true);
+              },
+              icon: const Icon(Icons.update),
+              label: const Text('Check for Updates'),
+              style: ElevatedButton.styleFrom(
+                foregroundColor: Colors.white,
+                backgroundColor: const Color(0xFF5865F2),
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
+                textStyle: const TextStyle(fontSize: 16),
+              ),
+            ),
           ],
         ),
       ),
