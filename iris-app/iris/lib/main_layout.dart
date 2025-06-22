@@ -14,7 +14,8 @@ class IrisLayout extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
-      create: (context) => MainLayoutViewModel(username: username, initialToken: token),
+      // FIX: Changed 'initialToken' to 'token' to match the updated constructor.
+      create: (context) => MainLayoutViewModel(username: username, token: token),
       child: const MainChatScreen(),
     );
   }

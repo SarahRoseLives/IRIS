@@ -5,16 +5,13 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:get_it/get_it.dart';
-import 'package:iris/main.dart'; // To access AuthWrapper.globalKey and PendingNotification
-import 'package:iris/viewmodels/main_layout_viewmodel.dart';
+import 'package:iris/main.dart'; // To access PendingNotification
 import 'package:permission_handler/permission_handler.dart';
-import 'package:provider/provider.dart';
 
 class NotificationService {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin = GetIt.instance<FlutterLocalNotificationsPlugin>();
 
-  // ... init() and setupLocalNotifications() are unchanged ...
   Future<void> init() async {
     final status = await Permission.notification.request();
     if (status.isGranted) {
@@ -89,9 +86,9 @@ class NotificationService {
     }
   }
 
-  /// Handles the user tapping on a notification.
-  /// If the app is fully running, it navigates immediately.
-  /// Otherwise, it buffers the channel name for the ViewModel to handle later.
+  /// REFACTORED: This method no longer tries to access the ViewModel directly.
+  /// It now *always* buffers the tap action using the PendingNotification static class.
+  /// The ChatController is responsible for checking this buffer upon initialization.
   void handleNotificationTap(Map<String, dynamic> data) {
     final String? sender = data['sender'];
     final String channelName = (data['type'] == 'private_message' && sender != null)
@@ -100,29 +97,11 @@ class NotificationService {
 
     if (channelName.isEmpty) return;
 
-    final BuildContext? context = AuthWrapper.globalKey.currentContext;
-
-    // Check if the app's UI is ready and the ViewModel is available
-    if (context != null && context.mounted) {
-      try {
-        final viewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
-        print("[NotificationService] App context is ready. Handling tap immediately for channel: $channelName");
-        viewModel.handleNotificationTap(channelName, "0");
-        PendingNotification.channelToNavigateTo = null; // Clear any stale pending request
-        return;
-      } catch (e) {
-        // This can happen if the context is available but the Provider is not yet in the widget tree.
-        // We'll fall through to the buffering logic below.
-        print("[NotificationService] Could not find ViewModel, buffering notification tap: $e");
-      }
-    }
-
-    // If the context wasn't ready or the ViewModel couldn't be found, buffer the navigation action.
-    print("[NotificationService] App context not ready. Buffering notification tap for channel: $channelName");
+    // Always buffer the navigation action. This is simpler and more robust.
+    print("[NotificationService] Buffering notification tap for channel: $channelName");
     PendingNotification.channelToNavigateTo = channelName;
   }
 
-  // ... getFCMToken() is unchanged ...
   Future<String?> getFCMToken() async {
     try {
       final token = await _firebaseMessaging.getToken();

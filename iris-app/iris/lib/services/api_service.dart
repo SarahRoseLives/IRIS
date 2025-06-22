@@ -37,15 +37,11 @@ class ApiService {
       );
       print("[ApiService] login: Received status code ${response.statusCode}");
 
-      // The login response itself might indicate failure, but a 401 here is for an invalid attempt,
-      // not an expired session, so we don't call forceLogout here.
       if (response.statusCode == 401) {
-        // This is a failed login attempt, not an expired session.
         return LoginResponse(success: false, message: 'Invalid username or password.');
       }
 
       if (response.statusCode != 200) {
-        // Handle other non-200 errors like server issues
         return LoginResponse(success: false, message: 'Server error. Please try again later.');
       }
 
@@ -118,17 +114,19 @@ class ApiService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> fetchChannelMessages(String channelName) async {
-    print("[ApiService] fetchChannelMessages: Attempting to fetch messages for $channelName");
+  /// FIX: This method now correctly fetches from the /history endpoint and maps the data correctly.
+  Future<List<Map<String, dynamic>>> fetchChannelMessages(String channelName, {int limit = 50}) async {
+    print("[ApiService] fetchChannelMessages: Attempting to fetch history for $channelName");
     if (channelName.isEmpty) {
       print("[ApiService] fetchChannelMessages: Channel name is empty, returning empty list.");
       return [];
     }
 
     final encodedChannelName = Uri.encodeComponent(channelName);
-    final url = Uri.parse('$baseUrl/channels/$encodedChannelName/messages');
+    // Corrected the URL to match the server's history endpoint
+    final url = Uri.parse('$baseUrl/history/$encodedChannelName?limit=$limit');
     final token = _getToken();
-    print("[ApiService] fetchChannelMessages: Calling GET $url with token: $token");
+    print("[ApiService] fetchChannelMessages: Calling GET $url");
 
     try {
       final response = await http.get(
@@ -145,12 +143,14 @@ class ApiService {
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200 && data['success'] == true) {
-        final List<dynamic> receivedMessages = data['messages'] ?? [];
-        print("[ApiService] fetchChannelMessages: Successfully fetched ${receivedMessages.length} messages for $channelName");
-        return receivedMessages.map((msg) => {
-              'from': msg['from'] ?? '',
-              'content': msg['content'] ?? '',
-              'time': msg['time'] ?? DateTime.now().toIso8601String(),
+        // The server returns a 'history' key from this endpoint.
+        final List<dynamic> history = data['history'] ?? [];
+        print("[ApiService] fetchChannelMessages: Successfully fetched ${history.length} messages for $channelName");
+        // Map server fields (sender, text, timestamp) to client fields (from, content, time)
+        return history.map((msg) => {
+              'from': msg['sender'] ?? 'Unknown',
+              'content': msg['text'] ?? '',
+              'time': msg['timestamp'] ?? DateTime.now().toIso8601String(),
             }).toList();
       } else {
         print("[ApiService] fetchChannelMessages: API returned non-200 status for $channelName: ${response.statusCode}");
@@ -246,7 +246,6 @@ class ApiService {
     final response = await request.send();
     final responseBody = await response.stream.bytesToString();
 
-    // Handle 401 for multipart upload
     if (response.statusCode == 401) {
       AuthWrapper.forceLogout(showExpiredMessage: true);
       throw Exception('Session expired');
