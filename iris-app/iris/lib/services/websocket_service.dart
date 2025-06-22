@@ -21,22 +21,19 @@ class WebSocketService {
   WebSocketStatus _currentWsStatus = WebSocketStatus.disconnected;
   List<String> _currentChannels = [];
 
-  final StreamController<WebSocketStatus> _statusController = StreamController<WebSocketStatus>.broadcast();
+  final _statusController = StreamController<WebSocketStatus>.broadcast();
   Stream<WebSocketStatus> get statusStream => _statusController.stream;
 
-  final StreamController<List<String>> _channelsController = StreamController<List<String>>.broadcast();
-  Stream<List<String>> get channelsStream => _channelsController.stream;
-
-  final StreamController<Map<String, dynamic>> _messageController = StreamController<Map<String, dynamic>>.broadcast();
+  final _messageController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
 
-  final StreamController<Map<String, dynamic>> _membersUpdateController = StreamController<Map<String, dynamic>>.broadcast();
+  final _membersUpdateController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get membersUpdateStream => _membersUpdateController.stream;
 
-  final StreamController<Map<String, dynamic>> _initialStateController = StreamController<Map<String, dynamic>>.broadcast();
+  final _initialStateController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get initialStateStream => _initialStateController.stream;
 
-  final StreamController<String> _errorController = StreamController<String>.broadcast();
+  final _errorController = StreamController<String>.broadcast();
   Stream<String> get errorStream => _errorController.stream;
 
   WebSocketService() {
@@ -45,12 +42,8 @@ class WebSocketService {
     });
   }
 
-  /// Public setter for updating the currently tracked channels from outside.
-  void updateCurrentChannels(List<String> channels) {
-    _currentChannels = channels;
-  }
-
   void connect(String token) {
+    // Only connect if not already connected or connecting
     if (_ws != null && _currentWsStatus == WebSocketStatus.connected) {
       print("[WebSocketService] Already connected. Skipping new connection attempt.");
       return;
@@ -62,20 +55,12 @@ class WebSocketService {
     print("[WebSocketService] Attempting to connect...");
 
     final uri = Uri.parse("$websocketUrl/$token");
-
     try {
       _ws = WebSocketChannel.connect(uri);
+
       _ws!.ready.then((_) {
         _statusController.add(WebSocketStatus.connected);
         print("[WebSocketService] Connected successfully to: $uri");
-
-        // Send current channels to restore state (fix)
-        _ws!.sink.add(jsonEncode({
-          'type': 'restore_state',
-          'payload': {
-            'channels': _currentChannels,
-          }
-        }));
       }).catchError((e) {
         print("[WebSocketService] Initial connection error: $e");
         if (_isUnauthorized(e.toString())) {
@@ -97,47 +82,14 @@ class WebSocketService {
           return;
         }
 
-        print("[WebSocketService] Parsed event: $event (Type: ${event['type']})");
         final payload = event['payload'];
-
         switch (event['type']) {
-          case 'restore_state':
-              if (payload is Map<String, dynamic>) {
-                  // 1. Correctly parse the payload as a Map.
-                  final channelData = payload['channels'] as Map<String, dynamic>? ?? {};
-                  // 2. Extract the keys (the channel names) into a List.
-                  final channels = channelData.keys.toList();
-                  _currentChannels = List<String>.from(channels);
-                  _channelsController.add(List.from(_currentChannels));
-                  print("[WebSocketService] Updated channels from restore_state: $_currentChannels");
-              }
-              break;
           case 'initial_state':
             if (payload is Map<String, dynamic>) {
               final channels = payload['channels'] as Map<String, dynamic>? ?? {};
-              final users = payload['users'] as Map<String, dynamic>? ?? {};
-              _initialStateController.add({
-                'channels': channels,
-                'users': users,
-              });
-              print("[WebSocketService] Forwarded initial state payload with ${channels.keys.length} channels and ${users.keys.length} users.");
+              _initialStateController.add({'channels': channels});
+              print("[WebSocketService] Forwarded initial state payload with ${channels.keys.length} channels.");
             }
-            break;
-          case 'channel_join':
-            final String channelName = payload['name'];
-            if (!_currentChannels.contains(channelName)) {
-              _currentChannels.add(channelName);
-              _currentChannels.sort();
-              _channelsController.add(List.from(_currentChannels));
-            }
-            print("[WebSocketService] Added joined channel to stream: $channelName");
-            break;
-          case 'channel_part':
-            final String channelName = payload['name'];
-            if (_currentChannels.remove(channelName)) {
-              _channelsController.add(List.from(_currentChannels));
-            }
-            print("[WebSocketService] Removed parted channel from stream: $channelName");
             break;
           case 'message':
             _messageController.add({
@@ -146,26 +98,13 @@ class WebSocketService {
               'text': payload['text'],
               'time': payload['time'] ?? DateTime.now().toIso8601String(),
             });
-            print("[WebSocketService] ADDED MESSAGE TO STREAM: ${payload['text']}");
-            break;
-          case 'history_message':
-            _messageController.add({
-              'channel_name': payload['channel_name'],
-              'sender': payload['sender'],
-              'text': payload['text'],
-              'time': payload['timestamp'] ?? DateTime.now().toIso8601String(),
-              'is_history': true,
-            });
-            print("[WebSocketService] ADDED HISTORY MESSAGE TO STREAM: ${payload['text']}");
             break;
           case 'members_update':
             final String channelName = payload['channel_name'];
             final List<dynamic> membersData = payload['members'] ?? [];
             final List<ChannelMember> members = membersData.map((m) => ChannelMember.fromJson(m)).toList();
             _membersUpdateController.add({'channel_name': channelName, 'members': members});
-            print("[WebSocketService] Received members update for $channelName");
             break;
-          // Optionally handle unauthorized event type from backend (if used)
           case 'unauthorized':
             _handleUnauthorized();
             break;
@@ -242,35 +181,6 @@ class WebSocketService {
     print("[WebSocketService] Sent message: $messageToSend");
   }
 
-  /// Send a history request for a channel in JSON format (recommended).
-  void sendHistoryRequest(String channelName, String duration) {
-    if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
-      _errorController.add("Cannot send history request: WebSocket not connected.");
-      print("[WebSocketService] Cannot send history request: WS not connected.");
-      return;
-    }
-    final historyReq = jsonEncode({
-      'type': 'history',
-      'payload': {
-        'channel_name': channelName,
-        'duration': duration,
-      },
-    });
-    _ws?.sink.add(historyReq);
-    print("[WebSocketService] Sent history request: $historyReq");
-  }
-
-  /// Deprecated: Use sendHistoryRequest for commands; only use for literal text if server expects it.
-  void sendRawMessage(String message) {
-    if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
-      _errorController.add("Cannot send raw message: WebSocket not connected.");
-      print("[WebSocketService] Cannot send raw message: WS not connected.");
-      return;
-    }
-    _ws?.sink.add(message);
-    print("[WebSocketService] Sent raw message: $message");
-  }
-
   void disconnect() {
     _ws?.sink.close();
     _reconnectTimer?.cancel();
@@ -281,7 +191,6 @@ class WebSocketService {
   void dispose() {
     disconnect();
     _statusController.close();
-    _channelsController.close();
     _messageController.close();
     _membersUpdateController.close();
     _initialStateController.close();

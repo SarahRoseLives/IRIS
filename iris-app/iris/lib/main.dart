@@ -2,20 +2,15 @@ import 'package:flutter/material.dart';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-
-// Firebase Imports
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:iris/firebase_options.dart';
-
 import 'package:get_it/get_it.dart';
 import 'package:iris/services/notification_service.dart';
+import 'package:iris/services/websocket_service.dart'; // <-- Add this import
 import 'main_layout.dart';
-import 'services/api_service.dart';
-import 'models/login_response.dart';
-import 'screens/login_screen.dart'; // <-- Moved LoginScreen import
-
-import 'package:iris/services/update_service.dart'; // <--- update check
+import 'screens/login_screen.dart';
+import 'package:iris/services/update_service.dart';
 
 // Simple static class to hold a pending navigation action from a notification tap.
 class PendingNotification {
@@ -31,15 +26,16 @@ void setupLocator() {
   if (!getIt.isRegistered<NotificationService>()) {
     getIt.registerSingleton<NotificationService>(NotificationService());
   }
+  // Register WebSocketService singleton if not already registered
+  if (!getIt.isRegistered<WebSocketService>()) {
+    getIt.registerSingleton<WebSocketService>(WebSocketService());
+  }
 }
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  // We need to re-setup the locator for this separate isolate.
   setupLocator();
-
   final notificationService = getIt<NotificationService>();
   await notificationService.setupLocalNotifications();
   print("Handling a background message: ${message.messageId}");
@@ -52,8 +48,6 @@ void onDidReceiveNotificationResponse(NotificationResponse notificationResponse)
   if (payload != null) {
     try {
       final Map<String, dynamic> data = jsonDecode(payload);
-      // Can't use GetIt here directly in a static context easily, so we create a new instance
-      // and let it buffer the tap.
       NotificationService().handleNotificationTap(data);
     } catch (e) {
       print("Error in onDidReceiveNotificationResponse: $e");
@@ -63,17 +57,12 @@ void onDidReceiveNotificationResponse(NotificationResponse notificationResponse)
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-
   setupLocator();
-
   await getIt<NotificationService>().init();
-
   runApp(const IRISApp());
 }
 
@@ -113,13 +102,12 @@ class AuthWrapper extends StatefulWidget {
 
 class _AuthWrapperState extends State<AuthWrapper> {
   bool _isLoading = true;
-  bool _showExpiredMessage = false;
 
   @override
   void initState() {
     super.initState();
     _checkLoginStatus();
-    _checkForUpdates(); // <--- update check
+    _checkForUpdates();
   }
 
   Future<void> _checkLoginStatus() async {
@@ -140,8 +128,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
   }
 
-  // Add this method for update checking
-  Future<void> _checkForUpdates() async { // <--- update check
+  Future<void> _checkForUpdates() async {
     await Future.delayed(const Duration(seconds: 2));
     if (mounted) {
       await UpdateService.checkForUpdates(context);
@@ -153,12 +140,9 @@ class _AuthWrapperState extends State<AuthWrapper> {
     await prefs.remove('auth_token');
     await prefs.remove('username');
 
-    if (mounted) {
-      setState(() {
-        _showExpiredMessage = showExpiredMessage;
-      });
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => LoginScreen(showExpiredMessage: _showExpiredMessage)),
+    if (AuthWrapper.globalKey.currentContext != null && mounted) {
+      Navigator.of(AuthWrapper.globalKey.currentContext!).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => LoginScreen(showExpiredMessage: showExpiredMessage)),
         (route) => false,
       );
     }
@@ -174,6 +158,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
         ),
       );
     }
-    return LoginScreen(showExpiredMessage: _showExpiredMessage);
+    return LoginScreen(showExpiredMessage: false);
   }
 }

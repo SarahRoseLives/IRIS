@@ -1,10 +1,7 @@
-// handlers/ws.go
-
 package handlers
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -23,12 +20,6 @@ var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool {
 		return true // Allow all origins for development
 	},
-}
-
-// WsEvent struct matches the Flutter client's expected event format
-type WsEvent struct {
-	Type    string      `json:"type"`
-	Payload interface{} `json:"payload"`
 }
 
 // WebSocketHandler handles the initial WebSocket connection upgrade and
@@ -58,66 +49,33 @@ func WebSocketHandler(c *gin.Context) {
 		log.Printf("[IRC] User %s reconnected, sent BACK command.", sess.Username)
 	}
 
-	// Send welcome message
-	err = conn.WriteJSON(events.WsEvent{
-		Type: "connected",
-		Payload: map[string]interface{}{
-			"message":  fmt.Sprintf("Connected to IRIS as %s", sess.Username),
-			"username": sess.Username,
-			"time":     time.Now().Format(time.RFC3339),
-		},
-	})
-	if err != nil {
-		log.Printf("[WS] Error sending connected message to %s: %v", sess.Username, err)
-	}
-
-	// --- FIX FOR HISTORY ---
-	// Instead of sending a single 'initial_state', we send two types of events.
-	// 1. Send 'restore_state'. The client uses this to trigger an API call to get the channel list, which does NOT wipe history.
-	// 2. Send a series of 'members_update' events. The client handles these safely, updating each channel's member list without wiping history.
-
+	// --- MODIFIED: Send a single, comprehensive initial_state event ---
+	// This event contains everything the client needs to restore its UI.
 	sess.Mutex.RLock()
-	channelsPayload := sess.Channels
+	initialStatePayload := gin.H{
+		"channels": sess.Channels,
+		// You could add other initial state data here, like user settings etc.
+	}
 	sess.Mutex.RUnlock()
 
-	// Send 'restore_state' first to trigger client's channel list fetch.
+	// FIX: Synchronize this write operation with the session's broadcast method
+	// to prevent concurrent write errors on the websocket connection.
+	sess.WsMutex.Lock()
 	err = conn.WriteJSON(events.WsEvent{
-		Type: "restore_state",
-		Payload: map[string]interface{}{
-			"channels": channelsPayload,
-		},
+		Type:    "initial_state",
+		Payload: initialStatePayload,
 	})
+	sess.WsMutex.Unlock()
+
 	if err != nil {
-		log.Printf("[WS] Error sending restore_state to %s: %v", sess.Username, err)
+		log.Printf("[WS] Error sending initial_state to %s: %v", sess.Username, err)
+		// Since we failed to send the initial state, we should close the connection.
+		sess.RemoveWebSocket(conn)
+		conn.Close()
+		return
 	}
-
-	// Now, send the member lists using the non-destructive 'members_update' event for each channel.
-	go func() {
-		// Wait a moment for the client to process the restore_state and fetch the channel list
-		time.Sleep(500 * time.Millisecond)
-
-		sess.Mutex.RLock()
-		defer sess.Mutex.RUnlock()
-
-		for _, channelState := range sess.Channels {
-			// Create a copy inside the loop to avoid data races with the payload map
-			chState := channelState
-			payload := map[string]interface{}{
-				"channel_name": chState.Name,
-				"members":      chState.Members,
-			}
-			memberUpdateMsg := events.WsEvent{
-				Type:    "members_update",
-				Payload: payload,
-			}
-			if err := conn.WriteJSON(memberUpdateMsg); err != nil {
-				log.Printf("[WS] Error sending members_update for %s to %s: %v", chState.Name, sess.Username, err)
-			}
-			// Small delay between each update
-			time.Sleep(100 * time.Millisecond)
-		}
-		log.Printf("[WS] Finished sending all initial member_updates to %s.", sess.Username)
-	}()
+	log.Printf("[WS] Sent initial_state payload to %s.", sess.Username)
+	// --- END MODIFICATION ---
 
 	go func() {
 		defer func() {
@@ -139,8 +97,8 @@ func WebSocketHandler(c *gin.Context) {
 		for {
 			messageType, p, err := conn.ReadMessage()
 			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure) {
-					log.Printf("[WS] Client %s disconnected gracefully: %v", sess.Username, err)
+				if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure, 1006) {
+					log.Printf("[WS] Client %s disconnected gracefully or with abnormal closure: %v", sess.Username, err)
 				} else {
 					log.Printf("[WS] Error reading message from client %s: %v", sess.Username, err)
 				}

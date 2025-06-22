@@ -17,7 +17,7 @@ class ApiService {
     _token = token;
   }
 
-  /// Checks for token invalidation (401), and triggers force logout if needed
+  /// MODIFIED: Checks for token invalidation (401), and triggers force logout if needed
   bool _checkForTokenInvalidation(http.Response response) {
     if (response.statusCode == 401) {
       AuthWrapper.forceLogout(showExpiredMessage: true);
@@ -37,8 +37,16 @@ class ApiService {
       );
       print("[ApiService] login: Received status code ${response.statusCode}");
 
+      // The login response itself might indicate failure, but a 401 here is for an invalid attempt,
+      // not an expired session, so we don't call forceLogout here.
       if (response.statusCode == 401) {
-        return LoginResponse(success: false, message: 'Session expired. Please login again.');
+        // This is a failed login attempt, not an expired session.
+        return LoginResponse(success: false, message: 'Invalid username or password.');
+      }
+
+      if (response.statusCode != 200) {
+        // Handle other non-200 errors like server issues
+        return LoginResponse(success: false, message: 'Server error. Please try again later.');
       }
 
       final responseData = json.decode(response.body);
@@ -238,7 +246,7 @@ class ApiService {
     final response = await request.send();
     final responseBody = await response.stream.bytesToString();
 
-    // Handle 401 for multipart upload (http.StreamedResponse does not have headers)
+    // Handle 401 for multipart upload
     if (response.statusCode == 401) {
       AuthWrapper.forceLogout(showExpiredMessage: true);
       throw Exception('Session expired');

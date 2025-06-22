@@ -21,7 +21,7 @@ type ChannelState struct {
 	Name       string          `json:"name"`
 	Members    []ChannelMember `json:"members"`
 	LastUpdate time.Time       `json:"last_update"`
-	mutex      sync.Mutex
+	mutex      sync.Mutex      `json:"-"` // FIX: Prevent the mutex from being marshalled to JSON.
 }
 
 func NewUserSession(username string) *UserSession {
@@ -41,7 +41,7 @@ type UserSession struct {
 	pendingNames map[string][]string
 	namesMutex   sync.Mutex
 	WebSockets   []*websocket.Conn
-	wsMutex      sync.Mutex
+	WsMutex      sync.Mutex // FIX: Renamed from wsMutex to be an exported field.
 	Mutex        sync.RWMutex
 	IsAway       bool
 	AwayMessage  string
@@ -65,7 +65,6 @@ func (s *UserSession) AddChannelToSession(channelName string) {
 			LastUpdate: time.Now(),
 		}
 		log.Printf("[Session.AddChannelToSession] User %s added new channel '%s'", s.Username, normalizedChannelName)
-		// REMOVED: No request for history here!
 	}
 }
 
@@ -237,9 +236,9 @@ func (s *UserSession) Broadcast(eventType string, payload any) {
 	s.Mutex.RLock()
 	defer s.Mutex.RUnlock()
 	for _, ws := range s.WebSockets {
-		s.wsMutex.Lock()
+		s.WsMutex.Lock() // FIX: Use the exported WsMutex
 		err := ws.WriteMessage(websocket.TextMessage, bytes)
-		s.wsMutex.Unlock()
+		s.WsMutex.Unlock() // FIX: Use the exported WsMutex
 
 		if err != nil {
 			log.Printf("[Session.Broadcast] Error sending message to WebSocket for user '%s': %v", s.Username, err)
@@ -268,12 +267,13 @@ func FindSessionTokenByUsername(username string) (string, bool) {
 
 func (s *UserSession) SetAway(message string) {
 	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
 	s.IsAway = true
 	s.AwayMessage = message
 	if s.IRC != nil {
 		s.IRC.SendRawf("AWAY :%s", message)
 	}
+	s.Mutex.Unlock() // PATCH: Release lock before broadcasting to prevent deadlock.
+
 	s.Broadcast("user_away", map[string]string{
 		"username": s.Username,
 		"message":  message,
@@ -282,12 +282,13 @@ func (s *UserSession) SetAway(message string) {
 
 func (s *UserSession) SetBack() {
 	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
 	s.IsAway = false
 	s.AwayMessage = ""
 	if s.IRC != nil {
 		s.IRC.SendRaw("BACK")
 	}
+	s.Mutex.Unlock() // PATCH: Release lock before broadcasting to prevent deadlock.
+
 	s.Broadcast("user_back", map[string]string{
 		"username": s.Username,
 	})

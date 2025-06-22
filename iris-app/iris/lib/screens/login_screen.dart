@@ -5,6 +5,7 @@ import '../models/login_response.dart';
 import '../main_layout.dart';
 
 class LoginScreen extends StatefulWidget {
+  // MODIFIED: Accept a flag to show the expired message.
   final bool showExpiredMessage;
   const LoginScreen({super.key, this.showExpiredMessage = false});
 
@@ -23,8 +24,15 @@ class _LoginScreenState extends State<LoginScreen> {
   @override
   void initState() {
     super.initState();
+    // NEW: If the flag is true, set the message after the first frame.
     if (widget.showExpiredMessage) {
-      _message = 'Your session has expired. Please login again.';
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+         if (mounted) {
+           setState(() {
+              _message = 'Your session has expired. Please login again.';
+           });
+         }
+      });
     }
   }
 
@@ -188,10 +196,11 @@ class _LoginScreenState extends State<LoginScreen> {
                     const SizedBox(height: 20),
                     Text(
                       _message!,
+                      textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: _message == 'Your session has expired. Please login again.'
+                        color: _message!.startsWith('Your session')
                             ? Colors.orangeAccent
-                            : (_message!.contains("success") ? Colors.green : Colors.redAccent),
+                            : (_message!.toLowerCase().contains("success") ? Colors.green : Colors.redAccent),
                         fontWeight: FontWeight.bold,
                       ),
                     ),
