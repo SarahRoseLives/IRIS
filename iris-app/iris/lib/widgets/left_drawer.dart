@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import '../services/websocket_service.dart';
 
+// ADDED IMPORTS
+import '../models/user_status.dart';
+import '../widgets/user_avatar.dart';
+
 class LeftDrawer extends StatelessWidget {
   final List<String> dms;
   final Map<String, String> userAvatars;
+  final Map<String, UserStatus> userStatuses; // ADDED
   final List<String> joinedChannels;
   final List<String> unjoinedChannels;
   final String selectedConversationTarget;
@@ -18,17 +23,18 @@ class LeftDrawer extends StatelessWidget {
   final VoidCallback onCloseDrawer;
   final bool unjoinedExpanded;
   final VoidCallback onToggleUnjoined;
-  final ValueChanged<String> onChannelPart; // <-- ADDED
+  final ValueChanged<String> onChannelPart; // <-- ALREADY ADDED
 
   const LeftDrawer({
     super.key,
     required this.dms,
     required this.userAvatars,
+    required this.userStatuses, // ADDED
     required this.joinedChannels,
     required this.unjoinedChannels,
     required this.selectedConversationTarget,
     required this.onChannelSelected,
-    required this.onChannelPart, // <-- ADDED
+    required this.onChannelPart, // <-- ALREADY ADDED
     required this.onUnjoinedChannelTap,
     required this.onDmSelected,
     required this.onIrisTap,
@@ -94,6 +100,7 @@ class LeftDrawer extends StatelessWidget {
                               final username = dmChannelName.substring(1);
                               final avatarUrl = userAvatars[username];
                               final isSelected = selectedConversationTarget.toLowerCase() == dmChannelName.toLowerCase();
+                              final status = userStatuses[username] ?? UserStatus.offline; // ADDED
 
                               return Padding(
                                 padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -104,19 +111,12 @@ class LeftDrawer extends StatelessWidget {
                                       onDmSelected(dmChannelName);
                                       onCloseDrawer();
                                     },
-                                    child: CircleAvatar(
+                                    // REPLACED CircleAvatar with UserAvatar
+                                    child: UserAvatar(
                                       radius: 28,
-                                      backgroundColor: isSelected ? Colors.white : Colors.grey[800],
-                                      backgroundImage: (avatarUrl != null && avatarUrl.isNotEmpty)
-                                          ? NetworkImage(avatarUrl) as ImageProvider
-                                          : null,
-                                      child: (avatarUrl == null || avatarUrl.isEmpty)
-                                          ? Text(
-                                              username.isNotEmpty ? username[0].toUpperCase() : '?',
-                                              style: TextStyle(
-                                                color: isSelected ? Colors.black : Colors.white,
-                                                fontWeight: FontWeight.bold))
-                                          : null,
+                                      username: username,
+                                      avatarUrl: avatarUrl,
+                                      status: status,
                                     ),
                                   ),
                                 ),

@@ -1,49 +1,18 @@
 import 'package:flutter/material.dart';
 import '../models/channel_member.dart';
+import '../models/user_status.dart';
+import 'user_avatar.dart';
+import '../utils/irc_helpers.dart'; // <-- New import for shared IRC role logic
 
 class RightDrawer extends StatelessWidget {
   final List<ChannelMember> members;
+  final Map<String, String> userAvatars;
 
   const RightDrawer({
     super.key,
     required this.members,
+    required this.userAvatars,
   });
-
-  // Helper to determine the color based on the user's prefix
-  Color _getColorForPrefix(String prefix) {
-    switch (prefix) {
-      case '~':
-        return Colors.deepPurpleAccent; // Owner
-      case '&':
-        return Colors.redAccent; // Admin
-      case '@':
-        return Colors.amber; // Operator
-      case '%':
-        return Colors.blue; // Half-op
-      case '+':
-        return Colors.greenAccent; // Voiced
-      default:
-        return Colors.white; // Regular member
-    }
-  }
-
-  // Helper to get an icon for the user's prefix
-  IconData _getIconForPrefix(String prefix) {
-    switch (prefix) {
-      case '~':
-        return Icons.workspace_premium; // Owner
-      case '&':
-        return Icons.security; // Admin
-      case '@':
-        return Icons.shield; // Operator
-      case '%':
-        return Icons.security; // Half-op (replacing moderator with security)
-      case '+':
-        return Icons.record_voice_over; // Voiced
-      default:
-        return Icons.person; // Regular member
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -69,34 +38,51 @@ class RightDrawer extends StatelessWidget {
               const Divider(color: Colors.white24, height: 1),
               Expanded(
                 child: members.isEmpty
-                  ? const Center(
-                      child: Text(
-                        "No members",
-                        style: TextStyle(color: Colors.white54),
-                      ),
-                    )
-                  : ListView.builder(
-                      itemCount: members.length,
-                      itemBuilder: (context, idx) {
-                        final member = members[idx];
-                        return ListTile(
-                          leading: Icon(
-                            _getIconForPrefix(member.prefix),
-                            color: _getColorForPrefix(member.prefix),
-                            size: 20,
-                          ),
-                          title: Text(
-                            member.nick,
-                            style: TextStyle(
-                              color: _getColorForPrefix(member.prefix),
-                              fontWeight: member.prefix.isNotEmpty
-                                  ? FontWeight.bold
-                                  : FontWeight.normal,
+                    ? const Center(
+                        child: Text(
+                          "No members",
+                          style: TextStyle(color: Colors.white54),
+                        ),
+                      )
+                    : ListView.builder(
+                        itemCount: members.length,
+                        itemBuilder: (context, idx) {
+                          final member = members[idx];
+                          final avatarUrl = userAvatars[member.nick];
+                          final status = member.isAway ? UserStatus.away : UserStatus.online;
+                          final roleColor = getColorForPrefix(member.prefix);
+                          final roleIcon = getIconForPrefix(member.prefix);
+
+                          return ListTile(
+                            leading: UserAvatar(
+                              username: member.nick,
+                              avatarUrl: avatarUrl,
+                              status: status,
+                              radius: 16,
                             ),
-                          ),
-                        );
-                      },
-                    ),
+                            title: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    member.nick,
+                                    style: TextStyle(
+                                      color: roleColor,
+                                      fontWeight: member.prefix.isNotEmpty
+                                          ? FontWeight.bold
+                                          : FontWeight.normal,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                if (roleIcon != null) ...[
+                                  const SizedBox(width: 8),
+                                  Icon(roleIcon, color: roleColor, size: 16),
+                                ]
+                              ],
+                            ),
+                          );
+                        },
+                      ),
               ),
             ],
           ),

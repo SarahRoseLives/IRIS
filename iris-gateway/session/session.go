@@ -15,13 +15,14 @@ import (
 type ChannelMember struct {
 	Nick   string `json:"nick"`
 	Prefix string `json:"prefix"`
+	IsAway bool   `json:"is_away"` // Away status will be updated in real-time
 }
 
 type ChannelState struct {
 	Name       string          `json:"name"`
 	Members    []ChannelMember `json:"members"`
 	LastUpdate time.Time       `json:"last_update"`
-	mutex      sync.Mutex      `json:"-"` // FIX: Prevent the mutex from being marshalled to JSON.
+	mutex      sync.Mutex      `json:"-"`
 }
 
 func NewUserSession(username string) *UserSession {
@@ -41,7 +42,7 @@ type UserSession struct {
 	pendingNames map[string][]string
 	namesMutex   sync.Mutex
 	WebSockets   []*websocket.Conn
-	WsMutex      sync.Mutex // FIX: Renamed from wsMutex to be an exported field.
+	WsMutex      sync.Mutex
 	Mutex        sync.RWMutex
 	IsAway       bool
 	AwayMessage  string
@@ -137,7 +138,7 @@ func (s *UserSession) FinalizeChannelMembers(channelName string) {
 			prefix = string(rawNick[0])
 			nick = rawNick[1:]
 		}
-		parsedMembers = append(parsedMembers, ChannelMember{Nick: nick, Prefix: prefix})
+		parsedMembers = append(parsedMembers, ChannelMember{Nick: nick, Prefix: prefix, IsAway: false})
 	}
 
 	s.Mutex.Lock()
@@ -149,7 +150,7 @@ func (s *UserSession) FinalizeChannelMembers(channelName string) {
 		channelState.Members = parsedMembers
 		channelState.LastUpdate = time.Now()
 		channelState.mutex.Unlock()
-		log.Printf("[Session.FinalizeChannelMembers] Finalized %d members for channel '%s'", len(parsedMembers), normalizedChannelName)
+		log.Printf("[Session.FinalizeChannelMembers] Finalized %d members for channel '%s', broadcasting update.", len(parsedMembers), normalizedChannelName)
 
 		go s.Broadcast("members_update", map[string]interface{}{
 			"channel_name": normalizedChannelName,
@@ -157,6 +158,53 @@ func (s *UserSession) FinalizeChannelMembers(channelName string) {
 		})
 	} else {
 		log.Printf("[Session.FinalizeChannelMembers] Channel '%s' not found in session.", normalizedChannelName)
+	}
+}
+
+// UpdateAwayStatusForAllSessions is called by the AWAY IRCv3 event handler.
+// It updates away status for all sessions/channels where the user is visible and broadcasts updates.
+func UpdateAwayStatusForAllSessions(nick string, isAway bool) {
+	mutex.RLock()
+	defer mutex.RUnlock()
+
+	for _, s := range sessionMap {
+		channelsToUpdate := make([]string, 0)
+		s.Mutex.RLock()
+		for chName, chState := range s.Channels {
+			chState.mutex.Lock()
+			memberUpdated := false
+			for i := range chState.Members {
+				if strings.EqualFold(chState.Members[i].Nick, nick) {
+					chState.Members[i].IsAway = isAway
+					memberUpdated = true
+					break
+				}
+			}
+			chState.mutex.Unlock()
+			if memberUpdated {
+				channelsToUpdate = append(channelsToUpdate, chName)
+			}
+		}
+		s.Mutex.RUnlock()
+
+		for _, chName := range channelsToUpdate {
+			s.Mutex.RLock()
+			channelState := s.Channels[chName]
+			s.Mutex.RUnlock()
+
+			if channelState != nil {
+				channelState.mutex.Lock()
+				finalMembers := make([]ChannelMember, len(channelState.Members))
+				copy(finalMembers, channelState.Members)
+				channelState.mutex.Unlock()
+
+				log.Printf("[Session.UpdateAway] Broadcasting updated member list for channel %s to user %s", chName, s.Username)
+				go s.Broadcast("members_update", map[string]interface{}{
+					"channel_name": chName,
+					"members":      finalMembers,
+				})
+			}
+		}
 	}
 }
 
@@ -226,20 +274,17 @@ func (s *UserSession) Broadcast(eventType string, payload any) {
 		Type:    eventType,
 		Payload: payload,
 	}
-
 	bytes, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("[Session.Broadcast] Error marshalling event '%s': %v", eventType, err)
 		return
 	}
-
 	s.Mutex.RLock()
 	defer s.Mutex.RUnlock()
 	for _, ws := range s.WebSockets {
-		s.WsMutex.Lock() // FIX: Use the exported WsMutex
+		s.WsMutex.Lock()
 		err := ws.WriteMessage(websocket.TextMessage, bytes)
-		s.WsMutex.Unlock() // FIX: Use the exported WsMutex
-
+		s.WsMutex.Unlock()
 		if err != nil {
 			log.Printf("[Session.Broadcast] Error sending message to WebSocket for user '%s': %v", s.Username, err)
 		}
@@ -272,8 +317,7 @@ func (s *UserSession) SetAway(message string) {
 	if s.IRC != nil {
 		s.IRC.SendRawf("AWAY :%s", message)
 	}
-	s.Mutex.Unlock() // PATCH: Release lock before broadcasting to prevent deadlock.
-
+	s.Mutex.Unlock()
 	s.Broadcast("user_away", map[string]string{
 		"username": s.Username,
 		"message":  message,
@@ -287,8 +331,7 @@ func (s *UserSession) SetBack() {
 	if s.IRC != nil {
 		s.IRC.SendRaw("BACK")
 	}
-	s.Mutex.Unlock() // PATCH: Release lock before broadcasting to prevent deadlock.
-
+	s.Mutex.Unlock()
 	s.Broadcast("user_back", map[string]string{
 		"username": s.Username,
 	})

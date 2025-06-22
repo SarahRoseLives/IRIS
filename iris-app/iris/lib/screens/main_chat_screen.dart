@@ -105,6 +105,7 @@ class MainChatScreen extends StatelessWidget {
                       child: LeftDrawer(
                         dms: viewModel.dmChannelNames,
                         userAvatars: viewModel.userAvatars,
+                        userStatuses: viewModel.chatState.userStatuses, // ADDED
                         joinedChannels: viewModel.joinedPublicChannelNames,
                         unjoinedChannels: viewModel.unjoinedPublicChannelNames,
                         selectedConversationTarget: viewModel.selectedConversationTarget,
@@ -147,7 +148,10 @@ class MainChatScreen extends StatelessWidget {
                     duration: const Duration(milliseconds: 200),
                     child: IgnorePointer(
                       ignoring: !viewModel.showRightDrawer,
-                      child: RightDrawer(members: viewModel.members),
+                      child: RightDrawer(
+                        members: viewModel.members,
+                        userAvatars: viewModel.userAvatars, // ADDED
+                      ),
                     ),
                   ),
                 ),

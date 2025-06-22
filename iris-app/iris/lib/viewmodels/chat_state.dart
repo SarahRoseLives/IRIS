@@ -1,20 +1,22 @@
-// lib/viewmodels/chat_state.dart
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/channel.dart';
 import '../models/channel_member.dart';
+import '../models/user_status.dart';
 
 class ChatState extends ChangeNotifier {
   List<Channel> _channels = [];
   int _selectedChannelIndex = 0;
   final Map<String, List<Message>> _channelMessages = {};
   final Map<String, String> _userAvatars = {};
+  final Map<String, UserStatus> _userStatuses = {};
 
   // --- GETTERS ---
   List<Channel> get channels => _channels;
   Map<String, String> get userAvatars => _userAvatars;
+  Map<String, UserStatus> get userStatuses => _userStatuses;
 
   List<String> get joinedPublicChannelNames => _channels
       .where((c) => c.name.startsWith('#') && c.members.isNotEmpty)
@@ -52,11 +54,52 @@ class ChatState extends ChangeNotifier {
 
   bool hasAvatar(String username) => _userAvatars.containsKey(username) && _userAvatars[username]!.isNotEmpty;
 
+  // NEW METHOD: This was missing and caused the build error.
+  // It looks up a member in the currently selected channel by case-insensitive nick.
+  ChannelMember? getMemberInCurrentChannel(String nick) {
+    final members = membersForSelectedChannel;
+    try {
+      // Use firstWhere to find the member, comparing nicks case-insensitively.
+      return members.firstWhere((m) => m.nick.toLowerCase() == nick.toLowerCase());
+    } catch (e) {
+      // firstWhere throws an error if no element is found, so we catch it and return null.
+      return null;
+    }
+  }
+
+  UserStatus getUserStatus(String username) {
+    // Perform a case-insensitive lookup
+    final lowerCaseUsername = username.toLowerCase();
+    for (var entry in _userStatuses.entries) {
+      if (entry.key.toLowerCase() == lowerCaseUsername) {
+        return entry.value;
+      }
+    }
+    return UserStatus.offline;
+  }
+
   // --- MUTATORS ---
+
+  void _rebuildUserStatuses() {
+    _userStatuses.clear();
+    for (final channel in _channels) {
+      for (final member in channel.members) {
+        // If user is 'away' in any channel, their status is 'away'. Otherwise, 'online'.
+        if (member.isAway) {
+          _userStatuses[member.nick] = UserStatus.away;
+        } else {
+          // Only set to online if they aren't already marked as away from another channel
+          _userStatuses.putIfAbsent(member.nick, () => UserStatus.online);
+        }
+      }
+    }
+  }
 
   void setChannels(List<Channel> newChannels, {String? defaultChannel}) {
     _channels = newChannels;
     _channels.sort((a, b) => a.name.compareTo(b.name));
+
+    _rebuildUserStatuses();
 
     int targetIndex = -1;
 
@@ -80,6 +123,7 @@ class ChatState extends ChangeNotifier {
       _channels.add(channel);
       _channels.sort((a, b) => a.name.compareTo(b.name));
     }
+    _rebuildUserStatuses();
     notifyListeners();
   }
 
@@ -91,6 +135,7 @@ class ChatState extends ChangeNotifier {
         final newIndex = _channels.indexWhere((c) => c.name.startsWith("#"));
         _selectedChannelIndex = (newIndex != -1) ? newIndex : 0;
       }
+      _rebuildUserStatuses();
       notifyListeners();
   }
 
@@ -98,6 +143,7 @@ class ChatState extends ChangeNotifier {
     final index = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
     if (index != -1) {
       _channels[index].members = members;
+      _rebuildUserStatuses();
       notifyListeners();
     }
   }

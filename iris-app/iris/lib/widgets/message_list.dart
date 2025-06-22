@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_highlight/flutter_highlight.dart';
 import 'package:flutter_highlight/themes/atom-one-dark.dart';
-import '../models/channel.dart'; // Import the Message class
-import '../config.dart'; // Needed for apiHost and apiPort
+import 'package:provider/provider.dart';
+
+import '../models/channel.dart';
+import '../models/user_status.dart';
+import '../utils/irc_helpers.dart';
+import '../viewmodels/main_layout_viewmodel.dart';
 import 'link_preview.dart';
+import 'user_avatar.dart';
 
 class MessageList extends StatelessWidget {
   final List<Message> messages;
@@ -27,6 +32,9 @@ class MessageList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Listen for changes to update colors in real-time if a user's role changes.
+    final viewModel = Provider.of<MainLayoutViewModel>(context);
+
     return ListView.builder(
       controller: scrollController,
       padding: const EdgeInsets.all(16.0),
@@ -34,41 +42,37 @@ class MessageList extends StatelessWidget {
       itemBuilder: (context, idx) {
         final message = messages[idx];
         final String? displayAvatarUrl = _getDisplayAvatarUrl(message.from);
+        final UserStatus status = viewModel.chatState.getUserStatus(message.from);
 
-        // Show loading indicator when we reach the top of history and the message is historical
+        // Get member details to find their role prefix for color.
+        final member = viewModel.chatState.getMemberInCurrentChannel(message.from);
+        // Use the helper to get the color, defaulting to white if the user is not in the channel.
+        final nameColor = member != null ? getColorForPrefix(member.prefix) : Colors.white;
+
         if (idx == 0 && message.isHistorical) {
           return Column(
             children: [
               const Center(child: CircularProgressIndicator()),
-              _buildMessageItem(message, displayAvatarUrl),
+              _buildMessageItem(message, displayAvatarUrl, status, nameColor),
             ],
           );
         }
 
-        return _buildMessageItem(message, displayAvatarUrl);
+        return _buildMessageItem(message, displayAvatarUrl, status, nameColor);
       },
     );
   }
 
-  Widget _buildMessageItem(Message message, String? displayAvatarUrl) {
+  Widget _buildMessageItem(Message message, String? displayAvatarUrl, UserStatus status, Color nameColor) {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 8.0),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          CircleAvatar(
-            backgroundColor: const Color(0xFF5865F2),
-            radius: 18,
-            backgroundImage: displayAvatarUrl != null ? NetworkImage(displayAvatarUrl) : null,
-            child: displayAvatarUrl == null
-                ? Text(
-                    message.from.isNotEmpty ? message.from[0].toUpperCase() : '?',
-                    style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold),
-                  )
-                : null,
+          UserAvatar(
+            username: message.from,
+            avatarUrl: displayAvatarUrl,
+            status: status,
           ),
           const SizedBox(width: 12),
           Expanded(
@@ -79,10 +83,11 @@ class MessageList extends StatelessWidget {
                   children: [
                     Text(
                       message.from,
-                      style: const TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 15),
+                      style: TextStyle(
+                        color: nameColor, // MODIFIED: Use the role color
+                        fontWeight: FontWeight.bold,
+                        fontSize: 15,
+                      ),
                     ),
                     const SizedBox(width: 8),
                     Text(
@@ -104,16 +109,13 @@ class MessageList extends StatelessWidget {
   Widget _buildMessageContent(String content) {
     // Check if this is an image URL by extension
     final isImageUrl = content.toLowerCase().endsWith('.jpg') ||
-                       content.toLowerCase().endsWith('.jpeg') ||
-                       content.toLowerCase().endsWith('.png') ||
-                       content.toLowerCase().endsWith('.gif');
+        content.toLowerCase().endsWith('.jpeg') ||
+        content.toLowerCase().endsWith('.png') ||
+        content.toLowerCase().endsWith('.gif');
 
     if (isImageUrl) {
-      print("[MessageList] Loading image from URL: $content");
       return GestureDetector(
-        onTap: () {
-          // Could expand to show in full screen
-        },
+        onTap: () {},
         child: Container(
           margin: const EdgeInsets.only(top: 8),
           constraints: const BoxConstraints(maxHeight: 200),
@@ -138,12 +140,9 @@ class MessageList extends StatelessWidget {
                 );
               },
               errorBuilder: (context, error, stackTrace) {
-                print("[MessageList] Error loading image: $error");
-                // If image fails to load, show the URL as text
                 return Container(
-                  padding: EdgeInsets.all(8),
-                  child: Text(content,
-                    style: TextStyle(color: Colors.white70)),
+                  padding: const EdgeInsets.all(8),
+                  child: Text(content, style: const TextStyle(color: Colors.white70)),
                 );
               },
             ),
@@ -152,7 +151,6 @@ class MessageList extends StatelessWidget {
       );
     }
 
-    // Regular text message (may include code blocks)
     return RichText(
       text: TextSpan(
         children: _buildMessageSpans(content),

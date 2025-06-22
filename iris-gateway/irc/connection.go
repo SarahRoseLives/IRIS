@@ -1,5 +1,3 @@
-// irc/connection.go
-
 package irc
 
 import (
@@ -103,6 +101,8 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 	connClient.VerboseCallbackHandler = false
 	connClient.Debug = false
 	connClient.UseTLS = false
+	// Enable IRCv3 capabilities, including away-notify
+	connClient.RequestCaps = []string{"server-time", "away-notify", "multi-prefix"}
 	connClient.UseSASL = true
 	connClient.SASLLogin = username
 	connClient.SASLPassword = password
@@ -122,7 +122,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 	connClient.AddCallback("001", func(e *ircevent.Event) { fmt.Println("Received 001, connection established") })
 	connClient.AddCallback("376", func(e *ircevent.Event) {
 		fmt.Println("Received End of MOTD (376)")
-		// Request the list of channels the user is in
 		connClient.SendRaw("LIST")
 		log.Printf("[IRC] Requested channel list for %s after SASL auth", username)
 		select {
@@ -131,10 +130,9 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		}
 	})
 
-	connClient.AddCallback("322", func(e *ircevent.Event) { // LIST response
+	connClient.AddCallback("322", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 2 {
 			channel := e.Arguments[1]
-			// Add channel to session but don't request members yet. Wait for LIST to complete.
 			userSession.AddChannelToSession(channel)
 			log.Printf("[IRC] Channel from LIST detected: %s for user %s", channel, username)
 		}
@@ -154,7 +152,7 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 				if strings.HasPrefix(channel, "#") {
 					connClient.SendRaw("NAMES " + channel)
 					log.Printf("[IRC] Requested initial NAMES for %s", channel)
-					time.Sleep(150 * time.Millisecond) // Small delay to avoid flooding the server
+					time.Sleep(150 * time.Millisecond)
 				}
 			}
 		}()
@@ -196,10 +194,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		}
 	})
 
-	// FIX: This entire callback is now wrapped in an IF statement.
-	// It will only be added to user connections, not the gateway bot's connection.
-	// This prevents it from interfering with the gateway's own PRIVMSG handler
-	// which is responsible for logging history and sending mention notifications.
 	if username != config.Cfg.GatewayNick {
 		connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
 			target := e.Arguments[0]
@@ -210,14 +204,11 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 
 			var conversationTarget string
 			if isPrivateMessage {
-				// For a PM, the target from IRC is our own nick. The conversation is with the sender.
 				conversationTarget = strings.ToLower(sender)
 			} else {
-				// For a channel message, the target is the channel name.
 				conversationTarget = strings.ToLower(target)
 			}
 
-			// Always broadcast the message over WebSocket for active clients
 			userSession.Broadcast("message", map[string]interface{}{
 				"channel_name": conversationTarget,
 				"sender":       sender,
@@ -225,7 +216,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 				"time":         time.Now().UTC().Format(time.RFC3339),
 			})
 
-			// --- Push Notification Logic for DMs for this specific user ---
 			if isPrivateMessage && strings.EqualFold(userSession.Username, target) {
 				log.Printf("[Push PM] Processing inbound PM for %s from %s", target, sender)
 				userSession.Mutex.RLock()
@@ -241,7 +231,7 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 							messageContent,
 							map[string]string{
 								"sender":       sender,
-								"channel_name": sender, // For PMs, the "channel" is the other user
+								"channel_name": sender,
 								"type":         "private_message",
 							},
 						)
@@ -272,6 +262,14 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 			log.Printf("[IRC] End of NAMES list for %s. Finalizing.", channelName)
 			userSession.FinalizeChannelMembers(channelName)
 		}
+	})
+
+	// Handle real-time away notifications from the server.
+	connClient.AddCallback("AWAY", func(e *ircevent.Event) {
+		awayUserNick := e.Nick
+		isNowAway := len(e.Message()) > 0 // An empty message means the user is back.
+		log.Printf("[IRC] Received AWAY notification for %s. IsAway: %t", awayUserNick, isNowAway)
+		session.UpdateAwayStatusForAllSessions(awayUserNick, isNowAway)
 	})
 
 	connClient.AddCallback("QUIT", func(e *ircevent.Event) {
