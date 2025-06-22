@@ -8,6 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"iris-gateway/session"
+	"iris-gateway/irc" // <-- make sure this import is present
 )
 
 // POST /api/channels/join
@@ -68,7 +69,7 @@ func PartChannelHandler(c *gin.Context) {
 	}
 
 	sess.RemoveChannelFromSession(req.Channel)
-	sess.IRC.Part(req.Channel)
+	irc.PartChannel(req.Channel) // <-- changed line
 
 	sess.Broadcast("channel_part", map[string]string{
 		"name": req.Channel,

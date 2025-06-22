@@ -3,10 +3,12 @@ package irc
 import (
 	"fmt"
 	"log"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"encoding/json"
 
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
@@ -27,10 +29,13 @@ type ChannelHistory struct {
 }
 
 var (
-	gatewayConn     *ircevent.Connection
-	historyMap      = make(map[string]*ChannelHistory)
-	historyMutex    sync.RWMutex
-	historyDuration = 7 * 24 * time.Hour // Default 7 days
+	gatewayConn        *ircevent.Connection
+	historyMap         = make(map[string]*ChannelHistory)
+	historyMutex       sync.RWMutex
+	historyDuration    = 7 * 24 * time.Hour // Default 7 days
+	persistedChannels  = make(map[string]bool)
+	channelsMutex      sync.RWMutex
+	channelsFile       = "persisted_channels.json"
 )
 
 // Helper function for mention detection (case-insensitive, word boundary, NO @ required)
@@ -40,8 +45,70 @@ func mentionInMessage(username, text string) bool {
 	return matched
 }
 
+// Load persisted channels from file
+func loadPersistedChannels() error {
+	file, err := os.ReadFile(channelsFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // File doesn't exist yet, that's fine
+		}
+		return err
+	}
+
+	channelsMutex.Lock()
+	defer channelsMutex.Unlock()
+	return json.Unmarshal(file, &persistedChannels)
+}
+
+// Save persisted channels to file
+func savePersistedChannels() error {
+	channelsMutex.RLock()
+	defer channelsMutex.RUnlock()
+
+	data, err := json.Marshal(persistedChannels)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(channelsFile, data, 0644)
+}
+
+// Add channel to persisted list
+func persistChannel(channel string) {
+	channelsMutex.Lock()
+	persistedChannels[strings.ToLower(channel)] = true
+	channelsMutex.Unlock()
+
+	if err := savePersistedChannels(); err != nil {
+		log.Printf("[Gateway] Failed to save persisted channels: %v", err)
+	}
+}
+
+// Remove channel from persisted list
+func unpersistChannel(channel string) {
+	channelsMutex.Lock()
+	delete(persistedChannels, strings.ToLower(channel))
+	channelsMutex.Unlock()
+
+	if err := savePersistedChannels(); err != nil {
+		log.Printf("[Gateway] Failed to save persisted channels: %v", err)
+	}
+}
+
+// Check if channel is persisted
+func isChannelPersisted(channel string) bool {
+	channelsMutex.RLock()
+	defer channelsMutex.RUnlock()
+	return persistedChannels[strings.ToLower(channel)]
+}
+
 // Call this once at startup (from main.go)
 func InitGatewayBot() error {
+	// Load persisted channels
+	if err := loadPersistedChannels(); err != nil {
+		log.Printf("[Gateway] Warning: Could not load persisted channels: %v", err)
+	}
+
 	// Create a dummy session for the gateway
 	gatewaySession := session.NewUserSession(config.Cfg.GatewayNick)
 	gatewaySession.IRC = nil // Will be set by AuthenticateWithNickServ
@@ -73,6 +140,13 @@ func InitGatewayBot() error {
 
 	ircConn.AddCallback("001", func(e *ircevent.Event) {
 		log.Println("[Gateway] Connected to IRC server")
+		// Join all persisted channels
+		channelsMutex.RLock()
+		for channel := range persistedChannels {
+			log.Printf("[Gateway] Auto-joining persisted channel: %s", channel)
+			ircConn.Join(channel)
+		}
+		channelsMutex.RUnlock()
 	})
 
 	ircConn.AddCallback("PRIVMSG", func(e *ircevent.Event) {
@@ -126,7 +200,6 @@ func InitGatewayBot() error {
 		}
 
 		// --- UPDATED PUSH NOTIFICATION LOGIC ---
-
 		session.ForEachSession(func(s *session.UserSession) {
 			s.Mutex.RLock()
 			normalizedChannel := strings.ToLower(channel)
@@ -185,6 +258,19 @@ func InitGatewayBot() error {
 			channel := e.Arguments[1]
 			log.Printf("[Gateway] Received invite to %s, joining", channel)
 			ircConn.Join(channel)
+			persistChannel(channel)
+		}
+	})
+
+	ircConn.AddCallback("KICK", func(e *ircevent.Event) {
+		if len(e.Arguments) >= 2 {
+			channel := e.Arguments[0]
+			kickedUser := e.Arguments[1]
+
+			if kickedUser == config.Cfg.GatewayNick {
+				log.Printf("[Gateway] Kicked from %s, removing from persisted channels", channel)
+				unpersistChannel(channel)
+			}
 		}
 	})
 
@@ -196,6 +282,15 @@ func InitGatewayBot() error {
 func JoinChannel(channel string) {
 	if gatewayConn != nil {
 		gatewayConn.Join(channel)
+		persistChannel(channel)
+	}
+}
+
+// Exported for use by handlers
+func PartChannel(channel string) {
+	if gatewayConn != nil {
+		gatewayConn.Part(channel)
+		unpersistChannel(channel)
 	}
 }
 
