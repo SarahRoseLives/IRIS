@@ -165,6 +165,10 @@ class WebSocketService {
             _membersUpdateController.add({'channel_name': channelName, 'members': members});
             print("[WebSocketService] Received members update for $channelName");
             break;
+          // Optionally handle unauthorized event type from backend (if used)
+          case 'unauthorized':
+            _handleUnauthorized();
+            break;
         }
       }, onError: (e) {
         print("[WebSocketService] Stream listener error: $e");
@@ -184,7 +188,7 @@ class WebSocketService {
     print("[WebSocketService] Unauthorized token — force logout.");
     _statusController.add(WebSocketStatus.unauthorized);
     disconnect();
-    AuthWrapper.forceLogout();
+    AuthWrapper.forceLogout(showExpiredMessage: true);
   }
 
   void _handleWebSocketError(dynamic error) {
@@ -215,7 +219,10 @@ class WebSocketService {
   }
 
   bool _isUnauthorized(String error) {
-    return error.contains('401') || error.contains('unauthorized') || error.contains('not upgraded to websocket');
+    return error.contains('401') ||
+           error.contains('unauthorized') ||
+           error.contains('not upgraded to websocket') ||
+           error.contains('invalid token');
   }
 
   void sendMessage(String channelName, String text) {

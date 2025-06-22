@@ -1,4 +1,3 @@
-// lib/services/api_service.dart
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -6,6 +5,8 @@ import 'package:http_parser/http_parser.dart';
 import '../config.dart';
 import '../models/login_response.dart';
 import '../models/channel.dart';
+// Import AuthWrapper for forceLogout
+import '../main.dart';
 
 class ApiService {
   String? _token;
@@ -14,6 +15,15 @@ class ApiService {
 
   void setToken(String token) {
     _token = token;
+  }
+
+  /// Checks for token invalidation (401), and triggers force logout if needed
+  bool _checkForTokenInvalidation(http.Response response) {
+    if (response.statusCode == 401) {
+      AuthWrapper.forceLogout(showExpiredMessage: true);
+      return true;
+    }
+    return false;
   }
 
   Future<LoginResponse> login(String username, String password) async {
@@ -26,6 +36,10 @@ class ApiService {
         body: json.encode({'username': username, 'password': password}),
       );
       print("[ApiService] login: Received status code ${response.statusCode}");
+
+      if (response.statusCode == 401) {
+        return LoginResponse(success: false, message: 'Session expired. Please login again.');
+      }
 
       final responseData = json.decode(response.body);
       return LoginResponse.fromJson(responseData);
@@ -54,6 +68,10 @@ class ApiService {
         },
         body: json.encode({'fcm_token': fcmToken}),
       );
+      if (_checkForTokenInvalidation(response)) {
+        print("[ApiService] registerFCMToken: Token invalid, force logout.");
+        return;
+      }
       if (response.statusCode == 200) {
         print("[ApiService] registerFCMToken: Success");
       } else {
@@ -72,6 +90,11 @@ class ApiService {
         url,
         headers: {'Authorization': 'Bearer ${_getToken()}'},
       );
+
+      if (_checkForTokenInvalidation(response)) {
+        throw Exception("Session expired");
+      }
+
       print("[ApiService] fetchChannels: Received status code ${response.statusCode}");
 
       final data = jsonDecode(response.body);
@@ -104,6 +127,11 @@ class ApiService {
         url,
         headers: {'Authorization': 'Bearer $token'},
       );
+
+      if (_checkForTokenInvalidation(response)) {
+        throw Exception("Session expired");
+      }
+
       print("[ApiService] fetchChannelMessages: Received status code ${response.statusCode} for $channelName");
 
       final data = jsonDecode(response.body);
@@ -137,6 +165,11 @@ class ApiService {
       },
       body: json.encode({'channel': channelName}),
     );
+
+    if (_checkForTokenInvalidation(response)) {
+      throw Exception("Session expired");
+    }
+
     final responseData = json.decode(response.body);
     print("[ApiService] joinChannel: Received status code ${response.statusCode}, success: ${responseData['success']}");
     if (response.statusCode == 200 && responseData['success'] == true) {
@@ -157,6 +190,11 @@ class ApiService {
       },
       body: json.encode({'channel': channelName}),
     );
+
+    if (_checkForTokenInvalidation(response)) {
+      throw Exception("Session expired");
+    }
+
     final responseData = json.decode(response.body);
     print("[ApiService] partChannel: Received status code ${response.statusCode}, success: ${responseData['success']}");
     if (response.statusCode == 200 && responseData['success'] == true) {
@@ -199,6 +237,12 @@ class ApiService {
 
     final response = await request.send();
     final responseBody = await response.stream.bytesToString();
+
+    // Handle 401 for multipart upload (http.StreamedResponse does not have headers)
+    if (response.statusCode == 401) {
+      AuthWrapper.forceLogout(showExpiredMessage: true);
+      throw Exception('Session expired');
+    }
 
     if (response.statusCode == 200) {
       print("[ApiService] uploadAvatar: Upload successful, status 200.");
