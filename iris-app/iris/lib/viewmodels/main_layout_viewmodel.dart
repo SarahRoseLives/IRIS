@@ -1,5 +1,3 @@
-// lib/viewmodels/main_layout_viewmodel.dart
-
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -123,7 +121,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     try {
       await _apiService.partChannel(channelName);
       await _fetchChannelsList();
-      //_addInfoMessageToCurrentChannel('Left channel $channelName');
       // If we're currently viewing the channel we just left, switch to another
       if (selectedConversationTarget == channelName) {
         if (_channels.isNotEmpty) {
@@ -175,8 +172,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // ... All other methods in the ViewModel remain the same.
-  // ... (uploadAttachment, _listenToWebSocketStatus, handleSendMessage, etc.)
   Future<void> uploadAttachment(String filePath) async {
     print('[ViewModel] Starting attachment upload from $filePath');
     try {
@@ -379,18 +374,34 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Members list is updated when a `members_update` event is received via WebSocket.
+  /// Handles both initial join and real-time updates. Robust conversion to ChannelMember.
   void _listenToMembersUpdate() {
     _webSocketService.membersUpdateStream.listen((update) {
       final String channelName = update['channel_name'];
-      final List<ChannelMember> newMembers = update['members'];
-      try {
-        final channel = _channels.firstWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
-        channel.members = newMembers;
+      final List<dynamic> membersRaw = update['members'];
+      final List<ChannelMember> newMembers = membersRaw
+          .map((m) => m is ChannelMember ? m : ChannelMember.fromJson(m))
+          .toList();
+
+      final channelIndex = _channels.indexWhere(
+          (c) => c.name.toLowerCase() == channelName.toLowerCase());
+      if (channelIndex != -1) {
+        _channels[channelIndex].members = newMembers;
+
+        // If this is the currently selected channel, update the right drawer
+        if (selectedConversationTarget.toLowerCase() == channelName.toLowerCase()) {
+          notifyListeners();
+        } else {
+          // Still notify so the channel list can update member count, etc.
+          notifyListeners();
+        }
+
+        // Load avatars for all members in the list
         for (var member in newMembers) {
           _loadAvatarForUser(member.nick);
         }
-        notifyListeners();
-      } catch (e) {
+      } else {
         print("Received member update for an unknown channel: $channelName");
       }
     });

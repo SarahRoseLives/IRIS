@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../models/channel_member.dart'; // Import the new model
+import '../models/channel_member.dart';
 
 class RightDrawer extends StatelessWidget {
   final List<ChannelMember> members;
@@ -13,13 +13,17 @@ class RightDrawer extends StatelessWidget {
   Color _getColorForPrefix(String prefix) {
     switch (prefix) {
       case '~':
-        return Colors.amber; // Owner
+        return Colors.deepPurpleAccent; // Owner
+      case '&':
+        return Colors.redAccent; // Admin
       case '@':
-        return Colors.redAccent; // Operator
+        return Colors.amber; // Operator
+      case '%':
+        return Colors.blue; // Half-op
       case '+':
-        return Colors.lightGreen; // Voiced
+        return Colors.greenAccent; // Voiced
       default:
-        return Colors.white70; // Regular member
+        return Colors.white; // Regular member
     }
   }
 
@@ -27,11 +31,15 @@ class RightDrawer extends StatelessWidget {
   IconData _getIconForPrefix(String prefix) {
     switch (prefix) {
       case '~':
-        return Icons.shield; // Owner
+        return Icons.workspace_premium; // Owner
+      case '&':
+        return Icons.security; // Admin
       case '@':
-        return Icons.star; // Operator
+        return Icons.shield; // Operator
+      case '%':
+        return Icons.security; // Half-op (replacing moderator with security)
       case '+':
-        return Icons.volume_up; // Voiced
+        return Icons.record_voice_over; // Voiced
       default:
         return Icons.person; // Regular member
     }
@@ -60,28 +68,35 @@ class RightDrawer extends StatelessWidget {
               ),
               const Divider(color: Colors.white24, height: 1),
               Expanded(
-                child: ListView.builder(
-                  itemCount: members.length,
-                  itemBuilder: (context, idx) {
-                    final member = members[idx];
-                    return ListTile(
-                      leading: Icon(
-                        _getIconForPrefix(member.prefix),
-                        color: _getColorForPrefix(member.prefix),
-                        size: 20,
+                child: members.isEmpty
+                  ? const Center(
+                      child: Text(
+                        "No members",
+                        style: TextStyle(color: Colors.white54),
                       ),
-                      title: Text(
-                        member.nick,
-                        style: TextStyle(
-                          color: _getColorForPrefix(member.prefix),
-                          fontWeight: member.prefix.isNotEmpty
-                              ? FontWeight.bold
-                              : FontWeight.normal,
-                        ),
-                      ),
-                    );
-                  },
-                ),
+                    )
+                  : ListView.builder(
+                      itemCount: members.length,
+                      itemBuilder: (context, idx) {
+                        final member = members[idx];
+                        return ListTile(
+                          leading: Icon(
+                            _getIconForPrefix(member.prefix),
+                            color: _getColorForPrefix(member.prefix),
+                            size: 20,
+                          ),
+                          title: Text(
+                            member.nick,
+                            style: TextStyle(
+                              color: _getColorForPrefix(member.prefix),
+                              fontWeight: member.prefix.isNotEmpty
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
+                            ),
+                          ),
+                        );
+                      },
+                    ),
               ),
             ],
           ),

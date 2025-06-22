@@ -1,3 +1,5 @@
+// irc/connection.go
+
 package irc
 
 import (
@@ -120,6 +122,7 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 	connClient.AddCallback("001", func(e *ircevent.Event) { fmt.Println("Received 001, connection established") })
 	connClient.AddCallback("376", func(e *ircevent.Event) {
 		fmt.Println("Received End of MOTD (376)")
+		// Request the list of channels the user is in
 		connClient.SendRaw("LIST")
 		log.Printf("[IRC] Requested channel list for %s after SASL auth", username)
 		select {
@@ -131,96 +134,127 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 	connClient.AddCallback("322", func(e *ircevent.Event) { // LIST response
 		if len(e.Arguments) >= 2 {
 			channel := e.Arguments[1]
+			// Add channel to session but don't request members yet. Wait for LIST to complete.
 			userSession.AddChannelToSession(channel)
-			log.Printf("[IRC] Auto-joined channel detected: %s", channel)
+			log.Printf("[IRC] Channel from LIST detected: %s for user %s", channel, username)
 		}
 	})
 
+	connClient.AddCallback("323", func(e *ircevent.Event) {
+		log.Printf("[IRC] End of LIST for %s. Requesting NAMES for all detected channels.", username)
+		userSession.Mutex.RLock()
+		channelsToUpdate := make([]string, 0, len(userSession.Channels))
+		for chName := range userSession.Channels {
+			channelsToUpdate = append(channelsToUpdate, chName)
+		}
+		userSession.Mutex.RUnlock()
+
+		go func() {
+			for _, channel := range channelsToUpdate {
+				if strings.HasPrefix(channel, "#") {
+					connClient.SendRaw("NAMES " + channel)
+					log.Printf("[IRC] Requested initial NAMES for %s", channel)
+					time.Sleep(150 * time.Millisecond) // Small delay to avoid flooding the server
+				}
+			}
+		}()
+	})
+
 	connClient.AddCallback("JOIN", func(e *ircevent.Event) {
-		if e.Nick == username {
-			channelName := e.Arguments[0]
-			log.Printf("[IRC] Auto-joined to channel %s via SASL", channelName)
+		channelName := e.Arguments[0]
+		joiningUser := e.Nick
+
+		if joiningUser == username {
+			log.Printf("[IRC] User %s confirmed JOIN to channel %s.", username, channelName)
 			userSession.AddChannelToSession(channelName)
-			userSession.Broadcast("channel_join", map[string]string{
+			userSession.Broadcast("channel_join", map[string]interface{}{
 				"name": channelName,
 				"user": username,
 			})
-			JoinChannel(channelName)
+			connClient.SendRaw("NAMES " + channelName)
+			log.Printf("[IRC] Requested NAMES for newly joined channel %s", channelName)
+		} else {
+			log.Printf("[IRC] Another user (%s) joined %s. Refreshing NAMES.", joiningUser, channelName)
+			connClient.SendRaw("NAMES " + channelName)
 		}
 	})
 
 	connClient.AddCallback("PART", func(e *ircevent.Event) {
 		channelName := e.Arguments[0]
-		userName := e.Nick
-		log.Printf("[IRC] User %s PARTED %s\n", userName, channelName)
-		userSession.RemoveChannelFromSession(channelName)
-		userSession.Broadcast("channel_part", map[string]string{
-			"name": channelName,
-			"user": userName,
-		})
-	})
+		partingUser := e.Nick
+		log.Printf("[IRC] Received PART event. User: %s, Channel: %s", partingUser, channelName)
 
-	// This callback handles messages sent directly to the user (PMs)
-	connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
-		target := e.Arguments[0]
-		messageContent := e.Arguments[1]
-		sender := e.Nick
-
-		// Always broadcast the message over WebSocket for active clients
-		userSession.Broadcast("message", map[string]string{
-			"channel_name": strings.ToLower(target),
-			"sender":       sender,
-			"text":         messageContent,
-		})
-
-		// If it's a channel message, the central gateway bot handles it. Do nothing here.
-		if strings.HasPrefix(target, "#") {
-			return
-		}
-
-		// --- REVISED PM NOTIFICATION LOGIC ---
-		// This event fires on the recipient's connection.
-		// The `target` is the recipient's own username.
-		// The `userSession` in this scope is the recipient's session.
-
-		// 1. Check if the event is for a message this user received (not one they sent).
-		if !strings.EqualFold(userSession.Username, target) {
-			return
-		}
-
-		// 2. Check if the user is messaging themselves.
-		if strings.EqualFold(userSession.Username, sender) {
-			return
-		}
-
-		log.Printf("[Push PM] Processing inbound PM for %s from %s", target, sender)
-
-		// 3. Get the FCM token from the current user's session.
-		userSession.Mutex.RLock()
-		fcmToken := userSession.FCMToken
-		userSession.Mutex.RUnlock()
-
-		// 4. If a token exists, send the notification.
-		if fcmToken != "" {
-			log.Printf("[Push PM] Recipient %s has FCM token. Attempting to send push notification.", userSession.Username)
-			go func() {
-				err := push.SendPushNotification(
-					fcmToken,
-					fmt.Sprintf("New message from %s", sender),
-					messageContent,
-					map[string]string{
-						"sender": sender,
-						"type":   "private_message",
-					},
-				)
-				if err != nil {
-					log.Printf("[Push PM] Failed to send PM push notification to %s: %v", userSession.Username, err)
-				}
-			}()
+		if partingUser == username {
+			userSession.RemoveChannelFromSession(channelName)
+			userSession.Broadcast("channel_part", map[string]interface{}{
+				"name": channelName,
+				"user": partingUser,
+			})
 		} else {
-			log.Printf("[Push PM] Recipient %s does not have an FCM token. Skipping push.", userSession.Username)
+			log.Printf("[IRC] Another user (%s) parted %s. Refreshing NAMES for our session.", partingUser, channelName)
+			connClient.SendRaw("NAMES " + channelName)
 		}
 	})
+
+	// FIX: This entire callback is now wrapped in an IF statement.
+	// It will only be added to user connections, not the gateway bot's connection.
+	// This prevents it from interfering with the gateway's own PRIVMSG handler
+	// which is responsible for logging history and sending mention notifications.
+	if username != config.Cfg.GatewayNick {
+		connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
+			target := e.Arguments[0]
+			messageContent := e.Arguments[1]
+			sender := e.Nick
+
+			isPrivateMessage := !strings.HasPrefix(target, "#")
+
+			var conversationTarget string
+			if isPrivateMessage {
+				// For a PM, the target from IRC is our own nick. The conversation is with the sender.
+				conversationTarget = strings.ToLower(sender)
+			} else {
+				// For a channel message, the target is the channel name.
+				conversationTarget = strings.ToLower(target)
+			}
+
+			// Always broadcast the message over WebSocket for active clients
+			userSession.Broadcast("message", map[string]interface{}{
+				"channel_name": conversationTarget,
+				"sender":       sender,
+				"text":         messageContent,
+				"time":         time.Now().UTC().Format(time.RFC3339),
+			})
+
+			// --- Push Notification Logic for DMs for this specific user ---
+			if isPrivateMessage && strings.EqualFold(userSession.Username, target) {
+				log.Printf("[Push PM] Processing inbound PM for %s from %s", target, sender)
+				userSession.Mutex.RLock()
+				fcmToken := userSession.FCMToken
+				userSession.Mutex.RUnlock()
+
+				if fcmToken != "" {
+					log.Printf("[Push PM] Recipient %s has FCM token. Attempting to send push notification.", userSession.Username)
+					go func() {
+						err := push.SendPushNotification(
+							fcmToken,
+							fmt.Sprintf("New message from %s", sender),
+							messageContent,
+							map[string]string{
+								"sender":       sender,
+								"channel_name": sender, // For PMs, the "channel" is the other user
+								"type":         "private_message",
+							},
+						)
+						if err != nil {
+							log.Printf("[Push PM] Failed to send PM push notification to %s: %v", userSession.Username, err)
+						}
+					}()
+				} else {
+					log.Printf("[Push PM] Recipient %s does not have an FCM token. Skipping push.", userSession.Username)
+				}
+			}
+		})
+	}
 
 	connClient.AddCallback("353", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 4 {
@@ -238,6 +272,31 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 			log.Printf("[IRC] End of NAMES list for %s. Finalizing.", channelName)
 			userSession.FinalizeChannelMembers(channelName)
 		}
+	})
+
+	connClient.AddCallback("QUIT", func(e *ircevent.Event) {
+		quittingUser := e.Nick
+		log.Printf("[IRC] User %s QUIT.", quittingUser)
+
+		userSession.Mutex.RLock()
+		channelsToRefresh := make([]string, 0)
+		for chName, chState := range userSession.Channels {
+			for _, member := range chState.Members {
+				if strings.EqualFold(member.Nick, quittingUser) {
+					channelsToRefresh = append(channelsToRefresh, chName)
+					break
+				}
+			}
+		}
+		userSession.Mutex.RUnlock()
+
+		go func() {
+			for _, channel := range channelsToRefresh {
+				log.Printf("[IRC] User %s was in %s. Refreshing NAMES for that channel.", quittingUser, channel)
+				connClient.SendRaw("NAMES " + channel)
+				time.Sleep(150 * time.Millisecond)
+			}
+		}()
 	})
 
 	if err := connClient.Connect(localProxyAddr); err != nil {

@@ -1,3 +1,5 @@
+// handlers/ws.go
+
 package handlers
 
 import (
@@ -51,9 +53,9 @@ func WebSocketHandler(c *gin.Context) {
 	log.Printf("[WS] WebSocket connected for user %s (token: %s)", sess.Username, token)
 
 	// Immediately remove away status (send /BACK) when any WebSocket connects
-	if sess.IRC != nil {
-		sess.IRC.SendRaw("BACK")
-		log.Printf("[IRC] Sent BACK command (empty) for %s", sess.Username)
+	if sess.IRC != nil && sess.IsAway {
+		sess.SetBack()
+		log.Printf("[IRC] User %s reconnected, sent BACK command.", sess.Username)
 	}
 
 	// Send welcome message
@@ -69,13 +71,16 @@ func WebSocketHandler(c *gin.Context) {
 		log.Printf("[WS] Error sending connected message to %s: %v", sess.Username, err)
 	}
 
-	// Send current channel state to client for restoration
+	// --- FIX FOR HISTORY ---
+	// Instead of sending a single 'initial_state', we send two types of events.
+	// 1. Send 'restore_state'. The client uses this to trigger an API call to get the channel list, which does NOT wipe history.
+	// 2. Send a series of 'members_update' events. The client handles these safely, updating each channel's member list without wiping history.
+
 	sess.Mutex.RLock()
-	// The frontend expects a map of channel objects, which sess.Channels already is.
-	// This includes the channel name and its list of members.
 	channelsPayload := sess.Channels
 	sess.Mutex.RUnlock()
 
+	// Send 'restore_state' first to trigger client's channel list fetch.
 	err = conn.WriteJSON(events.WsEvent{
 		Type: "restore_state",
 		Payload: map[string]interface{}{
@@ -83,8 +88,36 @@ func WebSocketHandler(c *gin.Context) {
 		},
 	})
 	if err != nil {
-		log.Printf("[WS] Error sending initial state to %s: %v", sess.Username, err)
+		log.Printf("[WS] Error sending restore_state to %s: %v", sess.Username, err)
 	}
+
+	// Now, send the member lists using the non-destructive 'members_update' event for each channel.
+	go func() {
+		// Wait a moment for the client to process the restore_state and fetch the channel list
+		time.Sleep(500 * time.Millisecond)
+
+		sess.Mutex.RLock()
+		defer sess.Mutex.RUnlock()
+
+		for _, channelState := range sess.Channels {
+			// Create a copy inside the loop to avoid data races with the payload map
+			chState := channelState
+			payload := map[string]interface{}{
+				"channel_name": chState.Name,
+				"members":      chState.Members,
+			}
+			memberUpdateMsg := events.WsEvent{
+				Type:    "members_update",
+				Payload: payload,
+			}
+			if err := conn.WriteJSON(memberUpdateMsg); err != nil {
+				log.Printf("[WS] Error sending members_update for %s to %s: %v", chState.Name, sess.Username, err)
+			}
+			// Small delay between each update
+			time.Sleep(100 * time.Millisecond)
+		}
+		log.Printf("[WS] Finished sending all initial member_updates to %s.", sess.Username)
+	}()
 
 	go func() {
 		defer func() {
@@ -93,13 +126,12 @@ func WebSocketHandler(c *gin.Context) {
 			conn.Close()
 			log.Printf("[WS] WebSocket disconnected for user %s (token: %s)\n", sess.Username, token)
 
-			// If no more WebSockets connected, set user as away
-			sess.Mutex.RLock()
-			hasClients := len(sess.WebSockets) > 0
-			sess.Mutex.RUnlock()
+			// Use a small delay to prevent rapid away/back toggling on reconnects
+			time.Sleep(2 * time.Second)
 
-			if !hasClients && sess.IRC != nil {
-				sess.IRC.SendRaw("AWAY :IRSI")
+			// If no more WebSockets are connected, set the user as away.
+			if !sess.IsActive() && sess.IRC != nil {
+				sess.SetAway("IRSI") // Set a default away message
 				log.Printf("[IRC] Sent AWAY command for %s (no more clients connected)", sess.Username)
 			}
 		}()
@@ -119,21 +151,7 @@ func WebSocketHandler(c *gin.Context) {
 
 			var clientMsg events.WsEvent
 			if err := json.Unmarshal(p, &clientMsg); err == nil {
-				// Handle restore_state from client (for multi-client/channel sync)
-				if clientMsg.Type == "restore_state" {
-					if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
-						if chs, ok := payload["channels"].([]interface{}); ok {
-							channels := make([]string, 0)
-							for _, ch := range chs {
-								if chstr, ok := ch.(string); ok {
-									channels = append(channels, chstr)
-								}
-							}
-							// Optionally: sess.SyncChannels(channels) if you want to reconcile state
-							log.Printf("[WS] Client %s sent restore_state with channels: %v", sess.Username, channels)
-						}
-					}
-				} else if clientMsg.Type == "message" {
+				if clientMsg.Type == "message" {
 					if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
 						channelName, channelOk := payload["channel_name"].(string)
 						text, textOk := payload["text"].(string)
@@ -143,10 +161,12 @@ func WebSocketHandler(c *gin.Context) {
 							for _, line := range lines {
 								ircLine := line
 								if len(ircLine) == 0 {
+									// Sending an empty line might not be supported, send a space instead
 									ircLine = " "
 								}
 								log.Printf("[WS] Sending IRC line to channel %s from %s: '%s'", channelName, sess.Username, ircLine)
 								sess.IRC.Privmsg(channelName, ircLine)
+								// Add a small delay to prevent being kicked for flooding
 								time.Sleep(100 * time.Millisecond)
 							}
 						} else {
@@ -156,8 +176,8 @@ func WebSocketHandler(c *gin.Context) {
 						log.Printf("[WS] Invalid payload structure in 'message' from %s", sess.Username)
 					}
 				} else {
-					// For other event types, use a broadcast mechanism
-					sess.Broadcast(clientMsg.Type, clientMsg.Payload)
+					// Handle other event types like 'history' request, etc.
+					log.Printf("[WS] Received unhandled event type '%s' from %s", clientMsg.Type, sess.Username)
 				}
 			} else {
 				log.Printf("[WS] Failed to unmarshal incoming message from %s: %v", sess.Username, err)
