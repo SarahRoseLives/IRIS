@@ -176,6 +176,8 @@ class ChatController {
     try {
       await apiService.joinChannel(channelName);
       chatState.selectConversation(channelName);
+      // Ensure the joined channel has members (yourself at minimum)
+      chatState.moveChannelToJoined(channelName, username);
     } catch (e) {
       chatState.addInfoMessage('Failed to join channel: $channelName. Error: $e');
     }
@@ -188,7 +190,8 @@ class ChatController {
     }
     try {
       await apiService.partChannel(channelName);
-      chatState.removeChannel(channelName);
+      // Instead of removing the channel, move it to unjoined
+      chatState.moveChannelToUnjoined(channelName);
     } catch (e) {
       chatState.addInfoMessage('Failed to leave channel: ${e.toString()}');
     }

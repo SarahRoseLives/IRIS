@@ -52,7 +52,8 @@ class ChatState extends ChangeNotifier {
     return _channelMessages[target] ?? [];
   }
 
-  bool hasAvatar(String username) => _userAvatars.containsKey(username) && _userAvatars[username]!.isNotEmpty;
+  bool hasAvatar(String username) =>
+      _userAvatars.containsKey(username) && _userAvatars[username]!.isNotEmpty;
 
   ChannelMember? getMemberInCurrentChannel(String nick) {
     final members = membersForSelectedChannel;
@@ -97,19 +98,22 @@ class ChatState extends ChangeNotifier {
     int targetIndex = -1;
 
     if (defaultChannel != null) {
-      targetIndex = _channels.indexWhere((c) => c.name.toLowerCase() == defaultChannel.toLowerCase());
+      targetIndex = _channels.indexWhere(
+          (c) => c.name.toLowerCase() == defaultChannel.toLowerCase());
     }
 
     if (targetIndex == -1) {
       targetIndex = _channels.indexWhere((c) => c.name.startsWith('#'));
     }
 
-    _selectedChannelIndex = (targetIndex >= 0 && targetIndex < _channels.length) ? targetIndex : 0;
+    _selectedChannelIndex =
+        (targetIndex >= 0 && targetIndex < _channels.length) ? targetIndex : 0;
     notifyListeners();
   }
 
   void addOrUpdateChannel(Channel channel) {
-    final index = _channels.indexWhere((c) => c.name.toLowerCase() == channel.name.toLowerCase());
+    final index = _channels.indexWhere(
+        (c) => c.name.toLowerCase() == channel.name.toLowerCase());
     if (index != -1) {
       _channels[index] = channel;
     } else {
@@ -120,12 +124,51 @@ class ChatState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Moves a channel to the joined list (i.e., ensures it contains the user as a member).
+  void moveChannelToJoined(String channelName, String username) {
+    final index = _channels
+        .indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
+    if (index != -1) {
+      final channel = _channels[index];
+      if (!channel.members
+          .any((m) => m.nick.toLowerCase() == username.toLowerCase())) {
+        // Provide required 'prefix' parameter (use '' if not available)
+        channel.members
+            .add(ChannelMember(nick: username, prefix: '', isAway: false));
+      }
+      _channels[index] = channel;
+      _rebuildUserStatuses();
+      notifyListeners();
+    }
+  }
+
+  /// Moves a channel to the unjoined list (i.e., clears its members).
+  void moveChannelToUnjoined(String channelName) {
+    final index = _channels
+        .indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
+    if (index != -1) {
+      final channel = _channels[index];
+      channel.members = [];
+      _channels[index] = channel;
+      // If currently selected, move to another joined channel if possible
+      if (_selectedChannelIndex == index) {
+        final newIndex = _channels
+            .indexWhere((c) => c.name.startsWith('#') && c.members.isNotEmpty);
+        _selectedChannelIndex = (newIndex != -1) ? newIndex : 0;
+      }
+      _rebuildUserStatuses();
+      notifyListeners();
+    }
+  }
+
   void removeChannel(String channelName) {
     final initialTarget = selectedConversationTarget;
-    _channels.removeWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
+    _channels.removeWhere(
+        (c) => c.name.toLowerCase() == channelName.toLowerCase());
 
     if (initialTarget.toLowerCase() == channelName.toLowerCase()) {
-      final newIndex = _channels.indexWhere((c) => c.name.startsWith("#"));
+      final newIndex =
+          _channels.indexWhere((c) => c.name.startsWith("#"));
       _selectedChannelIndex = (newIndex != -1) ? newIndex : 0;
     }
     _rebuildUserStatuses();
@@ -133,7 +176,8 @@ class ChatState extends ChangeNotifier {
   }
 
   void updateChannelMembers(String channelName, List<ChannelMember> members) {
-    final index = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
+    final index = _channels
+        .indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
     if (index != -1) {
       _channels[index].members = members;
       _rebuildUserStatuses();
@@ -142,7 +186,8 @@ class ChatState extends ChangeNotifier {
   }
 
   void selectConversation(String conversationName) {
-    final index = _channels.indexWhere((c) => c.name.toLowerCase() == conversationName.toLowerCase());
+    final index = _channels
+        .indexWhere((c) => c.name.toLowerCase() == conversationName.toLowerCase());
     if (index != -1) {
       _selectedChannelIndex = index;
       notifyListeners();
@@ -155,9 +200,9 @@ class ChatState extends ChangeNotifier {
 
     if (!_channelMessages[key]!.any((m) => m.id == message.id)) {
       if (toEnd) {
-         _channelMessages[key]!.add(message);
+        _channelMessages[key]!.add(message);
       } else {
-         _channelMessages[key]!.insert(0, message);
+        _channelMessages[key]!.insert(0, message);
       }
       notifyListeners();
       _persistMessages();
@@ -170,7 +215,8 @@ class ChatState extends ChangeNotifier {
 
     // Deduplicate using message IDs
     final existingIds = _channelMessages[key]!.map((m) => m.id).toSet();
-    final newMessages = messages.where((m) => !existingIds.contains(m.id)).toList();
+    final newMessages =
+        messages.where((m) => !existingIds.contains(m.id)).toList();
 
     // Sort by time ascending (oldest first)
     newMessages.sort((a, b) => a.time.compareTo(b.time));
