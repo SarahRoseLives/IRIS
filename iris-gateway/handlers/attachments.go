@@ -65,8 +65,15 @@ func UploadAttachmentHandler(c *gin.Context) {
 		return
 	}
 
-	// Schedule cleanup after 12 hours
-	time.AfterFunc(12*time.Hour, func() {
+	// Parse the image storage duration from config
+	duration, err := time.ParseDuration(config.Cfg.ImageStorageDuration)
+	if err != nil {
+		log.Printf("Invalid image storage duration '%s', defaulting to 12h", config.Cfg.ImageStorageDuration)
+		duration = 12 * time.Hour
+	}
+
+	// Schedule cleanup after configured duration
+	time.AfterFunc(duration, func() {
 		if err := os.Remove(filePath); err != nil {
 			log.Printf("Failed to cleanup attachment %s: %v", filePath, err)
 		} else {

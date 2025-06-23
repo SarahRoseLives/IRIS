@@ -23,12 +23,19 @@ func main() {
 		log.Fatalf("Failed to initialize IRC gateway bot: %v", err)
 	}
 
-	// Clean up any files older than 12 hours on startup
+	// Clean up any files older than configured duration on startup
 	go func() {
 		files, err := os.ReadDir(config.Cfg.ImageBaseDir)
 		if err != nil && !os.IsNotExist(err) {
 			log.Printf("Failed to read image directory for cleanup: %v", err)
 			return
+		}
+
+		// Parse the image storage duration from config
+		duration, err := time.ParseDuration(config.Cfg.ImageStorageDuration)
+		if err != nil {
+			log.Printf("Invalid image storage duration '%s', defaulting to 12h", config.Cfg.ImageStorageDuration)
+			duration = 12 * time.Hour
 		}
 
 		for _, file := range files {
@@ -37,7 +44,7 @@ func main() {
 				continue
 			}
 
-			if time.Since(info.ModTime()) > 12*time.Hour {
+			if time.Since(info.ModTime()) > duration {
 				path := filepath.Join(config.Cfg.ImageBaseDir, file.Name())
 				if err := os.Remove(path); err != nil {
 					log.Printf("Failed to cleanup old file %s: %v", path, err)
