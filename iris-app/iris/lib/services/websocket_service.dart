@@ -21,6 +21,8 @@ class WebSocketService {
   WebSocketStatus _currentWsStatus = WebSocketStatus.disconnected;
   List<String> _currentChannels = [];
 
+  bool _isDisposed = false;
+
   final _statusController = StreamController<WebSocketStatus>.broadcast();
   Stream<WebSocketStatus> get statusStream => _statusController.stream;
 
@@ -43,6 +45,7 @@ class WebSocketService {
   }
 
   void connect(String token) {
+    if (_isDisposed) return;
     // Only connect if not already connected or connecting
     if (_ws != null && _currentWsStatus == WebSocketStatus.connected) {
       print("[WebSocketService] Already connected. Skipping new connection attempt.");
@@ -51,7 +54,7 @@ class WebSocketService {
 
     _reconnectTimer?.cancel();
     _token = token;
-    _statusController.add(WebSocketStatus.connecting);
+    if (!_isDisposed) _statusController.add(WebSocketStatus.connecting);
     print("[WebSocketService] Attempting to connect...");
 
     final uri = Uri.parse("$websocketUrl/$token");
@@ -59,7 +62,7 @@ class WebSocketService {
       _ws = WebSocketChannel.connect(uri);
 
       _ws!.ready.then((_) {
-        _statusController.add(WebSocketStatus.connected);
+        if (!_isDisposed) _statusController.add(WebSocketStatus.connected);
         print("[WebSocketService] Connected successfully to: $uri");
       }).catchError((e) {
         print("[WebSocketService] Initial connection error: $e");
@@ -78,7 +81,7 @@ class WebSocketService {
           event = jsonDecode(message);
         } catch (e) {
           print("[WebSocketService] Error decoding JSON: $e, Raw message: $message");
-          _errorController.add("WebSocket JSON parsing error: $e");
+          if (!_isDisposed) _errorController.add("WebSocket JSON parsing error: $e");
           return;
         }
 
@@ -87,12 +90,12 @@ class WebSocketService {
           case 'initial_state':
             if (payload is Map<String, dynamic>) {
               final channels = payload['channels'] as Map<String, dynamic>? ?? {};
-              _initialStateController.add({'channels': channels});
+              if (!_isDisposed) _initialStateController.add({'channels': channels});
               print("[WebSocketService] Forwarded initial state payload with ${channels.keys.length} channels.");
             }
             break;
           case 'message':
-            _messageController.add({
+            if (!_isDisposed) _messageController.add({
               'channel_name': payload['channel_name'],
               'sender': payload['sender'],
               'text': payload['text'],
@@ -103,7 +106,7 @@ class WebSocketService {
             final String channelName = payload['channel_name'];
             final List<dynamic> membersData = payload['members'] ?? [];
             final List<ChannelMember> members = membersData.map((m) => ChannelMember.fromJson(m)).toList();
-            _membersUpdateController.add({'channel_name': channelName, 'members': members});
+            if (!_isDisposed) _membersUpdateController.add({'channel_name': channelName, 'members': members});
             break;
           case 'unauthorized':
             _handleUnauthorized();
@@ -125,19 +128,22 @@ class WebSocketService {
 
   void _handleUnauthorized() {
     print("[WebSocketService] Unauthorized token — force logout.");
-    _statusController.add(WebSocketStatus.unauthorized);
+    if (!_isDisposed) _statusController.add(WebSocketStatus.unauthorized);
     disconnect();
     AuthWrapper.forceLogout(showExpiredMessage: true);
   }
 
   void _handleWebSocketError(dynamic error) {
-    _errorController.add("WebSocket Error: $error");
-    _statusController.add(WebSocketStatus.error);
+    if (!_isDisposed) {
+      _errorController.add("WebSocket Error: $error");
+      _statusController.add(WebSocketStatus.error);
+    }
     _scheduleReconnect();
   }
 
   void _handleWebSocketDone() {
     print("[WebSocketService] Connection closed.");
+    if (_isDisposed) return;
     if (_currentWsStatus != WebSocketStatus.unauthorized) {
       _statusController.add(WebSocketStatus.disconnected);
       _scheduleReconnect();
@@ -145,12 +151,14 @@ class WebSocketService {
   }
 
   void _scheduleReconnect() {
+    if (_isDisposed) return;
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer(const Duration(seconds: 2), () {
       if (_token != null &&
           _currentWsStatus != WebSocketStatus.connecting &&
           _currentWsStatus != WebSocketStatus.connected &&
-          _currentWsStatus != WebSocketStatus.unauthorized) {
+          _currentWsStatus != WebSocketStatus.unauthorized &&
+          !_isDisposed) {
         print("[WebSocketService] Attempting to reconnect...");
         connect(_token!);
       }
@@ -165,8 +173,9 @@ class WebSocketService {
   }
 
   void sendMessage(String channelName, String text) {
+    if (_isDisposed) return;
     if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
-      _errorController.add("Cannot send message: WebSocket not connected.");
+      if (!_isDisposed) _errorController.add("Cannot send message: WebSocket not connected.");
       print("[WebSocketService] Cannot send message: WS not connected.");
       return;
     }
@@ -182,13 +191,16 @@ class WebSocketService {
   }
 
   void disconnect() {
+    if (_isDisposed) return;
     _ws?.sink.close();
     _reconnectTimer?.cancel();
-    _statusController.add(WebSocketStatus.disconnected);
+    if (!_isDisposed) _statusController.add(WebSocketStatus.disconnected);
     print("[WebSocketService] Disconnected.");
   }
 
   void dispose() {
+    if (_isDisposed) return;
+    _isDisposed = true;
     disconnect();
     _statusController.close();
     _messageController.close();

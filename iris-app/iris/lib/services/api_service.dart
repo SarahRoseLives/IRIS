@@ -4,8 +4,7 @@ import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import '../config.dart';
 import '../models/login_response.dart';
-import '../models/channel.dart';
-// Import AuthWrapper for forceLogout
+import '../models/channel.dart'; // Use Message and Channel from here
 import '../main.dart';
 
 class ApiService {
@@ -17,7 +16,6 @@ class ApiService {
     _token = token;
   }
 
-  /// MODIFIED: Checks for token invalidation (401), and triggers force logout if needed
   bool _checkForTokenInvalidation(http.Response response) {
     if (response.statusCode == 401) {
       AuthWrapper.forceLogout(showExpiredMessage: true);
@@ -114,8 +112,7 @@ class ApiService {
     }
   }
 
-  /// FIX: This method now correctly fetches from the /history endpoint and maps the data correctly.
-  Future<List<Map<String, dynamic>>> fetchChannelMessages(String channelName, {int limit = 50}) async {
+  Future<List<Map<String, dynamic>>> fetchChannelMessages(String channelName, {int limit = 100}) async {
     print("[ApiService] fetchChannelMessages: Attempting to fetch history for $channelName");
     if (channelName.isEmpty) {
       print("[ApiService] fetchChannelMessages: Channel name is empty, returning empty list.");
@@ -123,7 +120,6 @@ class ApiService {
     }
 
     final encodedChannelName = Uri.encodeComponent(channelName);
-    // Corrected the URL to match the server's history endpoint
     final url = Uri.parse('$baseUrl/history/$encodedChannelName?limit=$limit');
     final token = _getToken();
     print("[ApiService] fetchChannelMessages: Calling GET $url");
@@ -143,14 +139,13 @@ class ApiService {
       final data = jsonDecode(response.body);
 
       if (response.statusCode == 200 && data['success'] == true) {
-        // The server returns a 'history' key from this endpoint.
         final List<dynamic> history = data['history'] ?? [];
         print("[ApiService] fetchChannelMessages: Successfully fetched ${history.length} messages for $channelName");
-        // Map server fields (sender, text, timestamp) to client fields (from, content, time)
         return history.map((msg) => {
               'from': msg['sender'] ?? 'Unknown',
               'content': msg['text'] ?? '',
               'time': msg['timestamp'] ?? DateTime.now().toIso8601String(),
+              'id': msg['id'] ?? 'hist-${msg['timestamp']}-${msg['sender']}',
             }).toList();
       } else {
         print("[ApiService] fetchChannelMessages: API returned non-200 status for $channelName: ${response.statusCode}");
@@ -159,6 +154,45 @@ class ApiService {
     } catch (e) {
       print("[ApiService] fetchChannelMessages Error for $channelName: $e");
       throw Exception("Network error fetching messages: $e");
+    }
+  }
+
+  Future<List<Message>> fetchMessagesSince(String channelName, DateTime since) async {
+    final encodedChannel = Uri.encodeComponent(channelName);
+    final url = Uri.parse('$baseUrl/history/$encodedChannel?since=${since.toIso8601String()}');
+    final token = _getToken();
+    print("[ApiService] fetchMessagesSince: Calling GET $url");
+    try {
+      final response = await http.get(
+        url,
+        headers: {'Authorization': 'Bearer $token'},
+      );
+
+      if (_checkForTokenInvalidation(response)) {
+        throw Exception("Session expired");
+      }
+
+      print("[ApiService] fetchMessagesSince: Received status code ${response.statusCode} for $channelName");
+
+      final data = jsonDecode(response.body);
+
+      if (response.statusCode == 200 && data['success'] == true) {
+        final List<dynamic> history = data['history'] ?? [];
+        print("[ApiService] fetchMessagesSince: Successfully fetched ${history.length} missed messages for $channelName since $since");
+        return history.map<Message>((msg) => Message(
+          from: msg['sender'] ?? 'Unknown',
+          content: msg['text'] ?? '',
+          time: DateTime.tryParse(msg['timestamp'] ?? '')?.toLocal() ?? DateTime.now(),
+          id: (msg['id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
+          isHistorical: true,
+        )).toList();
+      } else {
+        print("[ApiService] fetchMessagesSince: API returned non-200 status for $channelName: ${response.statusCode}");
+        throw Exception("Failed to load missed messages: Status ${response.statusCode}, Body: ${response.body}");
+      }
+    } catch (e) {
+      print("[ApiService] fetchMessagesSince Error for $channelName: $e");
+      throw Exception("Network error fetching missed messages: $e");
     }
   }
 

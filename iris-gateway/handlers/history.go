@@ -26,6 +26,19 @@ func ChannelHistoryHandler(c *gin.Context) {
 		limit = 100
 	}
 
+	// Parse optional "since" query parameter
+	sinceParam := c.Query("since")
+	var sinceTime *time.Time
+	if sinceParam != "" {
+		t, err := time.Parse(time.RFC3339, sinceParam)
+		if err == nil {
+			sinceTime = &t
+		} else {
+			log.Printf("[HISTORY] Invalid since param: %s", sinceParam)
+			// Silently ignore invalid "since" value, return all (up to limit)
+		}
+	}
+
 	token, ok := getToken(c)
 	if !ok {
 		log.Printf("[HISTORY] Missing token for channel %s", channel)
@@ -51,7 +64,7 @@ func ChannelHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	history := irc.GetChannelHistory(channel, limit)
+	history := irc.GetChannelHistory(channel, 0) // fetch all, filter manually below
 	if history == nil || len(history) == 0 {
 		log.Printf("[HISTORY] No history for channel %s", channel)
 		c.JSON(http.StatusOK, gin.H{
@@ -61,9 +74,25 @@ func ChannelHistoryHandler(c *gin.Context) {
 		return
 	}
 
+	// Filter by since, if present
+	filtered := history
+	if sinceTime != nil {
+		filtered = make([]irc.Message, 0, len(history))
+		for _, msg := range history {
+			if msg.Timestamp.After(*sinceTime) {
+				filtered = append(filtered, msg)
+			}
+		}
+	}
+
+	// Apply limit: return up to limit most recent messages
+	if len(filtered) > limit {
+		filtered = filtered[len(filtered)-limit:]
+	}
+
 	// Convert messages to API response format
-	messages := make([]map[string]interface{}, len(history))
-	for i, msg := range history {
+	messages := make([]map[string]interface{}, len(filtered))
+	for i, msg := range filtered {
 		messages[i] = map[string]interface{}{
 			"channel":   msg.Channel,
 			"sender":    msg.Sender,
@@ -72,7 +101,7 @@ func ChannelHistoryHandler(c *gin.Context) {
 		}
 	}
 
-	log.Printf("[HISTORY] Returning %d messages for channel %s", len(messages), channel)
+	log.Printf("[HISTORY] Returning %d messages for channel %s (since=%v)", len(messages), channel, sinceParam)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"history": messages,

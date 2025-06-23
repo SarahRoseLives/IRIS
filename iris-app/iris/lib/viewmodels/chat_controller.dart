@@ -1,4 +1,3 @@
-// lib/viewmodels/chat_controller.dart
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -12,7 +11,7 @@ import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../services/notification_service.dart';
 import 'chat_state.dart';
-import '../models/channel.dart';
+import '../models/channel.dart'; // Use Channel and Message from here
 import '../models/channel_member.dart';
 import '../config.dart';
 
@@ -20,7 +19,7 @@ class ChatController {
   final String username;
   final String token;
   final ChatState chatState;
-  final ApiService _apiService;
+  final ApiService apiService;
   final WebSocketService _webSocketService;
   final NotificationService _notificationService;
 
@@ -36,10 +35,9 @@ class ChatController {
     required this.username,
     required this.token,
     required this.chatState,
-  })  : _apiService = ApiService(token),
+  })  : apiService = ApiService(token),
         _webSocketService = GetIt.instance<WebSocketService>(),
         _notificationService = GetIt.instance<NotificationService>();
-
 
   Future<void> initialize() async {
     await chatState.loadPersistedMessages();
@@ -61,6 +59,12 @@ class ChatController {
     if (_currentWsStatus != WebSocketStatus.connected && _currentWsStatus != WebSocketStatus.connecting) {
       _webSocketService.connect(token);
     }
+  }
+
+  void disconnectWebSocket() {
+    _webSocketService.dispose();
+    _currentWsStatus = WebSocketStatus.disconnected;
+    _wsStatusController.add(_currentWsStatus);
   }
 
   void _listenToWebSocketStatus() {
@@ -170,7 +174,7 @@ class ChatController {
 
   Future<void> joinChannel(String channelName) async {
     try {
-      await _apiService.joinChannel(channelName);
+      await apiService.joinChannel(channelName);
       chatState.selectConversation(channelName);
     } catch (e) {
       chatState.addInfoMessage('Failed to join channel: $channelName. Error: $e');
@@ -183,34 +187,36 @@ class ChatController {
       return;
     }
     try {
-      await _apiService.partChannel(channelName);
+      await apiService.partChannel(channelName);
       chatState.removeChannel(channelName);
     } catch (e) {
       chatState.addInfoMessage('Failed to leave channel: ${e.toString()}');
     }
   }
 
-  // FIX: Added limit parameter to be passed to ApiService
-  Future<void> loadChannelHistory(String channelName, {int limit = 50}) async {
+  Future<void> loadChannelHistory(String channelName, {int limit = 100}) async {
     if (!channelName.startsWith('#')) return;
     try {
-        final response = await _apiService.fetchChannelMessages(channelName, limit: limit);
-        final messages = response.map((item) => Message.fromJson({
-            ...item,
-            'isHistorical': true,
-            'id': 'hist-${item['time']}-${item['from']}',
-        })).toList();
+      final response = await apiService.fetchChannelMessages(channelName, limit: limit);
+      final messages = response.map((item) => Message.fromJson({
+        ...item,
+        'isHistorical': true,
+        'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
+      })).toList();
 
-        if (messages.isNotEmpty) {
-            chatState.addMessageBatch(channelName, messages);
-            final senders = messages.map((m) => m.from).toSet();
-            for (final sender in senders) {
-                await loadAvatarForUser(sender);
-            }
+      // Sort by time ascending (oldest first)
+      messages.sort((a, b) => a.time.compareTo(b.time));
+
+      if (messages.isNotEmpty) {
+        chatState.addMessageBatch(channelName, messages);
+        final senders = messages.map((m) => m.from).toSet();
+        for (final sender in senders) {
+          await loadAvatarForUser(sender);
         }
+      }
     } catch (e) {
-        print('Error loading channel history for $channelName: $e');
-        chatState.addInfoMessage('Failed to load history for $channelName.');
+      print('Error loading channel history for $channelName: $e');
+      chatState.addInfoMessage('Failed to load history for $channelName.');
     }
   }
 
@@ -285,7 +291,7 @@ class ChatController {
   void _initNotifications() async {
     final fcmToken = await _notificationService.getFCMToken();
     if (fcmToken != null) {
-      await _apiService.registerFCMToken(fcmToken);
+      await apiService.registerFCMToken(fcmToken);
     }
   }
 

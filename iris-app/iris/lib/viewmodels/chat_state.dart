@@ -54,21 +54,16 @@ class ChatState extends ChangeNotifier {
 
   bool hasAvatar(String username) => _userAvatars.containsKey(username) && _userAvatars[username]!.isNotEmpty;
 
-  // NEW METHOD: This was missing and caused the build error.
-  // It looks up a member in the currently selected channel by case-insensitive nick.
   ChannelMember? getMemberInCurrentChannel(String nick) {
     final members = membersForSelectedChannel;
     try {
-      // Use firstWhere to find the member, comparing nicks case-insensitively.
       return members.firstWhere((m) => m.nick.toLowerCase() == nick.toLowerCase());
     } catch (e) {
-      // firstWhere throws an error if no element is found, so we catch it and return null.
       return null;
     }
   }
 
   UserStatus getUserStatus(String username) {
-    // Perform a case-insensitive lookup
     final lowerCaseUsername = username.toLowerCase();
     for (var entry in _userStatuses.entries) {
       if (entry.key.toLowerCase() == lowerCaseUsername) {
@@ -84,11 +79,9 @@ class ChatState extends ChangeNotifier {
     _userStatuses.clear();
     for (final channel in _channels) {
       for (final member in channel.members) {
-        // If user is 'away' in any channel, their status is 'away'. Otherwise, 'online'.
         if (member.isAway) {
           _userStatuses[member.nick] = UserStatus.away;
         } else {
-          // Only set to online if they aren't already marked as away from another channel
           _userStatuses.putIfAbsent(member.nick, () => UserStatus.online);
         }
       }
@@ -128,15 +121,15 @@ class ChatState extends ChangeNotifier {
   }
 
   void removeChannel(String channelName) {
-      final initialTarget = selectedConversationTarget;
-      _channels.removeWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
+    final initialTarget = selectedConversationTarget;
+    _channels.removeWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
 
-      if (initialTarget.toLowerCase() == channelName.toLowerCase()) {
-        final newIndex = _channels.indexWhere((c) => c.name.startsWith("#"));
-        _selectedChannelIndex = (newIndex != -1) ? newIndex : 0;
-      }
-      _rebuildUserStatuses();
-      notifyListeners();
+    if (initialTarget.toLowerCase() == channelName.toLowerCase()) {
+      final newIndex = _channels.indexWhere((c) => c.name.startsWith("#"));
+      _selectedChannelIndex = (newIndex != -1) ? newIndex : 0;
+    }
+    _rebuildUserStatuses();
+    notifyListeners();
   }
 
   void updateChannelMembers(String channelName, List<ChannelMember> members) {
@@ -172,27 +165,31 @@ class ChatState extends ChangeNotifier {
   }
 
   void addMessageBatch(String channelName, List<Message> messages) {
-      final key = channelName.toLowerCase();
-      _channelMessages.putIfAbsent(key, () => []);
+    final key = channelName.toLowerCase();
+    _channelMessages.putIfAbsent(key, () => []);
 
-      // Add only new messages
-      final existingIds = _channelMessages[key]!.map((m) => m.id).toSet();
-      final newMessages = messages.where((m) => !existingIds.contains(m.id)).toList();
+    // Deduplicate using message IDs
+    final existingIds = _channelMessages[key]!.map((m) => m.id).toSet();
+    final newMessages = messages.where((m) => !existingIds.contains(m.id)).toList();
 
-      _channelMessages[key]!.insertAll(0, newMessages);
+    // Sort by time ascending (oldest first)
+    newMessages.sort((a, b) => a.time.compareTo(b.time));
+    if (newMessages.isNotEmpty) {
+      _channelMessages[key]!.addAll(newMessages); // <-- append to the end, not the start!
       notifyListeners();
       _persistMessages();
+    }
   }
 
   void addInfoMessage(String message) {
-      final currentChannel = selectedConversationTarget;
-      if (currentChannel == "No channels") return;
-      final infoMessage = Message(
-          from: 'IRIS Bot',
-          content: message,
-          time: DateTime.now(),
-          id: DateTime.now().millisecondsSinceEpoch.toString());
-      addMessage(currentChannel, infoMessage);
+    final currentChannel = selectedConversationTarget;
+    if (currentChannel == "No channels") return;
+    final infoMessage = Message(
+        from: 'IRIS Bot',
+        content: message,
+        time: DateTime.now(),
+        id: DateTime.now().millisecondsSinceEpoch.toString());
+    addMessage(currentChannel, infoMessage);
   }
 
   void setAvatar(String username, String url) {
@@ -203,9 +200,9 @@ class ChatState extends ChangeNotifier {
   }
 
   void setAvatarPlaceholder(String username) {
-      if (username.isNotEmpty && !_userAvatars.containsKey(username)) {
-         _userAvatars[username] = ''; // Prevents re-fetching
-      }
+    if (username.isNotEmpty && !_userAvatars.containsKey(username)) {
+      _userAvatars[username] = '';
+    }
   }
 
   // --- PERSISTENCE ---

@@ -1,4 +1,3 @@
-// lib/viewmodels/main_layout_viewmodel.dart
 import 'package:flutter/material.dart';
 import 'dart:async';
 
@@ -29,6 +28,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription? _wsStatusSub;
   StreamSubscription? _errorSub;
 
+  // Added: Track last message time before app sleep
+  DateTime? _lastMessageTimeBeforeSleep;
+
   // --- GETTERS ---
 
   bool get showLeftDrawer => _showLeftDrawer;
@@ -47,7 +49,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   List<String> get joinedPublicChannelNames => chatState.joinedPublicChannelNames;
   List<String> get unjoinedPublicChannelNames => chatState.unjoinedPublicChannelNames;
   List<String> get dmChannelNames => chatState.dmChannelNames;
-
 
   MainLayoutViewModel({required this.username, this.token}) {
     if (token == null) {
@@ -76,6 +77,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _errorSub = _chatController.errorStream.listen(_onErrorChanged);
 
     await _chatController.initialize();
+
+    // Load history for the initially selected channel
+    if (selectedConversationTarget.startsWith('#')) {
+      await _chatController.loadChannelHistory(selectedConversationTarget, limit: 100);
+    }
   }
 
   void _onChatStateChanged() {
@@ -100,10 +106,43 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  // --- App Lifecycle Handling for Missed Messages ---
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
+    if (state == AppLifecycleState.paused) {
+      // When app goes to background, save last message time and disconnect WebSocket
+      _lastMessageTimeBeforeSleep = _getLastMessageTime();
+      _chatController.disconnectWebSocket();
+    } else if (state == AppLifecycleState.resumed) {
+      // When app comes back to foreground, reconnect WebSocket and fetch missed messages
       _chatController.connectWebSocket();
+      _fetchMissedMessages();
+    }
+  }
+
+  DateTime? _getLastMessageTime() {
+    final messages = currentChannelMessages;
+    return messages.isNotEmpty ? messages.last.time : null;
+  }
+
+  Future<void> _fetchMissedMessages() async {
+    if (_lastMessageTimeBeforeSleep == null) return;
+
+    final currentTarget = selectedConversationTarget;
+    if (!currentTarget.startsWith('#')) return; // Only fetch for channels
+
+    try {
+      // Fetch messages since we were last active (API returns List<Message>)
+      final newMessages = await _chatController.apiService.fetchMessagesSince(
+        currentTarget,
+        _lastMessageTimeBeforeSleep!
+      );
+
+      // Add new messages to chat state (merge)
+      chatState.addMessageBatch(currentTarget, newMessages);
+    } catch (e) {
+      print('Error fetching missed messages: $e');
     }
   }
 
@@ -138,10 +177,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void _scrollToBottomIfScrolled() {
     if (_scrollController.hasClients) {
-        final isAtBottom = _scrollController.position.maxScrollExtent - _scrollController.offset < 200;
-        if(isAtBottom) {
-           _scrollToBottom();
-        }
+      final isAtBottom = _scrollController.position.maxScrollExtent - _scrollController.offset < 200;
+      if (isAtBottom) {
+        _scrollToBottom();
+      }
     }
   }
 
@@ -157,8 +196,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     chatState.selectConversation(channelName);
     _scrollToBottom();
     if (channelName.startsWith('#')) {
-      // FIX: Pass the limit to the history fetch call
-      _chatController.loadChannelHistory(channelName, limit: 50);
+      _chatController.loadChannelHistory(channelName, limit: 100); // Updated to 100
     }
   }
 

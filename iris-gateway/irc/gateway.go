@@ -1,6 +1,7 @@
 package irc
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -8,7 +9,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"encoding/json"
 
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
@@ -175,16 +175,20 @@ func InitGatewayBot() error {
 				historyMap[channelKey] = chHistory
 				log.Printf("[Gateway] Created new history slice for channel: %s", channelKey)
 			}
+			// Lock ordering: historyMutex (outer, short) -> chHistory.mutex (inner, can be slow)
+			chHistory.mutex.Lock()
 			historyMutex.Unlock()
 
-			chHistory.mutex.Lock()
 			chHistory.Messages = append(chHistory.Messages, message)
 			log.Printf("[Gateway] Appended message to channel %s, total now: %d", channelKey, len(chHistory.Messages))
+			log.Printf("[DEBUG] After append, %d messages in %s: last=%+v", len(chHistory.Messages), channelKey, chHistory.Messages[len(chHistory.Messages)-1])
 
 			// Clean up old messages
 			cutoff := time.Now().Add(-historyDuration)
+			log.Printf("[DEBUG] Prune cutoff: %v", cutoff)
 			var firstValidIndex = -1
 			for i, msg := range chHistory.Messages {
+				log.Printf("[DEBUG] Message %d timestamp: %v", i, msg.Timestamp)
 				if msg.Timestamp.After(cutoff) {
 					firstValidIndex = i
 					break
@@ -196,6 +200,7 @@ func InitGatewayBot() error {
 			} else if firstValidIndex == -1 && len(chHistory.Messages) > 0 {
 				chHistory.Messages = []Message{} // All messages are old
 			}
+			log.Printf("[DEBUG] After prune. Channel %s now has %d messages.", channelKey, len(chHistory.Messages))
 			chHistory.mutex.Unlock()
 		}
 

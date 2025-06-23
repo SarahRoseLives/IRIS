@@ -5,32 +5,32 @@ class Message {
   final String from;
   final String content;
   final DateTime time;
-  // A unique ID is helpful for list keys and other operations.
   final String id;
-  final bool isHistorical; // New field to distinguish historical messages
+  final bool isHistorical;
 
   Message({
     required this.from,
     required this.content,
     required this.time,
     required this.id,
-    this.isHistorical = false, // Default to false for new messages
+    this.isHistorical = false,
   });
 
   /// Creates a Message object from a JSON map.
   factory Message.fromJson(Map<String, dynamic> json) {
+    final String from = json['from'] ?? 'Unknown';
+    final String timeStr = json['time'] ?? '';
+    final bool isHist = json['isHistorical'] ?? false;
+    final String? id = json['id'];
     return Message(
-      from: json['from'] ?? 'Unknown',
+      from: from,
       content: json['content'] ?? '',
-      // Ensure time is parsed correctly and converted to local time.
-      time: DateTime.tryParse(json['time'] ?? '')?.toLocal() ?? DateTime.now(),
-      // If an ID isn't provided by the backend, create a fallback unique value.
-      id: (json['id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
-      isHistorical: json['isHistorical'] ?? false,
+      time: DateTime.tryParse(timeStr)?.toLocal() ?? DateTime.now(),
+      id: id ?? (isHist ? 'hist-$timeStr-$from' : DateTime.now().millisecondsSinceEpoch.toString()),
+      isHistorical: isHist,
     );
   }
 
-  /// Helper to convert to a Map, useful for sending data or debugging.
   Map<String, dynamic> toMap() {
     return {
       'from': from,
@@ -43,7 +43,6 @@ class Message {
 }
 
 /// Represents an IRC channel, including its members.
-/// NOTE: messages list is removed; message history is managed elsewhere.
 class Channel {
   final String name;
   List<ChannelMember> members;
@@ -53,7 +52,6 @@ class Channel {
     required this.members,
   });
 
-  /// Updated fromJson factory to parse the channel members only.
   factory Channel.fromJson(Map<String, dynamic> json) {
     var memberList = json['members'] as List? ?? [];
     List<ChannelMember> members = memberList.map((i) => ChannelMember.fromJson(i)).toList();
