@@ -1,3 +1,5 @@
+// viewmodels/chat_controller.dart
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -77,7 +79,6 @@ class ChatController {
     });
   }
 
-  /// MODIFIED: The stream listener callback is now `async` to properly await setChannels.
   void _listenToInitialState() {
     _webSocketService.initialStateStream.listen((payload) async {
       final channelsPayload = payload['channels'] as Map<String, dynamic>?;
@@ -92,7 +93,6 @@ class ChatController {
           }
         });
       }
-      // Await the async setChannels method for channel persistence logic.
       await chatState.setChannels(newChannels);
       _errorController.add(null);
     }).onError((e) {
@@ -178,7 +178,6 @@ class ChatController {
     try {
       await apiService.joinChannel(channelName);
       chatState.selectConversation(channelName);
-      // Ensure the joined channel has members (yourself at minimum)
       chatState.moveChannelToJoined(channelName, username);
     } catch (e) {
       chatState.addInfoMessage('Failed to join channel: $channelName. Error: $e');
@@ -191,8 +190,9 @@ class ChatController {
       return;
     }
     try {
+      // Reverted to use the ApiService for parting channels.
       await apiService.partChannel(channelName);
-      // Instead of removing the channel, move it to unjoined
+      // After the API call succeeds, move the channel to the unjoined list.
       chatState.moveChannelToUnjoined(channelName);
     } catch (e) {
       chatState.addInfoMessage('Failed to leave channel: ${e.toString()}');
@@ -209,7 +209,6 @@ class ChatController {
         'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
       })).toList();
 
-      // Sort by time ascending (oldest first)
       messages.sort((a, b) => a.time.compareTo(b.time));
 
       if (messages.isNotEmpty) {

@@ -8,7 +8,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"iris-gateway/session"
-	"iris-gateway/irc" // <-- make sure this import is present
+	// "iris-gateway/irc" // No longer needed here
 )
 
 // POST /api/channels/join
@@ -68,16 +68,27 @@ func PartChannelHandler(c *gin.Context) {
 		return
 	}
 
-	sess.RemoveChannelFromSession(req.Channel)
-	irc.PartChannel(req.Channel) // <-- changed line
+	// Ensure the user's IRC connection exists
+	if sess.IRC == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "User is not connected to IRC"})
+		return
+	}
 
-	sess.Broadcast("channel_part", map[string]string{
-		"name": req.Channel,
-		"user": sess.Username,
-	})
+	// MODIFIED: Use the user's IRC connection from their session to part the channel.
+	sess.IRC.Part(req.Channel)
+
+	// REMOVED: Do not modify session state here. The PART event callback in irc/connection.go
+	// is the single source of truth and will handle removing the channel from the session
+	// and broadcasting the update after the server confirms the action.
+	//
+	// sess.RemoveChannelFromSession(req.Channel)
+	// irc.PartChannel(req.Channel) // <-- This was incorrect, it used the gateway bot.
+	// sess.Broadcast("channel_part", ...) // <-- Also removed, handled by PART callback.
+
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": fmt.Sprintf("Part command sent for %s", req.Channel)})
 }
+
 
 // GET /api/channels
 func ListChannelsHandler(c *gin.Context) {

@@ -1,3 +1,5 @@
+// services/websocket_service.dart
+
 import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -167,9 +169,9 @@ class WebSocketService {
 
   bool _isUnauthorized(String error) {
     return error.contains('401') ||
-           error.contains('unauthorized') ||
-           error.contains('not upgraded to websocket') ||
-           error.contains('invalid token');
+        error.contains('unauthorized') ||
+        error.contains('not upgraded to websocket') ||
+        error.contains('invalid token');
   }
 
   void sendMessage(String channelName, String text) {

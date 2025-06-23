@@ -1,3 +1,5 @@
+// services/api_service.dart
+
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -180,12 +182,12 @@ class ApiService {
         final List<dynamic> history = data['history'] ?? [];
         print("[ApiService] fetchMessagesSince: Successfully fetched ${history.length} missed messages for $channelName since $since");
         return history.map<Message>((msg) => Message(
-          from: msg['sender'] ?? 'Unknown',
-          content: msg['text'] ?? '',
-          time: DateTime.tryParse(msg['timestamp'] ?? '')?.toLocal() ?? DateTime.now(),
-          id: (msg['id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
-          isHistorical: true,
-        )).toList();
+              from: msg['sender'] ?? 'Unknown',
+              content: msg['text'] ?? '',
+              time: DateTime.tryParse(msg['timestamp'] ?? '')?.toLocal() ?? DateTime.now(),
+              id: (msg['id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
+              isHistorical: true,
+            )).toList();
       } else {
         print("[ApiService] fetchMessagesSince: API returned non-200 status for $channelName: ${response.statusCode}");
         throw Exception("Failed to load missed messages: Status ${response.statusCode}, Body: ${response.body}");
