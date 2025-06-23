@@ -7,6 +7,8 @@ import '../models/channel_member.dart';
 import '../models/user_status.dart';
 
 class ChatState extends ChangeNotifier {
+  static const String _lastChannelKey = 'last_channel'; // Key for persistence
+
   List<Channel> _channels = [];
   int _selectedChannelIndex = 0;
   final Map<String, List<Message>> _channelMessages = {};
@@ -34,14 +36,14 @@ class ChatState extends ChangeNotifier {
       _channels.where((c) => c.name.startsWith('@')).map((c) => c.name).toList();
 
   String get selectedConversationTarget {
-    if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length) {
+    if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length && _selectedChannelIndex >= 0) {
       return _channels[_selectedChannelIndex].name;
     }
     return "No channels";
   }
 
   List<ChannelMember> get membersForSelectedChannel {
-    if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length) {
+    if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length && _selectedChannelIndex >= 0) {
       return _channels[_selectedChannelIndex].members;
     }
     return [];
@@ -89,31 +91,54 @@ class ChatState extends ChangeNotifier {
     }
   }
 
-  void setChannels(List<Channel> newChannels, {String? defaultChannel}) {
+  /// MODIFIED: This method now contains the complete logic for setting the initial channel.
+  Future<void> setChannels(List<Channel> newChannels) async {
     _channels = newChannels;
-    _channels.sort((a, b) => a.name.compareTo(b.name));
+    // Sort channels alphabetically for consistent ordering in the UI.
+    _channels.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
     _rebuildUserStatuses();
 
+    final prefs = await SharedPreferences.getInstance();
+    final String? lastChannelName = prefs.getString(_lastChannelKey);
+
     int targetIndex = -1;
 
-    if (defaultChannel != null) {
-      targetIndex = _channels.indexWhere(
-          (c) => c.name.toLowerCase() == defaultChannel.toLowerCase());
+    // 1. Try to find the last visited channel, but only if it's still a joined channel.
+    if (lastChannelName != null) {
+      final lastChannelIndex = _channels.indexWhere((c) => c.name.toLowerCase() == lastChannelName.toLowerCase());
+      if (lastChannelIndex != -1) {
+        // A DM is always considered 'joined'. A public channel is joined if it has members.
+        final isJoined = _channels[lastChannelIndex].name.startsWith('@') || _channels[lastChannelIndex].members.isNotEmpty;
+        if (isJoined) {
+          targetIndex = lastChannelIndex;
+        }
+      }
     }
 
+    // 2. If no valid last channel, find the first joined public channel.
     if (targetIndex == -1) {
-      targetIndex = _channels.indexWhere((c) => c.name.startsWith('#'));
+      targetIndex = _channels.indexWhere((c) => c.name.startsWith('#') && c.members.isNotEmpty);
     }
 
-    _selectedChannelIndex =
-        (targetIndex >= 0 && targetIndex < _channels.length) ? targetIndex : 0;
+    // 3. If still no channel, find the first DM.
+    if (targetIndex == -1) {
+      targetIndex = _channels.indexWhere((c) => c.name.startsWith('@'));
+    }
+
+    // 4. As a final fallback, if we still have nothing (e.g., only unjoined channels exist),
+    // just pick the first one to avoid an error state.
+    if (targetIndex == -1 && _channels.isNotEmpty) {
+      targetIndex = 0;
+    }
+
+    _selectedChannelIndex = (targetIndex != -1) ? targetIndex : 0;
     notifyListeners();
   }
 
   void addOrUpdateChannel(Channel channel) {
-    final index = _channels.indexWhere(
-        (c) => c.name.toLowerCase() == channel.name.toLowerCase());
+    final index = _channels
+        .indexWhere((c) => c.name.toLowerCase() == channel.name.toLowerCase());
     if (index != -1) {
       _channels[index] = channel;
     } else {
@@ -124,7 +149,6 @@ class ChatState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Moves a channel to the joined list (i.e., ensures it contains the user as a member).
   void moveChannelToJoined(String channelName, String username) {
     final index = _channels
         .indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
@@ -132,7 +156,6 @@ class ChatState extends ChangeNotifier {
       final channel = _channels[index];
       if (!channel.members
           .any((m) => m.nick.toLowerCase() == username.toLowerCase())) {
-        // Provide required 'prefix' parameter (use '' if not available)
         channel.members
             .add(ChannelMember(nick: username, prefix: '', isAway: false));
       }
@@ -142,7 +165,6 @@ class ChatState extends ChangeNotifier {
     }
   }
 
-  /// Moves a channel to the unjoined list (i.e., clears its members).
   void moveChannelToUnjoined(String channelName) {
     final index = _channels
         .indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
@@ -185,11 +207,17 @@ class ChatState extends ChangeNotifier {
     }
   }
 
-  void selectConversation(String conversationName) {
+  /// MODIFIED: Made async and saves the channel name to SharedPreferences.
+  void selectConversation(String conversationName) async {
     final index = _channels
         .indexWhere((c) => c.name.toLowerCase() == conversationName.toLowerCase());
     if (index != -1) {
       _selectedChannelIndex = index;
+
+      // Persist the selected channel name
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_lastChannelKey, conversationName);
+
       notifyListeners();
     }
   }
@@ -213,15 +241,13 @@ class ChatState extends ChangeNotifier {
     final key = channelName.toLowerCase();
     _channelMessages.putIfAbsent(key, () => []);
 
-    // Deduplicate using message IDs
     final existingIds = _channelMessages[key]!.map((m) => m.id).toSet();
     final newMessages =
         messages.where((m) => !existingIds.contains(m.id)).toList();
 
-    // Sort by time ascending (oldest first)
     newMessages.sort((a, b) => a.time.compareTo(b.time));
     if (newMessages.isNotEmpty) {
-      _channelMessages[key]!.addAll(newMessages); // <-- append to the end, not the start!
+      _channelMessages[key]!.addAll(newMessages);
       notifyListeners();
       _persistMessages();
     }

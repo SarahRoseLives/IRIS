@@ -77,8 +77,9 @@ class ChatController {
     });
   }
 
+  /// MODIFIED: The stream listener callback is now `async` to properly await setChannels.
   void _listenToInitialState() {
-    _webSocketService.initialStateStream.listen((payload) {
+    _webSocketService.initialStateStream.listen((payload) async {
       final channelsPayload = payload['channels'] as Map<String, dynamic>?;
       final List<Channel> newChannels = [];
 
@@ -91,7 +92,8 @@ class ChatController {
           }
         });
       }
-      chatState.setChannels(newChannels);
+      // Await the async setChannels method for channel persistence logic.
+      await chatState.setChannels(newChannels);
       _errorController.add(null);
     }).onError((e) {
       _errorController.add("Error receiving initial state: $e");
