@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/channel_member.dart';
 import '../models/user_status.dart';
 import 'user_avatar.dart';
-import '../utils/irc_helpers.dart'; // <-- New import for shared IRC role logic
+import '../utils/irc_helpers.dart';
 
 class RightDrawer extends StatelessWidget {
   final List<ChannelMember> members;
@@ -14,8 +14,99 @@ class RightDrawer extends StatelessWidget {
     required this.userAvatars,
   });
 
+  // Grouping logic for IRC roles
+  static const _roleOrder = [
+    '~', // Owner
+    '&', // Admin
+    '@', // Op
+    '%', // Halfop
+    '+', // Voice
+    '',  // Regular
+  ];
+
+  static const _roleLabels = {
+    '~': "Owners",
+    '&': "Admins",
+    '@': "Operators",
+    '%': "Half-ops",
+    '+': "Voiced",
+    '': "Members",
+  };
+
+  Map<String, List<ChannelMember>> _groupByRole(List<ChannelMember> users) {
+    final map = <String, List<ChannelMember>>{};
+    for (final member in users) {
+      final prefix = member.prefix ?? '';
+      map.putIfAbsent(prefix, () => []).add(member);
+    }
+    return map;
+  }
+
   @override
   Widget build(BuildContext context) {
+    // Split members into online and away for each role
+    final onlineMembers = members.where((m) => !m.isAway).toList();
+    final awayMembers = members.where((m) => m.isAway).toList();
+
+    final onlineGroups = _groupByRole(onlineMembers);
+    final awayGroups = _groupByRole(awayMembers);
+
+    List<Widget> buildSection(Map<String, List<ChannelMember>> groups, String sectionLabel) {
+      final widgets = <Widget>[];
+      for (final prefix in _roleOrder) {
+        final group = groups[prefix];
+        if (group != null && group.isNotEmpty) {
+          widgets.add(Padding(
+            padding: const EdgeInsets.fromLTRB(16, 16, 0, 4),
+            child: Text(
+              "$sectionLabel: ${_roleLabels[prefix]}",
+              style: const TextStyle(
+                  color: Colors.white70,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 13),
+            ),
+          ));
+          group.sort((a, b) => a.nick.toLowerCase().compareTo(b.nick.toLowerCase()));
+          widgets.addAll(group.map((member) {
+            final avatarUrl = userAvatars[member.nick];
+            final status = member.isAway ? UserStatus.away : UserStatus.online;
+            final roleColor = getColorForPrefix(member.prefix);
+            final roleIcon = getIconForPrefix(member.prefix);
+
+            return ListTile(
+              leading: UserAvatar(
+                username: member.nick,
+                avatarUrl: avatarUrl,
+                status: status,
+                radius: 16,
+              ),
+              title: Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      member.nick,
+                      style: TextStyle(
+                        color: roleColor,
+                        fontWeight: member.prefix.isNotEmpty
+                            ? FontWeight.bold
+                            : FontWeight.normal,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  if (roleIcon != null) ...[
+                    const SizedBox(width: 8),
+                    Icon(roleIcon, color: roleColor, size: 16),
+                  ]
+                ],
+              ),
+            );
+          }));
+        }
+      }
+      return widgets;
+    }
+
     return Material(
       color: Colors.transparent,
       child: Container(
@@ -44,44 +135,23 @@ class RightDrawer extends StatelessWidget {
                           style: TextStyle(color: Colors.white54),
                         ),
                       )
-                    : ListView.builder(
-                        itemCount: members.length,
-                        itemBuilder: (context, idx) {
-                          final member = members[idx];
-                          final avatarUrl = userAvatars[member.nick];
-                          final status = member.isAway ? UserStatus.away : UserStatus.online;
-                          final roleColor = getColorForPrefix(member.prefix);
-                          final roleIcon = getIconForPrefix(member.prefix);
-
-                          return ListTile(
-                            leading: UserAvatar(
-                              username: member.nick,
-                              avatarUrl: avatarUrl,
-                              status: status,
-                              radius: 16,
+                    : ListView(
+                        children: [
+                          ...buildSection(onlineGroups, "Online"),
+                          if (awayMembers.isNotEmpty) ...[
+                            const Padding(
+                              padding: EdgeInsets.fromLTRB(16, 20, 0, 4),
+                              child: Text(
+                                "Away",
+                                style: TextStyle(
+                                    color: Colors.white60,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14),
+                              ),
                             ),
-                            title: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    member.nick,
-                                    style: TextStyle(
-                                      color: roleColor,
-                                      fontWeight: member.prefix.isNotEmpty
-                                          ? FontWeight.bold
-                                          : FontWeight.normal,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                if (roleIcon != null) ...[
-                                  const SizedBox(width: 8),
-                                  Icon(roleIcon, color: roleColor, size: 16),
-                                ]
-                              ],
-                            ),
-                          );
-                        },
+                            ...buildSection(awayGroups, "Away"),
+                          ]
+                        ],
                       ),
               ),
             ],
