@@ -1,5 +1,3 @@
-// viewmodels/chat_controller.dart
-
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -57,14 +55,20 @@ class ChatController {
     _handlePendingNotification();
   }
 
+  // PATCH: Update connectWebSocket to only connect if disconnected or error
   void connectWebSocket() {
-    if (_currentWsStatus != WebSocketStatus.connected && _currentWsStatus != WebSocketStatus.connecting) {
+    if (_currentWsStatus == WebSocketStatus.disconnected ||
+        _currentWsStatus == WebSocketStatus.error) {
       _webSocketService.connect(token);
     }
   }
 
+  // PATCH: Update disconnectWebSocket logic
   void disconnectWebSocket() {
-    _webSocketService.dispose();
+    // Only disconnect if we're actually connected
+    if (_currentWsStatus == WebSocketStatus.connected) {
+      _webSocketService.disconnect();
+    }
     _currentWsStatus = WebSocketStatus.disconnected;
     _wsStatusController.add(_currentWsStatus);
   }
@@ -95,6 +99,28 @@ class ChatController {
       }
       await chatState.setChannels(newChannels);
       _errorController.add(null);
+
+      // --- PATCH: Fetch channel history for all joined channels after initial state ---
+      for (final channel in chatState.channels) {
+        if (channel.name.startsWith('#')) {
+          // Only fetch if we have no messages cached (cold start), otherwise fetch missed messages
+          final messages = chatState.getMessagesForChannel(channel.name);
+          if (messages.isEmpty) {
+            print('[ChatController] Fetching full history for ${channel.name}');
+            await loadChannelHistory(channel.name, limit: 100);
+          } else {
+            // Fetch missed messages since the last one
+            final lastTime = messages.last.time;
+            print('[ChatController] Fetching missed messages for ${channel.name} since $lastTime');
+            try {
+              final newMessages = await apiService.fetchMessagesSince(channel.name, lastTime);
+              chatState.addMessageBatch(channel.name, newMessages);
+            } catch (e) {
+              print('Error fetching missed messages for ${channel.name}: $e');
+            }
+          }
+        }
+      }
     }).onError((e) {
       _errorController.add("Error receiving initial state: $e");
     });
@@ -179,6 +205,8 @@ class ChatController {
       await apiService.joinChannel(channelName);
       chatState.selectConversation(channelName);
       chatState.moveChannelToJoined(channelName, username);
+      // --- PATCH: Load history for newly joined channel
+      await loadChannelHistory(channelName, limit: 100);
     } catch (e) {
       chatState.addInfoMessage('Failed to join channel: $channelName. Error: $e');
     }

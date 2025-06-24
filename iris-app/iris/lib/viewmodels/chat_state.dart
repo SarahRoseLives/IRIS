@@ -15,6 +15,9 @@ class ChatState extends ChangeNotifier {
   final Map<String, String> _userAvatars = {};
   final Map<String, UserStatus> _userStatuses = {};
 
+  // --- NEW: Triple deduplication map ---
+  final Map<String, Set<String>> _channelTriples = {};
+
   // --- GETTERS ---
   List<Channel> get channels => _channels;
   Map<String, String> get userAvatars => _userAvatars;
@@ -52,6 +55,12 @@ class ChatState extends ChangeNotifier {
   List<Message> get messagesForSelectedChannel {
     final target = selectedConversationTarget.toLowerCase();
     return _channelMessages[target] ?? [];
+  }
+
+  // --- PATCH: Helper to retrieve messages for ANY channel
+  List<Message> getMessagesForChannel(String channelName) {
+    final key = channelName.toLowerCase();
+    return _channelMessages[key] ?? [];
   }
 
   bool hasAvatar(String username) =>
@@ -222,32 +231,60 @@ class ChatState extends ChangeNotifier {
     }
   }
 
+  // --- NEW: Helper for message triple ---
+  String _getMessageTriple(Message msg) {
+    int seconds = msg.time.millisecondsSinceEpoch ~/ 1000;
+    return '${msg.from}|${msg.content}|$seconds';
+  }
+
+  // --- MODIFIED: Add message with triple check
   void addMessage(String channelName, Message message, {bool toEnd = true}) {
     final key = channelName.toLowerCase();
     _channelMessages.putIfAbsent(key, () => []);
 
-    if (!_channelMessages[key]!.any((m) => m.id == message.id)) {
-      if (toEnd) {
-        _channelMessages[key]!.add(message);
-      } else {
-        _channelMessages[key]!.insert(0, message);
-      }
-      notifyListeners();
-      _persistMessages();
+    // Triple-based deduplication
+    final triple = _getMessageTriple(message);
+    if ((_channelTriples[key] ?? {}).contains(triple)) {
+      return; // duplicate message
     }
+
+    if (toEnd) {
+      _channelMessages[key]!.add(message);
+    } else {
+      _channelMessages[key]!.insert(0, message);
+    }
+
+    _channelTriples.putIfAbsent(key, () => <String>{});
+    _channelTriples[key]!.add(triple);
+
+    notifyListeners();
+    _persistMessages();
   }
 
+  // --- MODIFIED: Batch add with triple deduplication
   void addMessageBatch(String channelName, List<Message> messages) {
     final key = channelName.toLowerCase();
     _channelMessages.putIfAbsent(key, () => []);
 
-    final existingIds = _channelMessages[key]!.map((m) => m.id).toSet();
-    final newMessages =
-        messages.where((m) => !existingIds.contains(m.id)).toList();
+    final existingTriples = _channelTriples[key] ?? <String>{};
+    final newTriples = <String>{};
+    final newMessages = <Message>[];
 
-    newMessages.sort((a, b) => a.time.compareTo(b.time));
+    for (var msg in messages) {
+      final triple = _getMessageTriple(msg);
+      if (!existingTriples.contains(triple) && !newTriples.contains(triple)) {
+        newMessages.add(msg);
+        newTriples.add(triple);
+      }
+    }
+
     if (newMessages.isNotEmpty) {
       _channelMessages[key]!.addAll(newMessages);
+      _channelMessages[key]!.sort((a, b) => a.time.compareTo(b.time)); // Ensure ordering
+
+      _channelTriples.putIfAbsent(key, () => <String>{});
+      _channelTriples[key]!.addAll(newTriples);
+
       notifyListeners();
       _persistMessages();
     }
@@ -287,9 +324,11 @@ class ChatState extends ChangeNotifier {
     await prefs.setString('cached_messages', json.encode(messagesToSave));
   }
 
+  // --- MODIFIED: Rebuild triples on load ---
   Future<void> loadPersistedMessages() async {
     final prefs = await SharedPreferences.getInstance();
     _channelMessages.clear();
+    _channelTriples.clear();
     final saved = prefs.getString('cached_messages');
     if (saved != null) {
       try {
@@ -298,6 +337,12 @@ class ChatState extends ChangeNotifier {
           final messageList =
               (messages as List).map((m) => Message.fromJson(m)).toList();
           _channelMessages[channel] = messageList;
+
+          final triples = <String>{};
+          for (var msg in messageList) {
+            triples.add(_getMessageTriple(msg));
+          }
+          _channelTriples[channel] = triples;
         });
         notifyListeners();
       } catch (e) {

@@ -46,8 +46,12 @@ class WebSocketService {
     });
   }
 
+  // PATCH: Reset connection state in connect
   void connect(String token) {
     if (_isDisposed) return;
+    // Reset connection state
+    _currentWsStatus = WebSocketStatus.disconnected;
+
     // Only connect if not already connected or connecting
     if (_ws != null && _currentWsStatus == WebSocketStatus.connected) {
       print("[WebSocketService] Already connected. Skipping new connection attempt.");
@@ -192,11 +196,18 @@ class WebSocketService {
     print("[WebSocketService] Sent message: $messageToSend");
   }
 
+  // PATCH: Improved disconnect logic (cancel timer, close ws, only update status if not disposed)
   void disconnect() {
     if (_isDisposed) return;
-    _ws?.sink.close();
+
     _reconnectTimer?.cancel();
-    if (!_isDisposed) _statusController.add(WebSocketStatus.disconnected);
+    _ws?.sink.close();
+
+    // Only update status if not disposed
+    if (!_isDisposed) {
+      _statusController.add(WebSocketStatus.disconnected);
+    }
+
     print("[WebSocketService] Disconnected.");
   }
 

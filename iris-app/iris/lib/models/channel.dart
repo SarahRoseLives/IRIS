@@ -22,11 +22,20 @@ class Message {
     final String timeStr = json['time'] ?? '';
     final bool isHist = json['isHistorical'] ?? false;
     final String? id = json['id'];
+
+    // NEW: Generate consistent ID using channel + time (seconds) + sender
+    final channel = json['channel_name'] ?? '';
+    final time = DateTime.tryParse(timeStr)?.toLocal() ?? DateTime.now();
+    final seconds = time.millisecondsSinceEpoch ~/ 1000;
+
     return Message(
       from: from,
       content: json['content'] ?? '',
-      time: DateTime.tryParse(timeStr)?.toLocal() ?? DateTime.now(),
-      id: id ?? (isHist ? 'hist-$timeStr-$from' : DateTime.now().millisecondsSinceEpoch.toString()),
+      time: time,
+      id: id ??
+          (isHist
+              ? 'hist-$channel-$seconds-$from'
+              : 'real-$channel-$seconds-$from'),
       isHistorical: isHist,
     );
   }

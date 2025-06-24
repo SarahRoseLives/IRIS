@@ -28,8 +28,23 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription? _wsStatusSub;
   StreamSubscription? _errorSub;
 
-  // Added: Track last message time before app sleep
-  DateTime? _lastMessageTimeBeforeSleep;
+  MainLayoutViewModel({required this.username, this.token}) {
+    if (token == null) {
+      print("[ViewModel] Error: Token is null. Cannot initialize.");
+      _loadingChannels = false;
+      _channelError = "Authentication token not found.";
+      return;
+    }
+
+    chatState = ChatState();
+    _chatController = ChatController(
+      username: username,
+      token: token!,
+      chatState: chatState,
+    );
+
+    _initialize();
+  }
 
   // --- GETTERS ---
 
@@ -50,24 +65,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   List<String> get unjoinedPublicChannelNames => chatState.unjoinedPublicChannelNames;
   List<String> get dmChannelNames => chatState.dmChannelNames;
 
-  MainLayoutViewModel({required this.username, this.token}) {
-    if (token == null) {
-      print("[ViewModel] Error: Token is null. Cannot initialize.");
-      _loadingChannels = false;
-      _channelError = "Authentication token not found.";
-      return;
-    }
-
-    chatState = ChatState();
-    _chatController = ChatController(
-      username: username,
-      token: token!,
-      chatState: chatState,
-    );
-
-    _initialize();
-  }
-
   void _initialize() async {
     WidgetsBinding.instance.addObserver(this);
 
@@ -78,10 +75,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
     await _chatController.initialize();
 
-    // Load history for the initially selected channel
-    if (selectedConversationTarget.startsWith('#')) {
-      await _chatController.loadChannelHistory(selectedConversationTarget, limit: 100);
-    }
+    // After persisted messages are loaded, fetch the latest for all channels
+    await _fetchLatestHistoryForAllChannels();
   }
 
   void _onChatStateChanged() {
@@ -106,43 +101,52 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  // --- App Lifecycle Handling for Missed Messages ---
+  // --- Always fetch latest history for all channels, deduplicated, on start/resume ---
+
+  Future<void> _fetchLatestHistoryForAllChannels() async {
+    for (final channel in chatState.channels) {
+      if (!channel.name.startsWith('#')) continue;
+      final messages = chatState.getMessagesForChannel(channel.name);
+      if (messages.isEmpty) {
+        // No local messages, fetch recent history
+        try {
+          final response = await _chatController.apiService.fetchChannelMessages(channel.name, limit: 100);
+          final newMessages = response.map((item) => Message.fromJson({
+            ...item,
+            'isHistorical': true,
+            'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
+          })).toList();
+          chatState.addMessageBatch(channel.name, newMessages);
+        } catch (e) {
+          print('Error fetching history for $channel: $e');
+        }
+      } else {
+        // Fetch only missed messages
+        final lastTime = messages.last.time;
+        try {
+          final newMessages = await _chatController.apiService.fetchMessagesSince(
+            channel.name,
+            lastTime,
+          );
+          chatState.addMessageBatch(channel.name, newMessages);
+        } catch (e) {
+          print('Error fetching missed messages for $channel: $e');
+        }
+      }
+    }
+  }
+
+  // --- App Lifecycle Handling ---
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      // When app goes to background, save last message time and disconnect WebSocket
-      _lastMessageTimeBeforeSleep = _getLastMessageTime();
       _chatController.disconnectWebSocket();
     } else if (state == AppLifecycleState.resumed) {
-      // When app comes back to foreground, reconnect WebSocket and fetch missed messages
       _chatController.connectWebSocket();
-      _fetchMissedMessages();
-    }
-  }
-
-  DateTime? _getLastMessageTime() {
-    final messages = currentChannelMessages;
-    return messages.isNotEmpty ? messages.last.time : null;
-  }
-
-  Future<void> _fetchMissedMessages() async {
-    if (_lastMessageTimeBeforeSleep == null) return;
-
-    final currentTarget = selectedConversationTarget;
-    if (!currentTarget.startsWith('#')) return; // Only fetch for channels
-
-    try {
-      // Fetch messages since we were last active (API returns List<Message>)
-      final newMessages = await _chatController.apiService.fetchMessagesSince(
-        currentTarget,
-        _lastMessageTimeBeforeSleep!
-      );
-
-      // Add new messages to chat state (merge)
-      chatState.addMessageBatch(currentTarget, newMessages);
-    } catch (e) {
-      print('Error fetching missed messages: $e');
+      _fetchLatestHistoryForAllChannels();
+    } else if (state == AppLifecycleState.inactive) {
+      _chatController.disconnectWebSocket();
     }
   }
 
@@ -195,9 +199,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   void onChannelSelected(String channelName) {
     chatState.selectConversation(channelName);
     _scrollToBottom();
-    if (channelName.startsWith('#')) {
-      _chatController.loadChannelHistory(channelName, limit: 100); // Updated to 100
-    }
+    // No need to fetch history here; handled globally on resume/init.
   }
 
   void onUnjoinedChannelTap(String channelName) => _chatController.joinChannel(channelName);
