@@ -87,21 +87,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       // MERGE server list into cached list so cached DMs are not lost!
       chatState.mergeChannels(serverChannels);
 
-      // Pre-load avatars for all users found in the channels
-      final allNicks = <String>{};
-      for (final channel in chatState.channels) {
-        if (channel.name.startsWith('@')) {
-          allNicks.add(channel.name.substring(1));
-        }
-        for (final member in channel.members) {
-          allNicks.add(member.nick);
-        }
-      }
-      for (final nick in allNicks) {
-        // Run in the background without awaiting all
-        _chatController.loadAvatarForUser(nick);
-      }
-
       // *** FIX: Ensure websocket connects on initial load! ***
       _chatController.connectWebSocket();
 
@@ -111,6 +96,27 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _loadingChannels = false;
       // --- Phase 3: Fetch latest history for all known channels ---
       await _fetchLatestHistoryForAllChannels();
+
+      // --- PATCH: Load avatars for all users seen in members OR message history ---
+      final allNicks = <String>{};
+      for (final channel in chatState.channels) {
+        // Add all channel members
+        for (final member in channel.members) {
+          allNicks.add(member.nick);
+        }
+        // Add DM usernames
+        if (channel.name.startsWith('@')) {
+          allNicks.add(channel.name.substring(1));
+        }
+        // Add all senders from message history (including offline users)
+        for (final msg in chatState.getMessagesForChannel(channel.name)) {
+          allNicks.add(msg.from);
+        }
+      }
+      for (final nick in allNicks) {
+        _chatController.loadAvatarForUser(nick);
+      }
+
       notifyListeners();
     }
   }

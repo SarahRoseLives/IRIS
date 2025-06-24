@@ -51,15 +51,18 @@ class RightDrawer extends StatelessWidget {
     final onlineGroups = _groupByRole(onlineMembers);
     final awayGroups = _groupByRole(awayMembers);
 
-    List<Widget> buildSection(Map<String, List<ChannelMember>> groups, String sectionLabel) {
+    List<Widget> buildSection(Map<String, List<ChannelMember>> groups, {String? sectionLabel}) {
       final widgets = <Widget>[];
       for (final prefix in _roleOrder) {
         final group = groups[prefix];
         if (group != null && group.isNotEmpty) {
+          // For "Online" section, don't show the "Online: " prefix, i.e. only show the role label.
           widgets.add(Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 0, 4),
             child: Text(
-              "$sectionLabel: ${_roleLabels[prefix]}",
+              sectionLabel == null
+                  ? _roleLabels[prefix]!
+                  : "$sectionLabel: ${_roleLabels[prefix]}",
               style: const TextStyle(
                   color: Colors.white70,
                   fontWeight: FontWeight.bold,
@@ -137,7 +140,8 @@ class RightDrawer extends StatelessWidget {
                       )
                     : ListView(
                         children: [
-                          ...buildSection(onlineGroups, "Online"),
+                          // For online users, don't show "Online: ..." (omit sectionLabel)
+                          ...buildSection(onlineGroups),
                           if (awayMembers.isNotEmpty) ...[
                             const Padding(
                               padding: EdgeInsets.fromLTRB(16, 20, 0, 4),
@@ -149,7 +153,8 @@ class RightDrawer extends StatelessWidget {
                                     fontSize: 14),
                               ),
                             ),
-                            ...buildSection(awayGroups, "Away"),
+                            // For away users, still prefix with "Away: "
+                            ...buildSection(awayGroups, sectionLabel: "Away"),
                           ]
                         ],
                       ),
