@@ -65,6 +65,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   List<String> get unjoinedPublicChannelNames => chatState.unjoinedPublicChannelNames;
   List<String> get dmChannelNames => chatState.dmChannelNames;
 
+  // REPLACED: _initialize now orchestrates full loading/merging sequence and uses mergeChannels
   void _initialize() async {
     WidgetsBinding.instance.addObserver(this);
 
@@ -73,10 +74,45 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _wsStatusSub = _chatController.wsStatusStream.listen(_onWsStatusChanged);
     _errorSub = _chatController.errorStream.listen(_onErrorChanged);
 
+    // --- Phase 1: Load local data from cache ---
     await _chatController.initialize();
 
-    // After persisted messages are loaded, fetch the latest for all channels
-    await _fetchLatestHistoryForAllChannels();
+    // --- Phase 2: Fetch and merge server data ---
+    _loadingChannels = true;
+    notifyListeners();
+    try {
+      // Fetch the channel list from the API (public channels)
+      final serverChannels = await _chatController.apiService.fetchChannels();
+
+      // MERGE server list into cached list so cached DMs are not lost!
+      chatState.mergeChannels(serverChannels);
+
+      // Pre-load avatars for all users found in the channels
+      final allNicks = <String>{};
+      for (final channel in chatState.channels) {
+        if (channel.name.startsWith('@')) {
+          allNicks.add(channel.name.substring(1));
+        }
+        for (final member in channel.members) {
+          allNicks.add(member.nick);
+        }
+      }
+      for (final nick in allNicks) {
+        // Run in the background without awaiting all
+        _chatController.loadAvatarForUser(nick);
+      }
+
+      // *** FIX: Ensure websocket connects on initial load! ***
+      _chatController.connectWebSocket();
+
+    } catch (e) {
+      _channelError = "Failed to load conversations: $e";
+    } finally {
+      _loadingChannels = false;
+      // --- Phase 3: Fetch latest history for all known channels ---
+      await _fetchLatestHistoryForAllChannels();
+      notifyListeners();
+    }
   }
 
   void _onChatStateChanged() {
@@ -88,11 +124,20 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     if (status == WebSocketStatus.connected) {
       _loadingChannels = false;
       _channelError = null;
+
+      // Fetch all channel & DM history and check notifications on connect/reconnect
+      _fetchLatestHistoryForAllChannels();
+      _checkForPendingNotifications();
     } else {
       _loadingChannels = status == WebSocketStatus.connecting;
     }
     _wsStatus = status;
     notifyListeners();
+  }
+
+  void _checkForPendingNotifications() {
+    // TODO: Implement notification handling if needed.
+    // This is a placeholder for logic to open DM on notification tap and force refresh.
   }
 
   void _onErrorChanged(String? error) {
@@ -102,8 +147,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   // --- Always fetch latest history for all channels, deduplicated, on start/resume ---
-
   Future<void> _fetchLatestHistoryForAllChannels() async {
+    // First handle public channels
     for (final channel in chatState.channels) {
       if (!channel.name.startsWith('#')) continue;
       final messages = chatState.getMessagesForChannel(channel.name);
@@ -131,6 +176,45 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           chatState.addMessageBatch(channel.name, newMessages);
         } catch (e) {
           print('Error fetching missed messages for $channel: $e');
+        }
+      }
+    }
+
+    // Then handle DM channels
+    for (final dm in chatState.dmChannelNames) {
+      final messages = chatState.getMessagesForChannel(dm);
+      if (messages.isEmpty) {
+        try {
+          final response = await _chatController.apiService.fetchChannelMessages(dm, limit: 100);
+          if (response.isNotEmpty) {
+            // PATCH: Ensure the DM channel exists in chatState
+            if (!chatState.channels.any((c) => c.name == dm)) {
+              chatState.addOrUpdateChannel(Channel(
+                name: dm,
+                members: [],
+              ));
+            }
+          }
+          final newMessages = response.map((item) => Message.fromJson({
+            ...item,
+            'isHistorical': true,
+            'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
+            'channel_name': dm, // Ensure DM channel name is preserved
+          })).toList();
+          chatState.addMessageBatch(dm, newMessages);
+        } catch (e) {
+          print('Error fetching history for DM $dm: $e');
+        }
+      } else {
+        final lastTime = messages.last.time;
+        try {
+          final newMessages = await _chatController.apiService.fetchMessagesSince(
+            dm,
+            lastTime,
+          );
+          chatState.addMessageBatch(dm, newMessages);
+        } catch (e) {
+          print('Error fetching missed messages for DM $dm: $e');
         }
       }
     }
@@ -218,6 +302,23 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> uploadAttachment(String filePath) async {
     await _chatController.uploadAttachment(filePath);
     _scrollToBottom();
+  }
+
+  // ADD THIS METHOD TO ENABLE STARTING NEW DMs WITH OFFLINE USERS
+  void startNewDM(String username) {
+    String channelName = '@${username.trim()}';
+
+    // Create channel if not exists
+    if (!chatState.channels.any((c) => c.name == channelName)) {
+      chatState.addOrUpdateChannel(Channel(
+        name: channelName,
+        members: [],
+      ));
+    }
+
+    // Select the new DM channel
+    chatState.selectConversation(channelName);
+    notifyListeners();
   }
 
   @override

@@ -1,14 +1,14 @@
 import 'package:flutter/material.dart';
 import '../services/websocket_service.dart';
-
-// ADDED IMPORTS
 import '../models/user_status.dart';
 import '../widgets/user_avatar.dart';
+import 'package:provider/provider.dart';
+import '../viewmodels/main_layout_viewmodel.dart';
 
 class LeftDrawer extends StatelessWidget {
   final List<String> dms;
   final Map<String, String> userAvatars;
-  final Map<String, UserStatus> userStatuses; // ADDED
+  final Map<String, UserStatus> userStatuses;
   final List<String> joinedChannels;
   final List<String> unjoinedChannels;
   final String selectedConversationTarget;
@@ -23,18 +23,18 @@ class LeftDrawer extends StatelessWidget {
   final VoidCallback onCloseDrawer;
   final bool unjoinedExpanded;
   final VoidCallback onToggleUnjoined;
-  final ValueChanged<String> onChannelPart; // <-- ALREADY ADDED
+  final ValueChanged<String> onChannelPart;
 
   const LeftDrawer({
     super.key,
     required this.dms,
     required this.userAvatars,
-    required this.userStatuses, // ADDED
+    required this.userStatuses,
     required this.joinedChannels,
     required this.unjoinedChannels,
     required this.selectedConversationTarget,
     required this.onChannelSelected,
-    required this.onChannelPart, // <-- ALREADY ADDED
+    required this.onChannelPart,
     required this.onUnjoinedChannelTap,
     required this.onDmSelected,
     required this.onIrisTap,
@@ -46,6 +46,38 @@ class LeftDrawer extends StatelessWidget {
     required this.unjoinedExpanded,
     required this.onToggleUnjoined,
   });
+
+  void _showNewDMDialog(BuildContext context) {
+    TextEditingController controller = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: Text('New Direct Message'),
+          content: TextField(
+            controller: controller,
+            decoration: InputDecoration(hintText: 'Enter username'),
+          ),
+          actions: <Widget>[
+            TextButton(
+              child: Text('Cancel'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            TextButton(
+              child: Text('Start'),
+              onPressed: () {
+                if (controller.text.isNotEmpty) {
+                  final viewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
+                  viewModel.startNewDM(controller.text);
+                  Navigator.of(context).pop();
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -91,6 +123,29 @@ class LeftDrawer extends StatelessWidget {
                         ),
                         const SizedBox(height: 10),
                         const Divider(color: Colors.white24, indent: 20, endIndent: 20),
+                        // "ADD DM" BUTTON
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 8.0),
+                          child: Tooltip(
+                            message: "New Direct Message",
+                            child: GestureDetector(
+                              onTap: () {
+                                onCloseDrawer();
+                                _showNewDMDialog(context);
+                              },
+                              child: CircleAvatar(
+                                radius: 28,
+                                backgroundColor: const Color(0xFF2B2D31),
+                                child: Icon(
+                                  Icons.add,
+                                  color: Colors.greenAccent[400],
+                                  size: 32,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        const Divider(color: Colors.white24, indent: 20, endIndent: 20),
                         // DM list
                         Expanded(
                           child: ListView.builder(
@@ -100,7 +155,7 @@ class LeftDrawer extends StatelessWidget {
                               final username = dmChannelName.substring(1);
                               final avatarUrl = userAvatars[username];
                               final isSelected = selectedConversationTarget.toLowerCase() == dmChannelName.toLowerCase();
-                              final status = userStatuses[username] ?? UserStatus.offline; // ADDED
+                              final status = userStatuses[username] ?? UserStatus.offline;
 
                               return Padding(
                                 padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -111,12 +166,13 @@ class LeftDrawer extends StatelessWidget {
                                       onDmSelected(dmChannelName);
                                       onCloseDrawer();
                                     },
-                                    // REPLACED CircleAvatar with UserAvatar
+                                    // Hide status dot for DMs in the drawer
                                     child: UserAvatar(
                                       radius: 28,
                                       username: username,
                                       avatarUrl: avatarUrl,
                                       status: status,
+                                      showStatusDot: false, // <-- Hide dot
                                     ),
                                   ),
                                 ),
@@ -204,7 +260,7 @@ class LeftDrawer extends StatelessWidget {
                                     ),
                                     overflow: TextOverflow.ellipsis,
                                   ),
-                                  trailing: null, // Use default arrow, no double arrow
+                                  trailing: null,
                                   children: unjoinedChannels.map((channel) {
                                     return ListTile(
                                       title: Text(

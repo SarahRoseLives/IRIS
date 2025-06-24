@@ -1,5 +1,3 @@
-// services/websocket_service.dart
-
 import 'dart:async';
 import 'dart:convert';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -46,15 +44,16 @@ class WebSocketService {
     });
   }
 
-  // PATCH: Reset connection state in connect
+  // FIX: Remove incorrect line and add robust guard to prevent reconnecting
   void connect(String token) {
     if (_isDisposed) return;
-    // Reset connection state
-    _currentWsStatus = WebSocketStatus.disconnected;
 
-    // Only connect if not already connected or connecting
-    if (_ws != null && _currentWsStatus == WebSocketStatus.connected) {
-      print("[WebSocketService] Already connected. Skipping new connection attempt.");
+    // --- FIX: Remove this incorrect line ---
+    // _currentWsStatus = WebSocketStatus.disconnected;
+
+    // --- FIX: Prevent reconnecting if already connecting or connected ---
+    if (_currentWsStatus == WebSocketStatus.connected || _currentWsStatus == WebSocketStatus.connecting) {
+      print("[WebSocketService] Already connected or connecting. Skipping new connection attempt.");
       return;
     }
 

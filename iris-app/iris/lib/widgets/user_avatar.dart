@@ -6,6 +6,7 @@ class UserAvatar extends StatelessWidget {
   final String? avatarUrl;
   final UserStatus status;
   final double radius;
+  final bool showStatusDot; // control showing the status dot
 
   const UserAvatar({
     super.key,
@@ -13,6 +14,7 @@ class UserAvatar extends StatelessWidget {
     this.avatarUrl,
     required this.status,
     this.radius = 18.0,
+    this.showStatusDot = true, // Default: show dot unless disabled
   });
 
   Color _getStatusColor() {
@@ -33,42 +35,52 @@ class UserAvatar extends StatelessWidget {
     // match for the main chat area background as well.
     const statusBorderColor = Color(0xFF2B2D31);
 
-    return Stack(
-      children: [
-        CircleAvatar(
-          radius: radius,
-          backgroundColor: const Color(0xFF5865F2),
-          backgroundImage: (avatarUrl != null && avatarUrl!.isNotEmpty)
-              ? NetworkImage(avatarUrl!)
-              : null,
-          child: (avatarUrl == null || avatarUrl!.isEmpty)
-              ? Text(
-                  username.isNotEmpty ? username[0].toUpperCase() : '?',
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: radius * 0.85,
-                    fontWeight: FontWeight.bold,
+    final double dotDiameter = radius * 0.7;
+    final double dotBorder = 2.0;
+    final double overlap = dotDiameter * 0.25;
+
+    return SizedBox(
+      width: radius * 2,
+      height: radius * 2,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          CircleAvatar(
+            radius: radius,
+            backgroundColor: const Color(0xFF5865F2),
+            backgroundImage: (avatarUrl != null && avatarUrl!.isNotEmpty)
+                ? NetworkImage(avatarUrl!)
+                : null,
+            child: (avatarUrl == null || avatarUrl!.isEmpty)
+                ? Text(
+                    username.isNotEmpty ? username[0].toUpperCase() : '?',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: radius * 0.85,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  )
+                : null,
+          ),
+          if (showStatusDot)
+            Positioned(
+              right: -(overlap),
+              bottom: -(overlap),
+              child: Container(
+                width: dotDiameter,
+                height: dotDiameter,
+                decoration: BoxDecoration(
+                  color: _getStatusColor(),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: statusBorderColor,
+                    width: dotBorder,
                   ),
-                )
-              : null,
-        ),
-        Positioned(
-          right: 0,
-          bottom: 0,
-          child: Container(
-            width: radius * 0.7,
-            height: radius * 0.7,
-            decoration: BoxDecoration(
-              color: _getStatusColor(),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: statusBorderColor,
-                width: 2.0,
+                ),
               ),
             ),
-          ),
-        ),
-      ],
+        ],
+      ),
     );
   }
 }

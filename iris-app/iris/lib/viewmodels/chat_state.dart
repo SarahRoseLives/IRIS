@@ -100,6 +100,28 @@ class ChatState extends ChangeNotifier {
     }
   }
 
+  // --- NEW: Merge channels intelligently (cache/server/websocket)
+  void mergeChannels(List<Channel> channelsToMerge) {
+    // Use a map for efficient lookup and to handle duplicates
+    final Map<String, Channel> channelMap = {
+      for (var c in _channels) c.name.toLowerCase(): c
+    };
+
+    // Add or update channels from the incoming list.
+    // If a channel is in both lists, the incoming one (from the server/websocket) wins,
+    // as it's considered more up-to-date.
+    for (final incomingChannel in channelsToMerge) {
+      channelMap[incomingChannel.name.toLowerCase()] = incomingChannel;
+    }
+
+    // Convert the merged map back to a list and sort it
+    _channels = channelMap.values.toList();
+    _channels.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+    _rebuildUserStatuses();
+    notifyListeners();
+  }
+
   /// MODIFIED: This method now contains the complete logic for setting the initial channel.
   Future<void> setChannels(List<Channel> newChannels) async {
     _channels = newChannels;
@@ -237,7 +259,7 @@ class ChatState extends ChangeNotifier {
     return '${msg.from}|${msg.content}|$seconds';
   }
 
-  // --- MODIFIED: Add message with triple check
+  // --- MODIFIED: Add message with triple check + DM channel auto-creation
   void addMessage(String channelName, Message message, {bool toEnd = true}) {
     final key = channelName.toLowerCase();
     _channelMessages.putIfAbsent(key, () => []);
@@ -257,11 +279,18 @@ class ChatState extends ChangeNotifier {
     _channelTriples.putIfAbsent(key, () => <String>{});
     _channelTriples[key]!.add(triple);
 
+    // --- PATCH: If a DM message arrives for a channel not in the channel list, create the DM channel.
+    if (channelName.startsWith('@') &&
+        !_channels.any((c) => c.name.toLowerCase() == key)) {
+      _channels.add(Channel(name: channelName, members: []));
+      _channels.sort((a, b) => a.name.compareTo(b.name));
+    }
+
     notifyListeners();
     _persistMessages();
   }
 
-  // --- MODIFIED: Batch add with triple deduplication
+  // --- MODIFIED: Batch add with triple deduplication + DM channel auto-creation
   void addMessageBatch(String channelName, List<Message> messages) {
     final key = channelName.toLowerCase();
     _channelMessages.putIfAbsent(key, () => []);
@@ -284,6 +313,13 @@ class ChatState extends ChangeNotifier {
 
       _channelTriples.putIfAbsent(key, () => <String>{});
       _channelTriples[key]!.addAll(newTriples);
+
+      // --- PATCH: If a DM message arrives for a channel not in the channel list, create the DM channel.
+      if (channelName.startsWith('@') &&
+          !_channels.any((c) => c.name.toLowerCase() == key)) {
+        _channels.add(Channel(name: channelName, members: []));
+        _channels.sort((a, b) => a.name.compareTo(b.name));
+      }
 
       notifyListeners();
       _persistMessages();
@@ -343,6 +379,13 @@ class ChatState extends ChangeNotifier {
             triples.add(_getMessageTriple(msg));
           }
           _channelTriples[channel] = triples;
+
+          // --- PATCH: Ensure DM channels exist in _channels if there are messages for them
+          if (channel.startsWith('@') &&
+              !_channels.any((c) => c.name.toLowerCase() == channel.toLowerCase())) {
+            _channels.add(Channel(name: channel, members: []));
+            _channels.sort((a, b) => a.name.compareTo(b.name));
+          }
         });
         notifyListeners();
       } catch (e) {

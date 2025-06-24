@@ -6,6 +6,7 @@ import (
 	"log"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	ircevent "github.com/thoj/go-ircevent"
@@ -13,6 +14,14 @@ import (
 	"iris-gateway/push"
 	"iris-gateway/session"
 )
+
+// REMOVE duplicate Message struct! Use the one in gateway.go
+
+// Offline message storage for DMs
+var offlineMessages = struct {
+	sync.RWMutex
+	m map[string][]Message // Key: username, Value: messages
+}{m: make(map[string][]Message)}
 
 type IRCClient = ircevent.Connection
 
@@ -209,6 +218,33 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 				conversationTarget = strings.ToLower(target)
 			}
 
+			// OFFLINE DM: Check if DM and if recipient is offline, store message instead of sending immediately
+			if isPrivateMessage {
+				targetUser := strings.ToLower(target)
+
+				// Check if user is online
+				isOnline := false
+				session.ForEachSession(func(s *session.UserSession) {
+					if strings.EqualFold(s.Username, targetUser) {
+						isOnline = true
+					}
+				})
+
+				if !isOnline {
+					// Store message for later delivery
+					offlineMessages.Lock()
+					offlineMessages.m[targetUser] = append(offlineMessages.m[targetUser], Message{
+						Channel:   targetUser,
+						Sender:    sender,
+						Text:      messageContent,
+						Timestamp: time.Now(),
+					})
+					offlineMessages.Unlock()
+					return
+				}
+				// Else, proceed to normal logic
+			}
+
 			userSession.Broadcast("message", map[string]interface{}{
 				"channel_name": conversationTarget,
 				"sender":       sender,
@@ -315,4 +351,16 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		conn.Close()
 		return nil, fmt.Errorf("SASL authentication timed out")
 	}
+}
+
+// -- Exported helper for offline DM delivery --
+func GetAndClearOfflineMessages(username string) []Message {
+	user := strings.ToLower(username)
+	offlineMessages.Lock()
+	msgs := offlineMessages.m[user]
+	if len(msgs) > 0 {
+		delete(offlineMessages.m, user)
+	}
+	offlineMessages.Unlock()
+	return msgs
 }

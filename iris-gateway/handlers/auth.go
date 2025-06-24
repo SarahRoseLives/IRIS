@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -121,6 +122,22 @@ func LoginHandler(c *gin.Context) {
 	session.AddSession(token, userSession)
 
 	log.Printf("[SESSION] Created for %s with token %s", req.Username, token)
+
+	// --- OFFLINE DM DELIVERY ---
+	// After successful login, deliver any queued messages for this user.
+	go func(username string, userSession *session.UserSession) {
+		time.Sleep(2 * time.Second)
+		messages := irc.GetAndClearOfflineMessages(username)
+		for _, msg := range messages {
+			userSession.Broadcast("message", map[string]interface{}{
+				"channel_name": "@" + msg.Sender,
+				"sender":       msg.Sender,
+				"text":         msg.Text,
+				"time":         msg.Timestamp.Format(time.RFC3339),
+			})
+		}
+	}(req.Username, userSession)
+	// --- END OFFLINE DM DELIVERY ---
 
 	c.JSON(http.StatusOK, LoginResponse{
 		Success: true,

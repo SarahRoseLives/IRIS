@@ -39,6 +39,7 @@ class ChatController {
         _webSocketService = GetIt.instance<WebSocketService>(),
         _notificationService = GetIt.instance<NotificationService>();
 
+  // UPDATED: No longer auto-connects websocket here
   Future<void> initialize() async {
     await chatState.loadPersistedMessages();
     chatState.setAvatarPlaceholder(username);
@@ -50,7 +51,8 @@ class ChatController {
     _listenToMembersUpdate();
     _listenToWebSocketErrors();
 
-    connectWebSocket();
+    // REMOVED: connectWebSocket();  // The ViewModel will now control this
+
     _initNotifications();
     _handlePendingNotification();
   }
@@ -83,44 +85,28 @@ class ChatController {
     });
   }
 
+  // UPDATED: Use mergeChannels instead of setChannels to avoid overwriting
   void _listenToInitialState() {
     _webSocketService.initialStateStream.listen((payload) async {
       final channelsPayload = payload['channels'] as Map<String, dynamic>?;
-      final List<Channel> newChannels = [];
+      final List<Channel> websocketChannels = [];
 
       if (channelsPayload != null) {
         channelsPayload.forEach((channelName, channelData) {
           final channel = Channel.fromJson(channelData as Map<String, dynamic>);
-          newChannels.add(channel);
+          websocketChannels.add(channel);
           for (var member in channel.members) {
             loadAvatarForUser(member.nick);
           }
         });
       }
-      await chatState.setChannels(newChannels);
+      // Use mergeChannels to avoid clobbering cached DMs
+      chatState.mergeChannels(websocketChannels);
+
       _errorController.add(null);
 
-      // --- PATCH: Fetch channel history for all joined channels after initial state ---
-      for (final channel in chatState.channels) {
-        if (channel.name.startsWith('#')) {
-          // Only fetch if we have no messages cached (cold start), otherwise fetch missed messages
-          final messages = chatState.getMessagesForChannel(channel.name);
-          if (messages.isEmpty) {
-            print('[ChatController] Fetching full history for ${channel.name}');
-            await loadChannelHistory(channel.name, limit: 100);
-          } else {
-            // Fetch missed messages since the last one
-            final lastTime = messages.last.time;
-            print('[ChatController] Fetching missed messages for ${channel.name} since $lastTime');
-            try {
-              final newMessages = await apiService.fetchMessagesSince(channel.name, lastTime);
-              chatState.addMessageBatch(channel.name, newMessages);
-            } catch (e) {
-              print('Error fetching missed messages for ${channel.name}: $e');
-            }
-          }
-        }
-      }
+      // The ViewModel now handles fetching history after merging, so don't do it here.
+
     }).onError((e) {
       _errorController.add("Error receiving initial state: $e");
     });
@@ -351,6 +337,7 @@ class ChatController {
     await prefs.remove('username');
     AuthWrapper.forceLogout();
   }
+
 
   void dispose() {
     _wsStatusController.close();
