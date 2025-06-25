@@ -13,6 +13,10 @@ class MainChatScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Define drawer widths for animation positioning
+    const double leftDrawerWidth = 280;
+    const double rightDrawerWidth = 240;
+
     return Consumer<MainLayoutViewModel>(
       builder: (context, viewModel, child) {
         final Set<String> allUsernames = {
@@ -23,25 +27,35 @@ class MainChatScreen extends StatelessWidget {
         return Scaffold(
           backgroundColor: const Color(0xFF313338),
           body: GestureDetector(
+            // This detector handles swiping from the edges to OPEN drawers
+            // and swiping on the drawers themselves to CLOSE them.
             onHorizontalDragUpdate: (details) {
               final width = MediaQuery.of(context).size.width;
+              // Swipe right from left edge to open left drawer
               if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
                 if (!viewModel.showLeftDrawer && !viewModel.showRightDrawer) {
                   viewModel.toggleLeftDrawer();
                 }
-              } else if (details.delta.dx < -5 &&
+              }
+              // Swipe left from right edge to open right drawer
+              else if (details.delta.dx < -5 &&
                   details.globalPosition.dx > width - 50) {
                 if (!viewModel.showLeftDrawer && !viewModel.showRightDrawer) {
                   viewModel.toggleRightDrawer();
                 }
-              } else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
+              }
+              // Swipe left on an open left drawer to close it
+              else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
                 viewModel.toggleLeftDrawer();
-              } else if (viewModel.showRightDrawer && details.delta.dx > 5) {
+              }
+              // Swipe right on an open right drawer to close it
+              else if (viewModel.showRightDrawer && details.delta.dx > 5) {
                 viewModel.toggleRightDrawer();
               }
             },
             child: Stack(
               children: [
+                // --- Main Content Area ---
                 SafeArea(
                   child: Column(
                     children: [
@@ -72,17 +86,11 @@ class MainChatScreen extends StatelessWidget {
                         ),
                       ),
                       Expanded(
-                        child: GestureDetector(
-                          onTap: () {
-                            if (viewModel.showLeftDrawer) viewModel.toggleLeftDrawer();
-                            if (viewModel.showRightDrawer) viewModel.toggleRightDrawer();
-                          },
-                          child: MessageList(
-                            messages: viewModel.currentChannelMessages,
-                            scrollController: viewModel.scrollController,
-                            userAvatars: viewModel.userAvatars,
-                            currentUsername: viewModel.username,
-                          ),
+                        child: MessageList(
+                          messages: viewModel.currentChannelMessages,
+                          scrollController: viewModel.scrollController,
+                          userAvatars: viewModel.userAvatars,
+                          currentUsername: viewModel.username,
                         ),
                       ),
                       MessageInput(
@@ -119,52 +127,67 @@ class MainChatScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-                Positioned(
-                  left: 0,
-                  top: 0,
-                  bottom: 0,
-                  child: AnimatedOpacity(
-                    opacity: viewModel.showLeftDrawer ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: IgnorePointer(
-                      ignoring: !viewModel.showLeftDrawer,
-                      child: LeftDrawer(
-                        dms: viewModel.dmChannelNames,
-                        userAvatars: viewModel.userAvatars,
-                        userStatuses: viewModel.chatState.userStatuses,
-                        joinedChannels: viewModel.joinedPublicChannelNames,
-                        unjoinedChannels: viewModel.unjoinedPublicChannelNames,
-                        selectedConversationTarget: viewModel.selectedConversationTarget,
-                        onChannelSelected: viewModel.onChannelSelected,
-                        onChannelPart: viewModel.partChannel,
-                        onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
-                        onDmSelected: viewModel.onDmSelected,
-                        onIrisTap: viewModel.selectMainView,
-                        loadingChannels: viewModel.loadingChannels,
-                        error: viewModel.channelError,
-                        wsStatus: viewModel.wsStatus,
-                        showDrawer: viewModel.showLeftDrawer,
-                        onCloseDrawer: viewModel.toggleLeftDrawer,
-                        unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
-                        onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
+
+                // --- Scrim (Dark Overlay) ---
+                // This appears when a drawer is open to dim the main content
+                // and provides a large tappable area to close the drawer.
+                if (viewModel.showLeftDrawer || viewModel.showRightDrawer)
+                  AnimatedOpacity(
+                    opacity: 1.0,
+                    duration: const Duration(milliseconds: 300),
+                    child: GestureDetector(
+                      onTap: () {
+                        if (viewModel.showLeftDrawer) viewModel.toggleLeftDrawer();
+                        if (viewModel.showRightDrawer) viewModel.toggleRightDrawer();
+                      },
+                      child: Container(
+                        color: Colors.black.withOpacity(0.5),
                       ),
                     ),
                   ),
-                ),
-                Positioned(
-                  right: 0,
+
+                // --- Left Drawer (Animated) ---
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  left: viewModel.showLeftDrawer ? 0 : -leftDrawerWidth,
                   top: 0,
                   bottom: 0,
-                  child: AnimatedOpacity(
-                    opacity: viewModel.showRightDrawer ? 1.0 : 0.0,
-                    duration: const Duration(milliseconds: 200),
-                    child: IgnorePointer(
-                      ignoring: !viewModel.showRightDrawer,
-                      child: RightDrawer(
-                        members: viewModel.members,
-                        userAvatars: viewModel.userAvatars,
-                      ),
-                    ),
+                  width: leftDrawerWidth,
+                  child: LeftDrawer(
+                    dms: viewModel.dmChannelNames,
+                    userAvatars: viewModel.userAvatars,
+                    userStatuses: viewModel.chatState.userStatuses,
+                    joinedChannels: viewModel.joinedPublicChannelNames,
+                    unjoinedChannels: viewModel.unjoinedPublicChannelNames,
+                    selectedConversationTarget: viewModel.selectedConversationTarget,
+                    onChannelSelected: viewModel.onChannelSelected,
+                    onChannelPart: viewModel.partChannel,
+                    onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
+                    onDmSelected: viewModel.onDmSelected,
+                    onIrisTap: viewModel.selectMainView,
+                    loadingChannels: viewModel.loadingChannels,
+                    error: viewModel.channelError,
+                    wsStatus: viewModel.wsStatus,
+                    showDrawer: viewModel.showLeftDrawer,
+                    onCloseDrawer: viewModel.toggleLeftDrawer,
+                    unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
+                    onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
+                  ),
+                ),
+
+                // --- Right Drawer (Animated) ---
+                AnimatedPositioned(
+                  duration: const Duration(milliseconds: 300),
+                  curve: Curves.easeInOut,
+                  right: viewModel.showRightDrawer ? 0 : -rightDrawerWidth,
+                  top: 0,
+                  bottom: 0,
+                  width: rightDrawerWidth,
+                  child: RightDrawer(
+                    members: viewModel.members,
+                    userAvatars: viewModel.userAvatars,
+                    onCloseDrawer: viewModel.toggleRightDrawer,
                   ),
                 ),
               ],

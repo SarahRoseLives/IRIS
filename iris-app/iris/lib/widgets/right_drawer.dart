@@ -7,11 +7,13 @@ import '../utils/irc_helpers.dart';
 class RightDrawer extends StatelessWidget {
   final List<ChannelMember> members;
   final Map<String, String> userAvatars;
+  final VoidCallback onCloseDrawer;
 
   const RightDrawer({
     super.key,
     required this.members,
     required this.userAvatars,
+    required this.onCloseDrawer,
   });
 
   // Grouping logic for IRC roles
@@ -21,7 +23,7 @@ class RightDrawer extends StatelessWidget {
     '@', // Op
     '%', // Halfop
     '+', // Voice
-    '',  // Regular
+    '', // Regular
   ];
 
   static const _roleLabels = {
@@ -36,7 +38,7 @@ class RightDrawer extends StatelessWidget {
   Map<String, List<ChannelMember>> _groupByRole(List<ChannelMember> users) {
     final map = <String, List<ChannelMember>>{};
     for (final member in users) {
-      final prefix = member.prefix ?? '';
+      final prefix = member.prefix;
       map.putIfAbsent(prefix, () => []).add(member);
     }
     return map;
@@ -56,7 +58,6 @@ class RightDrawer extends StatelessWidget {
       for (final prefix in _roleOrder) {
         final group = groups[prefix];
         if (group != null && group.isNotEmpty) {
-          // For "Online" section, don't show the "Online: " prefix, i.e. only show the role label.
           widgets.add(Padding(
             padding: const EdgeInsets.fromLTRB(16, 16, 0, 4),
             child: Text(
@@ -112,56 +113,75 @@ class RightDrawer extends StatelessWidget {
 
     return Material(
       color: Colors.transparent,
-      child: Container(
-        width: 240,
-        color: const Color(0xFF2B2D31),
-        child: SafeArea(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Padding(
-                padding: EdgeInsets.all(16.0),
-                child: Text(
-                  "Members",
-                  style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 20),
+      child: Row(
+        children: [
+          // Handle on the left side of the right drawer
+          GestureDetector(
+            onTap: onCloseDrawer,
+            child: Container(
+              width: 20,
+              height: double.infinity,
+              color: const Color(0xFF232428),
+              child: const Center(
+                child: Icon(
+                  Icons.chevron_right,
+                  color: Colors.white54,
                 ),
               ),
-              const Divider(color: Colors.white24, height: 1),
-              Expanded(
-                child: members.isEmpty
-                    ? const Center(
-                        child: Text(
-                          "No members",
-                          style: TextStyle(color: Colors.white54),
-                        ),
-                      )
-                    : ListView(
-                        children: [
-                          // For online users, don't show "Online: ..." (omit sectionLabel)
-                          ...buildSection(onlineGroups),
-                          if (awayMembers.isNotEmpty) ...[
-                            const Padding(
-                              padding: EdgeInsets.fromLTRB(16, 20, 0, 4),
-                              child: Text(
-                                "Away",
-                                style: TextStyle(
-                                    color: Colors.white60,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14),
-                              ),
-                            ),
-                            // For away users, still prefix with "Away: "
-                            ...buildSection(awayGroups, sectionLabel: "Away"),
-                          ]
-                        ],
-                      ),
-              ),
-            ],
+            ),
           ),
-        ),
+          // Original Drawer Content
+          Expanded(
+            child: Container(
+              color: const Color(0xFF2B2D31),
+              child: SafeArea(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Padding(
+                      padding: EdgeInsets.all(16.0),
+                      child: Text(
+                        "Members",
+                        style: TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 20),
+                      ),
+                    ),
+                    const Divider(color: Colors.white24, height: 1),
+                    Expanded(
+                      child: members.isEmpty
+                          ? const Center(
+                              child: Text(
+                                "No members",
+                                style: TextStyle(color: Colors.white54),
+                              ),
+                            )
+                          : ListView(
+                              children: [
+                                ...buildSection(onlineGroups),
+                                if (awayMembers.isNotEmpty) ...[
+                                  const Padding(
+                                    padding: EdgeInsets.fromLTRB(16, 20, 0, 4),
+                                    child: Text(
+                                      "Away",
+                                      style: TextStyle(
+                                          color: Colors.white60,
+                                          fontWeight: FontWeight.bold,
+                                          fontSize: 14),
+                                    ),
+                                  ),
+                                  ...buildSection(awayGroups, sectionLabel: "Away"),
+                                ]
+                              ],
+                            ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
