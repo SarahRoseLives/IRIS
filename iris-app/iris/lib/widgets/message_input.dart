@@ -2,6 +2,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+// Import your emoji list from your custom file
+import '../utils/irc_safe_emojis.dart'; // Adjust path as needed
+
 class MessageInput extends StatefulWidget {
   final TextEditingController controller;
   final VoidCallback onSendMessage;
@@ -164,6 +167,62 @@ class _MessageInputState extends State<MessageInput> {
     FocusScope.of(context).requestFocus(_focusNode);
   }
 
+  void _insertEmoji(String emoji) {
+    final text = widget.controller.text;
+    final selection = widget.controller.selection;
+    final cursor = selection.baseOffset;
+
+    final newText = text.replaceRange(cursor, cursor, emoji);
+    final newCursor = cursor + emoji.length;
+
+    widget.controller.value = TextEditingValue(
+      text: newText,
+      selection: TextSelection.collapsed(offset: newCursor),
+    );
+
+    FocusScope.of(context).requestFocus(_focusNode);
+  }
+
+  void _showEmojiPicker() {
+    // Using a modal bottom sheet for emoji picker
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF232428),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(16)),
+      ),
+      builder: (context) {
+        return Container(
+          height: 250,
+          padding: const EdgeInsets.all(12),
+          child: GridView.builder(
+            itemCount: ircSafeEmojis.length,
+            gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+              crossAxisCount: 8,
+              crossAxisSpacing: 8,
+              mainAxisSpacing: 8,
+            ),
+            itemBuilder: (context, index) {
+              final emoji = ircSafeEmojis[index];
+              return GestureDetector(
+                onTap: () {
+                  Navigator.pop(context);
+                  _insertEmoji(emoji);
+                },
+                child: Center(
+                  child: Text(
+                    emoji,
+                    style: const TextStyle(fontSize: 24),
+                  ),
+                ),
+              );
+            },
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Container(
@@ -175,6 +234,12 @@ class _MessageInputState extends State<MessageInput> {
             icon: const Icon(Icons.person, color: Colors.white70),
             tooltip: "Profile",
             onPressed: widget.onProfilePressed,
+          ),
+          // NEW Emoji Picker Button added here
+          IconButton(
+            icon: const Icon(Icons.emoji_emotions_outlined, color: Colors.white70),
+            tooltip: "Emoji Picker",
+            onPressed: _showEmojiPicker,
           ),
           IconButton(
             icon: const Icon(Icons.attach_file, color: Colors.white70),
