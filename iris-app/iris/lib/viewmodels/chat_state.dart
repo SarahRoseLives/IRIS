@@ -15,8 +15,8 @@ class ChatState extends ChangeNotifier {
   final Map<String, String> _userAvatars = {};
   final Map<String, UserStatus> _userStatuses = {};
 
-  // --- NEW: Triple deduplication map ---
-  final Map<String, Set<String>> _channelTriples = {};
+  // --- UPDATE: Deduplication map: from+content only ---
+  final Map<String, Set<String>> _channelDedupKeys = {};
 
   // --- GETTERS ---
   List<Channel> get channels => _channels;
@@ -253,20 +253,19 @@ class ChatState extends ChangeNotifier {
     }
   }
 
-  // --- NEW: Helper for message triple ---
-  String _getMessageTriple(Message msg) {
-    int seconds = msg.time.millisecondsSinceEpoch ~/ 1000;
-    return '${msg.from}|${msg.content}|$seconds';
+  // --- NEW: Helper for message deduplication (from + content only) ---
+  String _getMessageDedupKey(Message msg) {
+    return '${msg.from}|${msg.content}';
   }
 
-  // --- MODIFIED: Add message with triple check + DM channel auto-creation
+  // --- MODIFIED: Add message with deduplication (from+content) + DM channel auto-creation
   void addMessage(String channelName, Message message, {bool toEnd = true}) {
     final key = channelName.toLowerCase();
     _channelMessages.putIfAbsent(key, () => []);
 
-    // Triple-based deduplication
-    final triple = _getMessageTriple(message);
-    if ((_channelTriples[key] ?? {}).contains(triple)) {
+    // Deduplication using username + content only
+    final dedupKey = _getMessageDedupKey(message);
+    if ((_channelDedupKeys[key] ?? {}).contains(dedupKey)) {
       return; // duplicate message
     }
 
@@ -276,8 +275,8 @@ class ChatState extends ChangeNotifier {
       _channelMessages[key]!.insert(0, message);
     }
 
-    _channelTriples.putIfAbsent(key, () => <String>{});
-    _channelTriples[key]!.add(triple);
+    _channelDedupKeys.putIfAbsent(key, () => <String>{});
+    _channelDedupKeys[key]!.add(dedupKey);
 
     // --- PATCH: If a DM message arrives for a channel not in the channel list, create the DM channel.
     if (channelName.startsWith('@') &&
@@ -290,20 +289,20 @@ class ChatState extends ChangeNotifier {
     _persistMessages();
   }
 
-  // --- MODIFIED: Batch add with triple deduplication + DM channel auto-creation
+  // --- MODIFIED: Batch add with deduplication (from+content) + DM channel auto-creation
   void addMessageBatch(String channelName, List<Message> messages) {
     final key = channelName.toLowerCase();
     _channelMessages.putIfAbsent(key, () => []);
 
-    final existingTriples = _channelTriples[key] ?? <String>{};
-    final newTriples = <String>{};
+    final existingDedupKeys = _channelDedupKeys[key] ?? <String>{};
+    final newDedupKeys = <String>{};
     final newMessages = <Message>[];
 
     for (var msg in messages) {
-      final triple = _getMessageTriple(msg);
-      if (!existingTriples.contains(triple) && !newTriples.contains(triple)) {
+      final dedupKey = _getMessageDedupKey(msg);
+      if (!existingDedupKeys.contains(dedupKey) && !newDedupKeys.contains(dedupKey)) {
         newMessages.add(msg);
-        newTriples.add(triple);
+        newDedupKeys.add(dedupKey);
       }
     }
 
@@ -311,8 +310,8 @@ class ChatState extends ChangeNotifier {
       _channelMessages[key]!.addAll(newMessages);
       _channelMessages[key]!.sort((a, b) => a.time.compareTo(b.time)); // Ensure ordering
 
-      _channelTriples.putIfAbsent(key, () => <String>{});
-      _channelTriples[key]!.addAll(newTriples);
+      _channelDedupKeys.putIfAbsent(key, () => <String>{});
+      _channelDedupKeys[key]!.addAll(newDedupKeys);
 
       // --- PATCH: If a DM message arrives for a channel not in the channel list, create the DM channel.
       if (channelName.startsWith('@') &&
@@ -360,11 +359,11 @@ class ChatState extends ChangeNotifier {
     await prefs.setString('cached_messages', json.encode(messagesToSave));
   }
 
-  // --- MODIFIED: Rebuild triples on load ---
+  // --- MODIFIED: Rebuild dedup keys on load ---
   Future<void> loadPersistedMessages() async {
     final prefs = await SharedPreferences.getInstance();
     _channelMessages.clear();
-    _channelTriples.clear();
+    _channelDedupKeys.clear();
     final saved = prefs.getString('cached_messages');
     if (saved != null) {
       try {
@@ -374,11 +373,11 @@ class ChatState extends ChangeNotifier {
               (messages as List).map((m) => Message.fromJson(m)).toList();
           _channelMessages[channel] = messageList;
 
-          final triples = <String>{};
+          final dedupKeys = <String>{};
           for (var msg in messageList) {
-            triples.add(_getMessageTriple(msg));
+            dedupKeys.add(_getMessageDedupKey(msg));
           }
-          _channelTriples[channel] = triples;
+          _channelDedupKeys[channel] = dedupKeys;
 
           // --- PATCH: Ensure DM channels exist in _channels if there are messages for them
           if (channel.startsWith('@') &&
