@@ -15,37 +15,33 @@ class MainChatScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Consumer<MainLayoutViewModel>(
       builder: (context, viewModel, child) {
+        final Set<String> allUsernames = {
+          ...viewModel.members.map((m) => m.nick),
+          ...viewModel.currentChannelMessages.map((m) => m.from),
+        };
+
         return Scaffold(
           backgroundColor: const Color(0xFF313338),
           body: GestureDetector(
-            // Top-level GestureDetector captures all horizontal swipes
             onHorizontalDragUpdate: (details) {
               final width = MediaQuery.of(context).size.width;
-              // Swipe from left edge to open left drawer
               if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
                 if (!viewModel.showLeftDrawer && !viewModel.showRightDrawer) {
                   viewModel.toggleLeftDrawer();
                 }
-              }
-              // Swipe from right edge to open right drawer
-              else if (details.delta.dx < -5 &&
-                      details.globalPosition.dx > width - 50) {
+              } else if (details.delta.dx < -5 &&
+                  details.globalPosition.dx > width - 50) {
                 if (!viewModel.showLeftDrawer && !viewModel.showRightDrawer) {
                   viewModel.toggleRightDrawer();
                 }
-              }
-              // Swipe left to close left drawer
-              else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
+              } else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
                 viewModel.toggleLeftDrawer();
-              }
-              // Swipe right to close right drawer
-              else if (viewModel.showRightDrawer && details.delta.dx > 5) {
+              } else if (viewModel.showRightDrawer && details.delta.dx > 5) {
                 viewModel.toggleRightDrawer();
               }
             },
             child: Stack(
               children: [
-                // Main content area
                 SafeArea(
                   child: Column(
                     children: [
@@ -85,6 +81,7 @@ class MainChatScreen extends StatelessWidget {
                             messages: viewModel.currentChannelMessages,
                             scrollController: viewModel.scrollController,
                             userAvatars: viewModel.userAvatars,
+                            currentUsername: viewModel.username,
                           ),
                         ),
                       ),
@@ -101,13 +98,27 @@ class MainChatScreen extends StatelessWidget {
                             );
                           }
                         },
-                        onAttachmentSelected: viewModel.uploadAttachment,
+                        allUsernames: allUsernames.toList(),
+                        onAttachmentSelected: (filePath) async {
+                          final url = await viewModel.uploadAttachmentAndGetUrl(filePath);
+                          if (url != null && url.isNotEmpty) {
+                            final controller = viewModel.msgController;
+                            final text = controller.text;
+                            final selection = controller.selection;
+                            final cursor = selection.baseOffset < 0 ? text.length : selection.baseOffset;
+                            final filename = url.split('/').last;
+                            final hyperlink = '[$filename]($url)';
+                            final newText = text.replaceRange(cursor, cursor, hyperlink + ' ');
+                            controller.value = controller.value.copyWith(
+                              text: newText,
+                              selection: TextSelection.collapsed(offset: cursor + hyperlink.length + 1),
+                            );
+                          }
+                        },
                       ),
                     ],
                   ),
                 ),
-
-                // Left Drawer
                 Positioned(
                   left: 0,
                   top: 0,
@@ -140,8 +151,6 @@ class MainChatScreen extends StatelessWidget {
                     ),
                   ),
                 ),
-
-                // Right Drawer
                 Positioned(
                   right: 0,
                   top: 0,

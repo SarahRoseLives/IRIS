@@ -305,9 +305,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<void> uploadAttachment(String filePath) async {
-    await _chatController.uploadAttachment(filePath);
-    _scrollToBottom();
+  /// Uploads an attachment and returns the uploaded URL to be inserted in the message input.
+  Future<String?> uploadAttachmentAndGetUrl(String filePath) async {
+    return await _chatController.uploadAttachmentAndGetUrl(filePath);
   }
 
   // ADD THIS METHOD TO ENABLE STARTING NEW DMs WITH OFFLINE USERS

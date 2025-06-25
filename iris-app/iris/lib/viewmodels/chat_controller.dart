@@ -238,7 +238,8 @@ class ChatController {
     }
   }
 
-  Future<void> uploadAttachment(String filePath) async {
+  /// Upload an attachment and return the uploaded URL as a String, or null on error.
+  Future<String?> uploadAttachmentAndGetUrl(String filePath) async {
     try {
       final file = File(filePath);
       final request = http.MultipartRequest(
@@ -255,12 +256,23 @@ class ChatController {
       if (response.statusCode == 200 && jsonResponse['success'] == true) {
         final fileUrl = jsonResponse['url'];
         final fullFileUrl = 'http://$apiHost:$apiPort$fileUrl';
-        handleSendMessage(fullFileUrl);
+        return fullFileUrl;
       } else {
         chatState.addInfoMessage('Failed to upload attachment: ${jsonResponse['message'] ?? 'Unknown error'}');
+        return null;
       }
     } catch (e) {
       chatState.addInfoMessage('Attachment upload failed: $e');
+      return null;
+    }
+  }
+
+  /// The old behavior: upload and immediately send the link as a message (deprecated).
+  @Deprecated('Use uploadAttachmentAndGetUrl and let the user send the message with the link.')
+  Future<void> uploadAttachment(String filePath) async {
+    final url = await uploadAttachmentAndGetUrl(filePath);
+    if (url != null) {
+      await handleSendMessage(url);
     }
   }
 
