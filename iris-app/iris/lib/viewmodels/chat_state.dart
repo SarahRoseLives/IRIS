@@ -9,10 +9,14 @@ import '../models/encryption_session.dart';
 
 class ChatState extends ChangeNotifier {
   static const String _lastChannelKey = 'last_channel';
+  // NEW: Key for persisting last seen message IDs
+  static const String _lastSeenKey = 'last_seen_message_ids';
 
   List<Channel> _channels = [];
   int _selectedChannelIndex = 0;
   final Map<String, List<Message>> _channelMessages = {};
+  // NEW: Map to store the ID of the last seen message per channel
+  final Map<String, String?> _lastSeenMessageIds = {};
   final Map<String, String> _userAvatars = {};
   final Map<String, UserStatus> _userStatuses = {};
   final Map<String, EncryptionStatus> _encryptionStatuses = {};
@@ -23,6 +27,28 @@ class ChatState extends ChangeNotifier {
   List<Channel> get channels => _channels;
   Map<String, String> get userAvatars => _userAvatars;
   Map<String, UserStatus> get userStatuses => _userStatuses;
+
+  // NEW: Getter for the last message in a channel
+  Message? getLastMessage(String channelName) {
+    final key = channelName.toLowerCase();
+    if (_channelMessages.containsKey(key) && _channelMessages[key]!.isNotEmpty) {
+      // Find the last message that is not system info
+      return _channelMessages[key]!.lastWhere((m) => !m.isSystemInfo, orElse: () => _channelMessages[key]!.last);
+    }
+    return null;
+  }
+
+  // NEW: Check if a channel has unread messages
+  bool hasUnreadMessages(String channelName) {
+    final key = channelName.toLowerCase();
+    final lastMessage = getLastMessage(key);
+    // No messages or only system messages means no "unread" state
+    if (lastMessage == null) return false;
+
+    final lastSeenId = _lastSeenMessageIds[key];
+    // If we have never seen a message in this channel, or the last message ID is different, it's unread.
+    return lastSeenId == null || lastSeenId != lastMessage.id;
+  }
 
   EncryptionStatus getEncryptionStatus(String channelName) {
     return _encryptionStatuses[channelName.toLowerCase()] ?? EncryptionStatus.none;
@@ -71,6 +97,20 @@ class ChatState extends ChangeNotifier {
       _userAvatars.containsKey(username) && _userAvatars[username]!.isNotEmpty;
 
   // --- MUTATORS ---
+
+  // NEW: Method to update the last seen message ID for a channel.
+  Future<void> updateLastSeenMessage(String channelName) async {
+    final key = channelName.toLowerCase();
+    final lastMessage = getLastMessage(key);
+
+    if (lastMessage != null) {
+      if (_lastSeenMessageIds[key] != lastMessage.id) {
+        _lastSeenMessageIds[key] = lastMessage.id;
+        await _persistLastSeenMessageIds();
+        notifyListeners(); // Notify listeners that the unread state might have changed
+      }
+    }
+  }
 
   void setEncryptionStatus(String channelName, EncryptionStatus status) {
       _encryptionStatuses[channelName.toLowerCase()] = status;
@@ -153,7 +193,6 @@ class ChatState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // FIX: This method was missing in your original file. It is now included.
   void updateChannelMembers(String channelName, List<ChannelMember> members) {
     final index = _channels
         .indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
@@ -204,6 +243,8 @@ class ChatState extends ChangeNotifier {
       _selectedChannelIndex = index;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_lastChannelKey, conversationName);
+      // NEW: When a channel is selected, update its last seen message ID.
+      await updateLastSeenMessage(conversationName);
       notifyListeners();
     }
   }
@@ -298,6 +339,12 @@ class ChatState extends ChangeNotifier {
     }
   }
 
+  // NEW: Method to save the last seen message IDs to SharedPreferences.
+  Future<void> _persistLastSeenMessageIds() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_lastSeenKey, json.encode(_lastSeenMessageIds));
+  }
+
   Future<void> _persistMessages() async {
     final prefs = await SharedPreferences.getInstance();
     final messagesToSave = <String, dynamic>{};
@@ -332,10 +379,25 @@ class ChatState extends ChangeNotifier {
             _channels.sort((a, b) => a.name.compareTo(b.name));
           }
         });
-        notifyListeners();
       } catch (e) {
         print('Error loading persisted messages: $e');
       }
     }
+
+    // NEW: Load last seen message IDs
+    _lastSeenMessageIds.clear();
+    final savedSeenIds = prefs.getString(_lastSeenKey);
+    if (savedSeenIds != null) {
+        try {
+            final seenIdsMap = json.decode(savedSeenIds) as Map<String, dynamic>;
+            seenIdsMap.forEach((key, value) {
+                _lastSeenMessageIds[key] = value as String?;
+            });
+        } catch (e) {
+            print('Error loading last seen message IDs: $e');
+        }
+    }
+
+    notifyListeners();
   }
 }

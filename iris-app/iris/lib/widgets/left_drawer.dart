@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../models/channel.dart'; // Import Message model
 import '../services/websocket_service.dart';
 import '../models/user_status.dart';
 import '../widgets/user_avatar.dart';
@@ -81,22 +82,22 @@ class LeftDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // We need to listen to the view model to get live updates on unread status
+    final viewModel = Provider.of<MainLayoutViewModel>(context);
+    final sortedDms = List<String>.from(dms)..sort((a,b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
     return Material(
       color: Colors.transparent,
       child: Row(
         children: [
-          // Drawer Content
           Expanded(
             child: Container(
               color: const Color(0xFF2B2D31),
               child: LayoutBuilder(
                 builder: (context, constraints) {
-                  if (constraints.maxWidth < 80) {
-                    return Container();
-                  }
+                  if (constraints.maxWidth < 80) return Container();
                   return Row(
                     children: [
-                      // DM Avatars Bar
                       Container(
                         width: 80,
                         color: const Color(0xFF232428),
@@ -125,36 +126,16 @@ class LeftDrawer extends StatelessWidget {
                               ),
                               const SizedBox(height: 10),
                               const Divider(color: Colors.white24, indent: 20, endIndent: 20),
-                              Padding(
-                                padding: const EdgeInsets.symmetric(vertical: 8.0),
-                                child: Tooltip(
-                                  message: "New Direct Message",
-                                  child: GestureDetector(
-                                    onTap: () {
-                                      onCloseDrawer();
-                                      _showNewDMDialog(context);
-                                    },
-                                    child: CircleAvatar(
-                                      radius: 28,
-                                      backgroundColor: const Color(0xFF2B2D31),
-                                      child: Icon(
-                                        Icons.add,
-                                        color: Colors.greenAccent[400],
-                                        size: 32,
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              const Divider(color: Colors.white24, indent: 20, endIndent: 20),
                               Expanded(
                                 child: ListView.builder(
-                                  itemCount: dms.length,
+                                  itemCount: sortedDms.length,
                                   itemBuilder: (context, idx) {
-                                    final dmChannelName = dms[idx];
+                                    final dmChannelName = sortedDms[idx];
                                     final username = dmChannelName.substring(1);
                                     final avatarUrl = userAvatars[username];
                                     final status = userStatuses[username] ?? UserStatus.offline;
+                                    final isSelected = selectedConversationTarget.toLowerCase() == dmChannelName.toLowerCase();
+                                    final isUnread = viewModel.chatState.hasUnreadMessages(dmChannelName);
 
                                     return Padding(
                                       padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -165,12 +146,39 @@ class LeftDrawer extends StatelessWidget {
                                             onDmSelected(dmChannelName);
                                             onCloseDrawer();
                                           },
-                                          child: UserAvatar(
-                                            radius: 28,
-                                            username: username,
-                                            avatarUrl: avatarUrl,
-                                            status: status,
-                                            showStatusDot: false,
+                                          child: Stack(
+                                            alignment: Alignment.center,
+                                            clipBehavior: Clip.none,
+                                            children: [
+                                              UserAvatar(
+                                                radius: 28,
+                                                username: username,
+                                                avatarUrl: avatarUrl,
+                                                status: status,
+                                                showStatusDot: true,
+                                              ),
+                                              if (isSelected)
+                                                Positioned.fill(
+                                                  child: Container(
+                                                    decoration: BoxDecoration(
+                                                      shape: BoxShape.circle,
+                                                      border: Border.all(color: Colors.white, width: 3),
+                                                    ),
+                                                  ),
+                                                ),
+                                              if (isUnread && !isSelected)
+                                                Positioned(
+                                                  left: 2,
+                                                  child: Container(
+                                                    width: 8,
+                                                    height: 8,
+                                                    decoration: const BoxDecoration(
+                                                      color: Colors.white,
+                                                      shape: BoxShape.circle,
+                                                    ),
+                                                  ),
+                                                ),
+                                            ],
                                           ),
                                         ),
                                       ),
@@ -182,88 +190,57 @@ class LeftDrawer extends StatelessWidget {
                           ),
                         ),
                       ),
-                      // Channel List Panel
                       Expanded(
                         child: SafeArea(
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 16, 0, 8),
+                                padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
                                 child: Text(
-                                  "Joined Channels",
+                                  "Channels",
                                   style: TextStyle(
-                                    color: Colors.white70,
+                                    color: Colors.grey[400],
                                     fontWeight: FontWeight.bold,
-                                    fontSize: 14,
+                                    fontSize: 12,
+                                    letterSpacing: 0.5,
                                   ),
                                 ),
                               ),
                               Expanded(
                                 child: ListView(
-                                  padding: EdgeInsets.zero,
+                                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
                                   children: [
                                     ...joinedChannels.map((channel) {
-                                      final isSelected = selectedConversationTarget == channel;
-                                      return ListTile(
-                                        title: Text(
-                                          channel,
-                                          style: TextStyle(
-                                            color: isSelected ? Colors.white : Colors.white70,
-                                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-                                          ),
-                                        ),
-                                        selected: isSelected,
+                                      final isSelected = selectedConversationTarget.toLowerCase() == channel.toLowerCase();
+                                      final isUnread = viewModel.chatState.hasUnreadMessages(channel);
+                                      final lastMessage = viewModel.chatState.getLastMessage(channel);
+                                      final bool showSubtitle = isUnread && !isSelected && lastMessage != null;
+
+                                      return ChannelListItem(
+                                        name: channel,
+                                        isSelected: isSelected,
+                                        isUnread: isUnread,
+                                        subtitle: showSubtitle ? '${lastMessage.from}: ${lastMessage.content}' : null,
                                         onTap: () {
                                           onChannelSelected(channel);
                                           onCloseDrawer();
                                         },
-                                        onLongPress: () {
-                                          showDialog(
-                                            context: context,
-                                            builder: (BuildContext context) {
-                                              return AlertDialog(
-                                                title: const Text('Leave Channel'),
-                                                content: Text('Are you sure you want to leave $channel?'),
-                                                actions: <Widget>[
-                                                  TextButton(
-                                                    child: const Text('Cancel'),
-                                                    onPressed: () => Navigator.of(context).pop(),
-                                                  ),
-                                                  TextButton(
-                                                    child: const Text('Leave', style: TextStyle(color: Colors.red)),
-                                                    onPressed: () {
-                                                      Navigator.of(context).pop();
-                                                      onChannelPart(channel);
-                                                      onCloseDrawer();
-                                                    },
-                                                  ),
-                                                ],
-                                              );
-                                            },
-                                          );
-                                        },
+                                        onLongPress: () => _showLeaveDialog(context, channel),
                                       );
                                     }).toList(),
                                     if (unjoinedChannels.isNotEmpty)
                                       ExpansionTile(
+                                        title: Text("Other Channels", style: TextStyle(color: Colors.grey[400], fontWeight: FontWeight.bold, fontSize: 12)),
+                                        iconColor: Colors.grey[400],
+                                        collapsedIconColor: Colors.grey[400],
                                         initiallyExpanded: unjoinedExpanded,
                                         onExpansionChanged: (_) => onToggleUnjoined(),
-                                        title: const Text(
-                                          "Other Channels",
-                                          style: TextStyle(
-                                            color: Colors.white70,
-                                            fontWeight: FontWeight.bold,
-                                          ),
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                        trailing: null,
                                         children: unjoinedChannels.map((channel) {
-                                          return ListTile(
-                                            title: Text(
-                                              channel,
-                                              style: const TextStyle(color: Colors.white54),
-                                            ),
+                                          return ChannelListItem(
+                                            name: channel,
+                                            isSelected: false,
+                                            isUnread: false,
                                             onTap: () {
                                               onUnjoinedChannelTap(channel);
                                               onCloseDrawer();
@@ -284,7 +261,6 @@ class LeftDrawer extends StatelessWidget {
               ),
             ),
           ),
-          // Handle on the right side
           GestureDetector(
             onTap: onCloseDrawer,
             child: Container(
@@ -292,14 +268,121 @@ class LeftDrawer extends StatelessWidget {
               height: double.infinity,
               color: const Color(0xFF232428),
               child: const Center(
-                child: Icon(
-                  Icons.chevron_left,
-                  color: Colors.white54,
-                ),
+                child: Icon(Icons.chevron_left, color: Colors.white54),
               ),
             ),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showLeaveDialog(BuildContext context, String channel) {
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: const Text('Leave Channel'),
+          content: Text('Are you sure you want to leave $channel?'),
+          actions: <Widget>[
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            TextButton(
+              child: const Text('Leave', style: TextStyle(color: Colors.red)),
+              onPressed: () {
+                Navigator.of(context).pop();
+                onChannelPart(channel);
+                onCloseDrawer();
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
+// A dedicated, stateless widget for channel list items to keep the build method clean
+class ChannelListItem extends StatelessWidget {
+  final String name;
+  final bool isSelected;
+  final bool isUnread;
+  final String? subtitle;
+  final VoidCallback onTap;
+  final VoidCallback? onLongPress;
+
+  const ChannelListItem({
+    Key? key,
+    required this.name,
+    required this.isSelected,
+    required this.isUnread,
+    this.subtitle,
+    required this.onTap,
+    this.onLongPress,
+  }) : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final bool isActive = isSelected || (isUnread && !isSelected);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 1.0),
+      child: Material(
+        color: isSelected ? const Color(0xFF5865F2).withOpacity(0.6) : Colors.transparent,
+        borderRadius: BorderRadius.circular(5),
+        child: InkWell(
+          onTap: onTap,
+          onLongPress: onLongPress,
+          borderRadius: BorderRadius.circular(5),
+          child: Row(
+            children: [
+              AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                width: 4,
+                height: isUnread && !isSelected ? (subtitle != null ? 36 : 24) : 0,
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.only(
+                    topLeft: Radius.circular(4),
+                    bottomLeft: Radius.circular(4),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Text(
+                        name,
+                        style: TextStyle(
+                          color: isActive ? Colors.white : Colors.white70,
+                          fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
+                          fontSize: 16,
+                        ),
+                      ),
+                      if (subtitle != null) ...[
+                        const SizedBox(height: 2),
+                        Text(
+                          subtitle!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            color: Colors.white.withOpacity(0.7),
+                            fontSize: 13,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
