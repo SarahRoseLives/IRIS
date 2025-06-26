@@ -33,6 +33,35 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // NEW: State for encryption UI
   bool _shouldShowSafetyNumberDialog = false;
 
+  // --- NEW: Hide/Block state ---
+  final Set<String> _blockedUsers = {};
+  final Set<String> _hiddenMessageIds = {};
+
+  // --- GETTERS for Hide/Block ---
+  Set<String> get blockedUsers => _blockedUsers;
+  Set<String> get hiddenMessageIds => _hiddenMessageIds;
+
+  // --- Methods for Hide/Block ---
+  void blockUser(String username) {
+    _blockedUsers.add(username);
+    notifyListeners();
+  }
+
+  void unblockUser(String username) {
+    _blockedUsers.remove(username);
+    notifyListeners();
+  }
+
+  void hideMessage(String messageId) {
+    _hiddenMessageIds.add(messageId);
+    notifyListeners();
+  }
+
+  void unhideMessage(String messageId) {
+    _hiddenMessageIds.remove(messageId);
+    notifyListeners();
+  }
+
   MainLayoutViewModel({required this.username, this.token}) {
     if (token == null) {
       print("[ViewModel] Error: Token is null. Cannot initialize.");

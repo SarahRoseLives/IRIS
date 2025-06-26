@@ -27,7 +27,6 @@ class MessageList extends StatelessWidget {
   final ScrollController scrollController;
   final Map<String, String> userAvatars;
   final String currentUsername;
-  // FIX: Added the missing parameter to the constructor.
   final EncryptionStatus encryptionStatus;
 
   const MessageList({
@@ -36,7 +35,7 @@ class MessageList extends StatelessWidget {
     required this.scrollController,
     required this.userAvatars,
     required this.currentUsername,
-    required this.encryptionStatus, // FIX: It is now part of the constructor.
+    required this.encryptionStatus,
   }) : super(key: key);
 
   @override
@@ -57,12 +56,17 @@ class MessageList extends StatelessWidget {
     final viewModel = Provider.of<MainLayoutViewModel>(context);
     final isDm = viewModel.selectedConversationTarget.startsWith('@');
 
+    // For hiding logic
+    final Set<String> blockedUsers = viewModel.blockedUsers; // You need to have this in your viewmodel
+    final Set<String> hiddenMessageIds = viewModel.hiddenMessageIds; // You need to track hidden message IDs
+
     return ListView.builder(
       controller: scrollController,
       itemCount: messages.length,
       itemBuilder: (context, index) {
         final message = messages[index];
 
+        // System info
         if (message.isSystemInfo) {
           return Center(
             child: Padding(
@@ -71,6 +75,42 @@ class MessageList extends StatelessWidget {
                 message.content,
                 textAlign: TextAlign.center,
                 style: TextStyle(color: Colors.grey[400], fontStyle: FontStyle.italic),
+              ),
+            ),
+          );
+        }
+
+        final isBlockedUser = blockedUsers.contains(message.from);
+        final isMessageHidden = hiddenMessageIds.contains(message.id);
+
+        if (isBlockedUser || isMessageHidden) {
+          return GestureDetector(
+            onLongPress: () => _showHiddenOptions(context, message, isBlockedUser, viewModel),
+            child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
+              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+              decoration: BoxDecoration(
+                color: Colors.grey[900]?.withOpacity(0.85),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.grey[800]!),
+              ),
+              child: Row(
+                children: [
+                  const Icon(Icons.visibility_off, color: Colors.grey),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      isBlockedUser
+                          ? "Messages from this user are blocked. Hold to show options."
+                          : "This message is hidden. Hold to show options.",
+                      style: const TextStyle(
+                        color: Colors.grey,
+                        fontStyle: FontStyle.italic,
+                        fontSize: 15,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           );
@@ -154,6 +194,11 @@ class MessageList extends StatelessWidget {
         borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
       ),
       builder: (context) {
+        final blockedUsers = viewModel.blockedUsers;
+        final hiddenMessageIds = viewModel.hiddenMessageIds;
+        final alreadyBlocked = blockedUsers.contains(message.from);
+        final alreadyHidden = hiddenMessageIds.contains(message.id);
+
         return SafeArea(
           child: Column(
             mainAxisSize: MainAxisSize.min,
@@ -178,22 +223,24 @@ class MessageList extends StatelessWidget {
                     viewModel.startNewDM(message.from);
                   },
                 ),
-              ListTile(
-                leading: const Icon(Icons.visibility_off, color: Colors.white),
-                title: const Text('Hide Message on App', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(context);
-                  // TODO: Implement message hiding logic
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.block, color: Colors.white),
-                title: const Text('Hide User on App', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  Navigator.pop(context);
-                  // TODO: Implement user hiding logic
-                },
-              ),
+              if (!alreadyHidden)
+                ListTile(
+                  leading: const Icon(Icons.visibility_off, color: Colors.white),
+                  title: const Text('Hide Message on App', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    viewModel.hideMessage(message.id);
+                  },
+                ),
+              if (!alreadyBlocked)
+                ListTile(
+                  leading: const Icon(Icons.block, color: Colors.white),
+                  title: const Text('Hide User on App', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    viewModel.blockUser(message.from);
+                  },
+                ),
               if (isDm)
                 ListTile(
                   leading: const Icon(Icons.delete, color: Colors.red),
@@ -201,6 +248,44 @@ class MessageList extends StatelessWidget {
                   onTap: () {
                     Navigator.pop(context);
                     _removeDmMessage(context, viewModel, message);
+                  },
+                ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // This is the new bottom sheet for hidden/blocked messages
+  void _showHiddenOptions(BuildContext context, Message message, bool isBlockedUser, MainLayoutViewModel viewModel) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF313338),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (isBlockedUser)
+                ListTile(
+                  leading: const Icon(Icons.block_flipped, color: Colors.white),
+                  title: const Text('Unblock User', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    viewModel.unblockUser(message.from);
+                  },
+                ),
+              if (!isBlockedUser)
+                ListTile(
+                  leading: const Icon(Icons.visibility, color: Colors.white),
+                  title: const Text('Show Message', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    viewModel.unhideMessage(message.id);
                   },
                 ),
             ],
