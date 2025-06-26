@@ -13,9 +13,10 @@ import 'main_layout.dart';
 import 'screens/login_screen.dart';
 import 'package:iris/services/update_service.dart';
 
-// Simple static class to hold a pending navigation action from a notification tap.
+// Static class for pending notification navigation and message data.
 class PendingNotification {
   static String? channelToNavigateTo;
+  static Map<String, dynamic>? messageData; // NEW: Store message data for DM persistence
 }
 
 final getIt = GetIt.instance;
@@ -49,6 +50,15 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   final notificationService = getIt<NotificationService>();
   await notificationService.setupLocalNotifications();
   print("Handling a background message: ${message.messageId}");
+
+  // --- NEW: Store DM messages if received in background ---
+  if (message.data['type'] == 'private_message') {
+    final prefs = await SharedPreferences.getInstance();
+    final pendingMessages = prefs.getStringList('pending_dm_messages') ?? [];
+    pendingMessages.add(json.encode(message.data));
+    await prefs.setStringList('pending_dm_messages', pendingMessages);
+  }
+  // --------------------------------------------------------
   notificationService.showFlutterNotification(message);
 }
 

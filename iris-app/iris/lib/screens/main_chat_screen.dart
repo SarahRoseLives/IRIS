@@ -184,7 +184,6 @@ class MainChatScreen extends StatelessWidget {
                           scrollController: viewModel.scrollController,
                           userAvatars: viewModel.userAvatars,
                           currentUsername: viewModel.username,
-                          // NEW: Pass encryption status
                           encryptionStatus: encryptionStatus,
                         ),
                       ),
@@ -254,6 +253,7 @@ class MainChatScreen extends StatelessWidget {
                     onChannelPart: viewModel.partChannel,
                     onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
                     onDmSelected: viewModel.onDmSelected,
+                    onRemoveDm: viewModel.removeDmChannel, // <-- ADD THIS
                     onIrisTap: viewModel.selectMainView,
                     loadingChannels: viewModel.loadingChannels,
                     error: viewModel.channelError,
@@ -262,6 +262,9 @@ class MainChatScreen extends StatelessWidget {
                     onCloseDrawer: viewModel.toggleLeftDrawer,
                     unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
                     onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
+                    hasUnreadMessages: viewModel.hasUnreadMessages, // <-- add this line
+                    getLastMessage: viewModel.getLastMessage,       // <-- and this
+                    currentUsername: viewModel.username,            // <-- and this
                   ),
                 ),
                 AnimatedPositioned(

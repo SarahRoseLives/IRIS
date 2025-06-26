@@ -400,4 +400,40 @@ class ChatState extends ChangeNotifier {
 
     notifyListeners();
   }
+
+  // --- DM Message Removal ---
+
+  void removeDmMessage(Message message) {
+    final target = selectedConversationTarget.toLowerCase();
+    if (_channelMessages.containsKey(target)) {
+      _channelMessages[target]!.removeWhere((m) => m.id == message.id);
+      _persistMessages();
+      notifyListeners();
+    }
+  }
+
+  // --- DM Channel Removal ---
+  void removeDmChannel(String channelName) {
+    final key = channelName.toLowerCase();
+
+    // Remove from channels
+    _channels.removeWhere((c) => c.name.toLowerCase() == key);
+
+    // Remove messages
+    _channelMessages.remove(key);
+
+    // Remove dedup keys
+    _channelDedupKeys.remove(key);
+
+    // Remove last seen
+    _lastSeenMessageIds.remove(key);
+
+    // Remove encryption status if present
+    _encryptionStatuses.remove(key);
+
+    _persistMessages();
+    _persistLastSeenMessageIds();
+
+    notifyListeners();
+  }
 }

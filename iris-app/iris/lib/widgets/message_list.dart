@@ -6,6 +6,7 @@ import '../utils/irc_helpers.dart';
 import 'package:provider/provider.dart';
 import '../viewmodels/main_layout_viewmodel.dart';
 import '../models/channel_member.dart';
+import 'package:flutter/services.dart';  // For Clipboard
 
 bool isImageUrl(String url) {
   final lower = url.toLowerCase();
@@ -53,6 +54,9 @@ class MessageList extends StatelessWidget {
       for (final ChannelMember m in members) m.nick: m
     };
 
+    final viewModel = Provider.of<MainLayoutViewModel>(context);
+    final isDm = viewModel.selectedConversationTarget.startsWith('@');
+
     return ListView.builder(
       controller: scrollController,
       itemCount: messages.length,
@@ -81,59 +85,151 @@ class MessageList extends StatelessWidget {
 
         final messageColor = message.isEncrypted ? const Color(0xFFC8E6C9) : Colors.white;
 
-        return Container(
-          decoration: BoxDecoration(
-            color: isMention
-                ? const Color(0xFFFFF176).withOpacity(0.45)
-                : Colors.transparent,
-            borderRadius: BorderRadius.circular(isMention ? 12 : 0),
-          ),
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-          margin: const EdgeInsets.symmetric(vertical: 2),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildAvatar(message.from),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        if (roleIcon != null)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 2),
-                            child: Icon(roleIcon, size: 16, color: roleColor),
+        return GestureDetector(
+          onLongPress: () => _showMessageOptions(context, message, isDm, viewModel),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isMention
+                  ? const Color(0xFFFFF176).withOpacity(0.45)
+                  : Colors.transparent,
+              borderRadius: BorderRadius.circular(isMention ? 12 : 0),
+            ),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            margin: const EdgeInsets.symmetric(vertical: 2),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildAvatar(message.from),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          if (roleIcon != null)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 2),
+                              child: Icon(roleIcon, size: 16, color: roleColor),
+                            ),
+                          if (message.isEncrypted)
+                            Padding(
+                              padding: const EdgeInsets.only(right: 4.0),
+                              child: Icon(Icons.lock, size: 12, color: Colors.greenAccent.withOpacity(0.8)),
+                            ),
+                          Text(
+                            message.from,
+                            style: TextStyle(
+                              color: roleColor,
+                              fontWeight: prefix.isNotEmpty ? FontWeight.bold : FontWeight.normal,
+                              fontSize: 14,
+                            ),
                           ),
-                        if (message.isEncrypted)
-                          Padding(
-                            padding: const EdgeInsets.only(right: 4.0),
-                            child: Icon(Icons.lock, size: 12, color: Colors.greenAccent.withOpacity(0.8)),
-                          ),
-                        Text(
-                          message.from,
-                          style: TextStyle(
-                            color: roleColor,
-                            fontWeight: prefix.isNotEmpty ? FontWeight.bold : FontWeight.normal,
-                            fontSize: 14,
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 2),
-                    DefaultTextStyle(
-                      style: TextStyle(color: messageColor, fontSize: 15),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: contentWidgets,
+                        ],
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 2),
+                      DefaultTextStyle(
+                        style: TextStyle(color: messageColor, fontSize: 15),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: contentWidgets,
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  void _showMessageOptions(BuildContext context, Message message, bool isDm, MainLayoutViewModel viewModel) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF313338),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(12)),
+      ),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.copy, color: Colors.white),
+                title: const Text('Copy Text', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  Clipboard.setData(ClipboardData(text: message.content));
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Message copied to clipboard')),
+                  );
+                },
               ),
+              if (!isDm)
+                ListTile(
+                  leading: const Icon(Icons.message, color: Colors.white),
+                  title: const Text('DM User', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    viewModel.startNewDM(message.from);
+                  },
+                ),
+              ListTile(
+                leading: const Icon(Icons.visibility_off, color: Colors.white),
+                title: const Text('Hide Message on App', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  // TODO: Implement message hiding logic
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.block, color: Colors.white),
+                title: const Text('Hide User on App', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  // TODO: Implement user hiding logic
+                },
+              ),
+              if (isDm)
+                ListTile(
+                  leading: const Icon(Icons.delete, color: Colors.red),
+                  title: const Text('Remove Message', style: TextStyle(color: Colors.red)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _removeDmMessage(context, viewModel, message);
+                  },
+                ),
             ],
           ),
+        );
+      },
+    );
+  }
+
+  void _removeDmMessage(BuildContext context, MainLayoutViewModel viewModel, Message message) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Remove Message'),
+          content: const Text('This will remove this message from your DM history. Continue?'),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.pop(context),
+            ),
+            TextButton(
+              child: const Text('Remove', style: TextStyle(color: Colors.red)),
+              onPressed: () {
+                Navigator.pop(context);
+                viewModel.removeDmMessage(message);
+              },
+            ),
+          ],
         );
       },
     );

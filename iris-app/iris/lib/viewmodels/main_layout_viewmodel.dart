@@ -2,11 +2,12 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 
 import '../services/websocket_service.dart';
+import '../services/notification_service.dart';
 import 'chat_state.dart';
 import 'chat_controller.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
-import '../models/encryption_session.dart'; // NEW: Import encryption status model
+import '../models/encryption_session.dart';
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
@@ -47,6 +48,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       chatState: chatState,
     );
 
+    NotificationService.getCurrentDMChannel = () {
+      final target = chatState.selectedConversationTarget;
+      return target.startsWith('@') ? target : null;
+    };
+
     _initialize();
   }
 
@@ -69,10 +75,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   List<String> get unjoinedPublicChannelNames => chatState.unjoinedPublicChannelNames;
   List<String> get dmChannelNames => chatState.dmChannelNames;
 
-  // NEW: Getters for encryption status and UI flags
   EncryptionStatus get currentEncryptionStatus => chatState.getEncryptionStatus(selectedConversationTarget);
   bool get shouldShowSafetyNumberDialog => _shouldShowSafetyNumberDialog;
 
+  // Provide these for LeftDrawer:
+  bool hasUnreadMessages(String channelName) => chatState.hasUnreadMessages(channelName);
+  Message? getLastMessage(String channelName) => chatState.getLastMessage(channelName);
 
   void _initialize() async {
     WidgetsBinding.instance.addObserver(this);
@@ -89,7 +97,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final serverChannels = await _chatController.apiService.fetchChannels();
       chatState.mergeChannels(serverChannels);
       _chatController.connectWebSocket();
-
     } catch (e) {
       _channelError = "Failed to load conversations: $e";
     } finally {
@@ -117,20 +124,16 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _onChatStateChanged() {
-    // NEW: Check if a session just became active to trigger the Safety Number dialog
     final currentStatus = chatState.getEncryptionStatus(selectedConversationTarget);
-    // We only want to trigger this once when the state flips to active.
     if (currentStatus == EncryptionStatus.active && !_shouldShowSafetyNumberDialog) {
-        final messages = chatState.messagesForSelectedChannel;
-        if (messages.isNotEmpty) {
-            final lastMessage = messages.last;
-            // Check if the last message is the system message confirming activation.
-            if (lastMessage.isSystemInfo && lastMessage.content.contains('Session is now active')) {
-                _shouldShowSafetyNumberDialog = true;
-            }
+      final messages = chatState.messagesForSelectedChannel;
+      if (messages.isNotEmpty) {
+        final lastMessage = messages.last;
+        if (lastMessage.isSystemInfo && lastMessage.content.contains('Session is now active')) {
+          _shouldShowSafetyNumberDialog = true;
         }
+      }
     }
-
     _scrollToBottomIfScrolled();
     notifyListeners();
   }
@@ -139,7 +142,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     if (status == WebSocketStatus.connected) {
       _loadingChannels = false;
       _channelError = null;
-
       _fetchLatestHistoryForAllChannels();
       _checkForPendingNotifications();
     } else {
@@ -149,9 +151,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  void _checkForPendingNotifications() {
-    // This can be used in the future to handle incoming push notifications.
-  }
+  void _checkForPendingNotifications() {}
 
   void _onErrorChanged(String? error) {
     _channelError = error;
@@ -237,24 +237,17 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // --- NEW: Methods for Encryption UI ---
-
-  /// Toggles the encryption state for the current DM conversation.
   void toggleEncryption() {
-      _chatController.initiateOrEndEncryption();
+    _chatController.initiateOrEndEncryption();
   }
 
-  /// Gets the Safety Number for the current DM conversation.
   Future<String?> getSafetyNumber() {
-      return _chatController.getSafetyNumberForTarget();
+    return _chatController.getSafetyNumberForTarget();
   }
 
-  /// Resets the flag after the Safety Number dialog has been shown.
   void didShowSafetyNumberDialog() {
     _shouldShowSafetyNumberDialog = false;
   }
-
-  // --- End of new methods ---
 
   void toggleLeftDrawer() {
     _showLeftDrawer = !_showLeftDrawer;
@@ -304,6 +297,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void onChannelSelected(String channelName) {
     chatState.selectConversation(channelName);
+    notifyListeners();
+    NotificationService.getCurrentDMChannel = () {
+      final target = chatState.selectedConversationTarget;
+      return target.startsWith('@') ? target : null;
+    };
     _scrollToBottom();
   }
 
@@ -326,15 +324,27 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void startNewDM(String username) {
     String channelName = '@${username.trim()}';
-
     if (!chatState.channels.any((c) => c.name == channelName)) {
       chatState.addOrUpdateChannel(Channel(
         name: channelName,
         members: [],
       ));
     }
-
     chatState.selectConversation(channelName);
+    notifyListeners();
+  }
+
+  void removeDmMessage(Message message) {
+    chatState.removeDmMessage(message);
+  }
+
+  void removeDmChannel(String dmChannelName) {
+    // If currently viewing this DM, switch to main/channel view
+    if (selectedConversationTarget == dmChannelName) {
+      selectMainView();
+    }
+    chatState.removeDmChannel(dmChannelName);
+    // Critical: Notify listeners after removal to update UI
     notifyListeners();
   }
 

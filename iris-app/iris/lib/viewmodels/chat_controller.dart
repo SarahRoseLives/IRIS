@@ -48,6 +48,31 @@ class ChatController {
     chatState.setAvatarPlaceholder(username);
     await loadAvatarForUser(username);
 
+    // --- NEW: Load any pending DM messages from when the app was closed ---
+    final prefs = await SharedPreferences.getInstance();
+    final pendingMessages = prefs.getStringList('pending_dm_messages') ?? [];
+    for (final messageJson in pendingMessages) {
+      try {
+        final messageData = json.decode(messageJson) as Map<String, dynamic>;
+        final sender = messageData['sender'];
+        if (sender != null) {
+          final channelName = '@$sender';
+          final content = messageData['message'] ?? messageData['body'] ?? messageData['content'] ?? '';
+          final newMessage = Message.fromJson({
+            'from': sender,
+            'content': content,
+            'time': messageData['time'] ?? DateTime.now().toIso8601String(),
+            'id': messageData['id'] ?? 'pending-${DateTime.now().millisecondsSinceEpoch}',
+          });
+          chatState.addMessage(channelName, newMessage);
+        }
+      } catch (e) {
+        print('Error loading pending message: $e');
+      }
+    }
+    await prefs.remove('pending_dm_messages');
+    // ------------------------------------------------------------
+
     _listenToWebSocketStatus();
     _listenToInitialState();
     _listenToWebSocketMessages();
@@ -140,8 +165,10 @@ class ChatController {
 
       String conversationTarget;
       if (isPrivateMessage) {
-        final String conversationPartner = (sender.toLowerCase() == username.toLowerCase()) ? channelName : sender;
-        conversationTarget = '@$conversationPartner';
+        // --- FIX: Always use @<recipient/target> for private messages ---
+        // For DMs, the channel name is @<recipient>, regardless of sender
+        // If the channelName is already in @ format, use it directly, otherwise, prefix with @
+        conversationTarget = channelName.startsWith('@') ? channelName : '@$channelName';
         if (chatState.channels.indexWhere((c) => c.name.toLowerCase() == conversationTarget.toLowerCase()) == -1) {
             chatState.addOrUpdateChannel(Channel(name: conversationTarget, members: []));
         }
@@ -194,18 +221,19 @@ class ChatController {
     final isDm = currentConversation.startsWith('@');
     String target = isDm ? currentConversation.substring(1) : currentConversation;
 
+    // Always add own message to chatState for DMs
+    final sentMessage = Message(
+      from: username,
+      content: text,
+      time: DateTime.now(),
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      isEncrypted: isDm && _encryptionService.getSessionStatus(currentConversation) == EncryptionStatus.active,
+    );
+    chatState.addMessage(currentConversation, sentMessage);
+
     if (isDm && _encryptionService.getSessionStatus(currentConversation) == EncryptionStatus.active) {
         final encryptedText = await _encryptionService.encryptMessage(currentConversation, text);
         if (encryptedText != null) {
-            final sentMessage = Message(
-              from: username,
-              content: text,
-              time: DateTime.now(),
-              id: DateTime.now().millisecondsSinceEpoch.toString(),
-              isEncrypted: true,
-            );
-            chatState.addMessage(currentConversation, sentMessage);
-            // FIX: The value is no longer a future, so this is correct.
             _webSocketService.sendMessage(target, encryptedText);
         } else {
             chatState.addSystemMessage(currentConversation, 'Could not encrypt message. Session may be invalid.');
@@ -213,14 +241,6 @@ class ChatController {
         return;
     }
 
-    final sentMessage = Message(
-      from: username,
-      content: text,
-      time: DateTime.now(),
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-    );
-
-    chatState.addMessage(currentConversation, sentMessage);
     _webSocketService.sendMessage(target, text);
   }
 
@@ -239,7 +259,6 @@ class ChatController {
     } else if (status == EncryptionStatus.none || status == EncryptionStatus.pending) {
        final requestMessage = await _encryptionService.initiateEncryption(target);
        if(requestMessage != null) {
-          // FIX: The value is no longer a future, so this is correct.
           _webSocketService.sendMessage(target.substring(1), requestMessage);
           chatState.setEncryptionStatus(target, EncryptionStatus.pending);
           chatState.addSystemMessage(target, 'Attempting to start an encrypted session...');
@@ -251,7 +270,6 @@ class ChatController {
       final payload = text.substring('[ENCRYPTION-REQUEST] '.length);
       final response = await _encryptionService.handleEncryptionRequest('@$from', payload);
       if (response != null) {
-          // FIX: The value is no longer a future, so this is correct.
           _webSocketService.sendMessage(from, response);
           chatState.setEncryptionStatus('@$from', EncryptionStatus.active);
           chatState.addSystemMessage('@$from', 'Accepted encryption request. Session is now active.');
@@ -275,7 +293,6 @@ class ChatController {
       if(decrypted != null) {
           final msg = Message(
             from: from,
-            // FIX: The value is no longer a future, so this is correct.
             content: decrypted,
             time: DateTime.now(),
             id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -432,13 +449,33 @@ class ChatController {
     chatState.selectConversation(channelName);
   }
 
-  void _handlePendingNotification() {
+  void _handlePendingNotification() async {
     if (PendingNotification.channelToNavigateTo != null) {
       final channelName = PendingNotification.channelToNavigateTo!;
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        handleNotificationTap(channelName);
-        PendingNotification.channelToNavigateTo = null;
-      });
+      final messageData = PendingNotification.messageData;
+
+      // Ensure the DM channel exists and add the message if present
+      if (chatState.channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase()) == -1) {
+        chatState.addOrUpdateChannel(Channel(name: channelName, members: []));
+      }
+
+      if (messageData != null) {
+        final content = messageData['message'] ?? messageData['body'] ?? messageData['content'] ?? '';
+        final newMessage = Message.fromJson({
+          'from': messageData['sender'] ?? 'Unknown',
+          'content': content,
+          'time': messageData['time'] ?? DateTime.now().toIso8601String(),
+          'id': messageData['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        });
+        chatState.addMessage(channelName, newMessage);
+      }
+
+      // Navigate to the channel
+      handleNotificationTap(channelName);
+
+      // Clear the pending notification
+      PendingNotification.channelToNavigateTo = null;
+      PendingNotification.messageData = null;
     }
   }
 

@@ -100,8 +100,21 @@ class WebSocketService {
             }
             break;
           case 'message':
+            // --- DM SYNC ENHANCEMENT: Consistent DM channel naming ---
+            String channelName = payload['channel_name']?.toLowerCase() ?? '';
+            final bool isPrivateMessage = !channelName.startsWith('#');
+
+            String conversationTarget;
+            if (isPrivateMessage) {
+              conversationTarget = channelName.startsWith('@')
+                  ? channelName
+                  : '@$channelName';
+            } else {
+              conversationTarget = channelName;
+            }
+
             if (!_isDisposed) _messageController.add({
-              'channel_name': payload['channel_name'],
+              'channel_name': conversationTarget,
               'sender': payload['sender'],
               'text': payload['text'],
               'time': payload['time'] ?? DateTime.now().toIso8601String(),

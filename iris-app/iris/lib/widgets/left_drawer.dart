@@ -1,10 +1,8 @@
 import 'package:flutter/material.dart';
-import '../models/channel.dart'; // Import Message model
+import '../models/channel.dart';
 import '../services/websocket_service.dart';
 import '../models/user_status.dart';
 import '../widgets/user_avatar.dart';
-import 'package:provider/provider.dart';
-import '../viewmodels/main_layout_viewmodel.dart';
 
 class LeftDrawer extends StatelessWidget {
   final List<String> dms;
@@ -16,6 +14,7 @@ class LeftDrawer extends StatelessWidget {
   final ValueChanged<String> onChannelSelected;
   final ValueChanged<String> onUnjoinedChannelTap;
   final ValueChanged<String> onDmSelected;
+  final ValueChanged<String> onRemoveDm;
   final VoidCallback onIrisTap;
   final bool loadingChannels;
   final String? error;
@@ -25,6 +24,9 @@ class LeftDrawer extends StatelessWidget {
   final bool unjoinedExpanded;
   final VoidCallback onToggleUnjoined;
   final ValueChanged<String> onChannelPart;
+  final bool Function(String channelName) hasUnreadMessages;
+  final Message? Function(String channelName) getLastMessage;
+  final String currentUsername;
 
   const LeftDrawer({
     super.key,
@@ -38,6 +40,7 @@ class LeftDrawer extends StatelessWidget {
     required this.onChannelPart,
     required this.onUnjoinedChannelTap,
     required this.onDmSelected,
+    required this.onRemoveDm,
     required this.onIrisTap,
     required this.loadingChannels,
     this.error,
@@ -46,6 +49,9 @@ class LeftDrawer extends StatelessWidget {
     required this.onCloseDrawer,
     required this.unjoinedExpanded,
     required this.onToggleUnjoined,
+    required this.hasUnreadMessages,
+    required this.getLastMessage,
+    required this.currentUsername,
   });
 
   void _showNewDMDialog(BuildContext context) {
@@ -68,9 +74,7 @@ class LeftDrawer extends StatelessWidget {
               child: const Text('Start'),
               onPressed: () {
                 if (controller.text.isNotEmpty) {
-                  final viewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
-                  viewModel.startNewDM(controller.text);
-                  Navigator.of(context).pop();
+                  Navigator.of(context).pop(controller.text);
                 }
               },
             ),
@@ -80,11 +84,38 @@ class LeftDrawer extends StatelessWidget {
     );
   }
 
+  void _showDmOptions(BuildContext context, String dmChannelName) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF313338),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.delete, color: Colors.red),
+                title: const Text('Remove DM', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(context);
+                  onRemoveDm(dmChannelName);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.cancel, color: Colors.white),
+                title: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // We need to listen to the view model to get live updates on unread status
-    final viewModel = Provider.of<MainLayoutViewModel>(context);
-    final sortedDms = List<String>.from(dms)..sort((a,b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final sortedDms = List<String>.from(dms)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
     return Material(
       color: Colors.transparent,
@@ -135,7 +166,9 @@ class LeftDrawer extends StatelessWidget {
                                     final avatarUrl = userAvatars[username];
                                     final status = userStatuses[username] ?? UserStatus.offline;
                                     final isSelected = selectedConversationTarget.toLowerCase() == dmChannelName.toLowerCase();
-                                    final isUnread = viewModel.chatState.hasUnreadMessages(dmChannelName);
+                                    final lastMessage = getLastMessage(dmChannelName);
+                                    final isUnread = hasUnreadMessages(dmChannelName) &&
+                                        (lastMessage != null && lastMessage.from != currentUsername);
 
                                     return Padding(
                                       padding: const EdgeInsets.symmetric(vertical: 8.0),
@@ -146,6 +179,7 @@ class LeftDrawer extends StatelessWidget {
                                             onDmSelected(dmChannelName);
                                             onCloseDrawer();
                                           },
+                                          onLongPress: () => _showDmOptions(context, dmChannelName),
                                           child: Stack(
                                             alignment: Alignment.center,
                                             clipBehavior: Clip.none,
@@ -213,15 +247,23 @@ class LeftDrawer extends StatelessWidget {
                                   children: [
                                     ...joinedChannels.map((channel) {
                                       final isSelected = selectedConversationTarget.toLowerCase() == channel.toLowerCase();
-                                      final isUnread = viewModel.chatState.hasUnreadMessages(channel);
-                                      final lastMessage = viewModel.chatState.getLastMessage(channel);
-                                      final bool showSubtitle = isUnread && !isSelected && lastMessage != null;
+                                      final lastMessage = getLastMessage(channel);
+                                      final isUnread = hasUnreadMessages(channel) &&
+                                          (lastMessage != null && lastMessage.from != currentUsername);
+                                      // Only show preview if last message is NOT from current user and not null
+                                      final bool showSubtitle = lastMessage != null &&
+                                          !isSelected &&
+                                          isUnread &&
+                                          lastMessage.from != currentUsername;
+                                      final String? subtitle = showSubtitle
+                                          ? '${lastMessage!.from}: ${lastMessage.content}'
+                                          : null;
 
                                       return ChannelListItem(
                                         name: channel,
                                         isSelected: isSelected,
                                         isUnread: isUnread,
-                                        subtitle: showSubtitle ? '${lastMessage.from}: ${lastMessage.content}' : null,
+                                        subtitle: subtitle,
                                         onTap: () {
                                           onChannelSelected(channel);
                                           onCloseDrawer();
@@ -231,7 +273,12 @@ class LeftDrawer extends StatelessWidget {
                                     }).toList(),
                                     if (unjoinedChannels.isNotEmpty)
                                       ExpansionTile(
-                                        title: Text("Other Channels", style: TextStyle(color: Colors.grey[400], fontWeight: FontWeight.bold, fontSize: 12)),
+                                        title: Text(
+                                            "Other Channels",
+                                            style: TextStyle(
+                                                color: Colors.grey[400],
+                                                fontWeight: FontWeight.bold,
+                                                fontSize: 12)),
                                         iconColor: Colors.grey[400],
                                         collapsedIconColor: Colors.grey[400],
                                         initiallyExpanded: unjoinedExpanded,
@@ -304,7 +351,6 @@ class LeftDrawer extends StatelessWidget {
   }
 }
 
-// A dedicated, stateless widget for channel list items to keep the build method clean
 class ChannelListItem extends StatelessWidget {
   final String name;
   final bool isSelected;

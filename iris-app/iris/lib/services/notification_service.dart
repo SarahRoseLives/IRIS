@@ -1,5 +1,3 @@
-// lib/services/notification_service.dart
-
 import 'dart:convert';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
@@ -11,6 +9,9 @@ import 'package:permission_handler/permission_handler.dart';
 class NotificationService {
   final FirebaseMessaging _firebaseMessaging = FirebaseMessaging.instance;
   final FlutterLocalNotificationsPlugin _flutterLocalNotificationsPlugin = GetIt.instance<FlutterLocalNotificationsPlugin>();
+
+  // Static callback to get the currently viewed DM (set by MainLayoutViewModel)
+  static String? Function()? getCurrentDMChannel;
 
   Future<void> init() async {
     final status = await Permission.notification.request();
@@ -59,6 +60,27 @@ class NotificationService {
     print('[NotificationService] showFlutterNotification: Received message with data: ${message.data}');
     final String? title = message.data['title'];
     final String? body = message.data['body'];
+    final String? sender = message.data['sender'];
+    final String? channelName = message.data['channel_name'];
+    final String? type = message.data['type'];
+
+    // Robust DM suppression: suppress if viewing the DM, whether 'sender' or 'channel_name' matches
+    String? possibleDm;
+    if (type == "private_message" && sender != null) {
+      possibleDm = '@$sender';
+    }
+    // If channelName is provided and is not a public channel, treat as DM
+    if (channelName != null && !channelName.startsWith('#')) {
+      possibleDm = '@$channelName';
+    }
+
+    if (possibleDm != null &&
+        getCurrentDMChannel != null &&
+        getCurrentDMChannel!()?.toLowerCase() == possibleDm.toLowerCase()) {
+      print('[NotificationService] Suppressing notification for active DM: $possibleDm');
+      return;
+    }
+
     if (title != null && body != null) {
       _flutterLocalNotificationsPlugin.show(
         message.hashCode,
@@ -86,20 +108,35 @@ class NotificationService {
     }
   }
 
-  /// REFACTORED: This method no longer tries to access the ViewModel directly.
-  /// It now *always* buffers the tap action using the PendingNotification static class.
-  /// The ChatController is responsible for checking this buffer upon initialization.
-  void handleNotificationTap(Map<String, dynamic> data) {
+  /// Buffer both navigation and message data for later handling in ChatController.
+  void handleNotificationTap(Map<String, dynamic> data) async {
     final String? sender = data['sender'];
-    final String channelName = (data['type'] == 'private_message' && sender != null)
-        ? '@$sender'
-        : data['channel_name'] ?? '';
+    final String? channelNameData = data['channel_name'];
+    final String? type = data['type'];
+    String channelName = '';
 
+    // Prefer proper DM naming
+    if (type == 'private_message' && sender != null) {
+      channelName = '@$sender';
+    } else if (channelNameData != null && !channelNameData.startsWith('#')) {
+      channelName = '@$channelNameData';
+    } else {
+      channelName = channelNameData ?? '';
+    }
     if (channelName.isEmpty) return;
 
-    // Always buffer the navigation action. This is simpler and more robust.
     print("[NotificationService] Buffering notification tap for channel: $channelName");
     PendingNotification.channelToNavigateTo = channelName;
+
+    // Store the message data (ensure both 'body' and 'message' are available for fallback)
+    PendingNotification.messageData = {
+      'sender': sender ?? 'Unknown',
+      'body': data['body'] ?? '',
+      'message': data['message'] ?? '',
+      'content': data['content'] ?? '',
+      'time': data['time'] ?? DateTime.now().toIso8601String(),
+      'id': data['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+    };
   }
 
   Future<String?> getFCMToken() async {
