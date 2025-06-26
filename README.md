@@ -18,7 +18,11 @@ Iris is a sleek, mobile-first chat application that brings modern UX to the IRC 
     -   Images are stored for 12 hours (configurable in `config.go`)
 -   💬 **Discord-style experience** with channel list, private messages, and real-time updates
     -   Channel list stays synced with joined channels
-    -   DMs and other UX elements are under active development
+    -   **Fully working DMs** with last message preview and channel activity status
+    -   Hold user avatar/name to DM or block user, or hide a message
+    -   Tap and hold hidden messages or user to unhide/unblock
+    -   Hold DM user to remove DM from list
+    -   Messages in notifications for DMs are added to your local DM history
 -   🌙 **/away and /back support**
     -   Automatically sets you as away when the app is backgrounded or the phone is put to sleep
     -   Keeps you connected for push notifications while showing accurate presence in IRC
@@ -31,11 +35,9 @@ Iris is a sleek, mobile-first chat application that brings modern UX to the IRC 
 -   🔄 **Session restore**: Seamlessly reload your chat state and sync across devices/SASL accounts
 -   📋 **Channel list with real-time indicators**
 -   🖼️ **Image attachments**
-    - Send images in-line with your change directly from your Android device!
+    - Send images in-line with your chats directly from your Android device!
 -   🕹️ **Tap and hold on channels to leave/part**
-
-**New in recent versions:**
--   🔒 **End-to-end encryption in DMs (on demand for app users, over IRC)**
+-   🔒 **Encrypted DMs fully functional**
 -   **@ Mentions** for users with message highlighting
 -   😃 **IRC-safe emoji picker**
 
@@ -43,9 +45,7 @@ Iris is a sleek, mobile-first chat application that brings modern UX to the IRC 
 
 ## 🚧 Upcoming Features
 
--   ⛔ **Blocking users**
 -   📝 **Edit messages** (updates message in IRC; app updates in place, like Discord)
--   🔔 **DM History**
 -   👫 **Friends list**
 
 ---
