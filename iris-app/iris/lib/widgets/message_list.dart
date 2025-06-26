@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/channel.dart';
+import '../models/encryption_session.dart';
 import '../utils/irc_helpers.dart';
 import 'package:provider/provider.dart';
 import '../viewmodels/main_layout_viewmodel.dart';
@@ -25,6 +26,8 @@ class MessageList extends StatelessWidget {
   final ScrollController scrollController;
   final Map<String, String> userAvatars;
   final String currentUsername;
+  // FIX: Added the missing parameter to the constructor.
+  final EncryptionStatus encryptionStatus;
 
   const MessageList({
     Key? key,
@@ -32,22 +35,20 @@ class MessageList extends StatelessWidget {
     required this.scrollController,
     required this.userAvatars,
     required this.currentUsername,
+    required this.encryptionStatus, // FIX: It is now part of the constructor.
   }) : super(key: key);
 
   @override
   Widget build(BuildContext context) {
-    // Highlight if message contains username as a word or @username as a word (case-insensitive)
     final mentionPattern = RegExp(
       r'(?<=^|[^\w@])@?' + RegExp.escape(currentUsername) + r'(?=\b|[^a-zA-Z0-9_])',
       caseSensitive: false,
     );
 
-    // Get members list for the current channel and ensure correct type
     final List<ChannelMember> members = context.select<MainLayoutViewModel, List<ChannelMember>>(
       (vm) => vm.members,
     );
 
-    // Build a map of nick -> ChannelMember for quick lookup
     final Map<String, ChannelMember> memberMap = {
       for (final ChannelMember m in members) m.nick: m
     };
@@ -57,20 +58,33 @@ class MessageList extends StatelessWidget {
       itemCount: messages.length,
       itemBuilder: (context, index) {
         final message = messages[index];
+
+        if (message.isSystemInfo) {
+          return Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+              child: Text(
+                message.content,
+                textAlign: TextAlign.center,
+                style: TextStyle(color: Colors.grey[400], fontStyle: FontStyle.italic),
+              ),
+            ),
+          );
+        }
+
         final contentWidgets = _parseMessageContent(context, message.content);
-
         final isMention = mentionPattern.hasMatch(message.content);
-
-        // Get prefix and IRC info for this sender from the memberMap
         ChannelMember? member = memberMap[message.from];
         String prefix = member?.prefix ?? '';
         final roleColor = getColorForPrefix(prefix);
         final roleIcon = getIconForPrefix(prefix);
 
+        final messageColor = message.isEncrypted ? const Color(0xFFC8E6C9) : Colors.white;
+
         return Container(
           decoration: BoxDecoration(
             color: isMention
-                ? const Color(0xFFFFF176).withOpacity(0.45) // Bright yellow for strong highlight
+                ? const Color(0xFFFFF176).withOpacity(0.45)
                 : Colors.transparent,
             borderRadius: BorderRadius.circular(isMention ? 12 : 0),
           ),
@@ -92,6 +106,11 @@ class MessageList extends StatelessWidget {
                             padding: const EdgeInsets.only(right: 2),
                             child: Icon(roleIcon, size: 16, color: roleColor),
                           ),
+                        if (message.isEncrypted)
+                          Padding(
+                            padding: const EdgeInsets.only(right: 4.0),
+                            child: Icon(Icons.lock, size: 12, color: Colors.greenAccent.withOpacity(0.8)),
+                          ),
                         Text(
                           message.from,
                           style: TextStyle(
@@ -103,7 +122,13 @@ class MessageList extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 2),
-                    ...contentWidgets,
+                    DefaultTextStyle(
+                      style: TextStyle(color: messageColor, fontSize: 15),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: contentWidgets,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -114,7 +139,6 @@ class MessageList extends StatelessWidget {
     );
   }
 
-  /// Avatar fallback: If no avatar, show first letter (uppercase) on IRIS blue background.
   Widget _buildAvatar(String from) {
     final avatarUrl = userAvatars[from];
     final initial = (from.isNotEmpty) ? from[0].toUpperCase() : "?";
@@ -167,6 +191,10 @@ class MessageList extends StatelessWidget {
       widgets.addAll(_parsePlainTextWithUrls(context, remaining, shownImages, shownLinks));
     }
 
+    if (widgets.isEmpty) {
+       widgets.add(const SizedBox(height: 1, width: 0,));
+    }
+
     return widgets;
   }
 
@@ -195,10 +223,7 @@ class MessageList extends StatelessWidget {
 
   Widget _textWidget(String text) {
     if (text.trim().isEmpty) return const SizedBox.shrink();
-    return SelectableText(
-      text,
-      style: const TextStyle(color: Colors.white, fontSize: 15),
-    );
+    return SelectableText(text);
   }
 
   Widget _hyperlinkWidget(BuildContext context, String label, String url) {
@@ -217,7 +242,6 @@ class MessageList extends StatelessWidget {
         label,
         style: const TextStyle(
           color: Colors.blueAccent,
-          fontSize: 15,
           decoration: TextDecoration.underline,
         ),
       ),
@@ -248,7 +272,7 @@ class MessageList extends StatelessWidget {
           onTap: () => Navigator.of(ctx).pop(),
           child: Stack(
             children: [
-              Container(color: Colors.black),
+              Container(color: Colors.black.withOpacity(0.8)),
               Center(
                 child: InteractiveViewer(
                   child: Image.network(
@@ -260,8 +284,8 @@ class MessageList extends StatelessWidget {
                 ),
               ),
               Positioned(
-                top: 24,
-                right: 24,
+                top: 40,
+                right: 20,
                 child: IconButton(
                   icon: const Icon(Icons.close, color: Colors.white, size: 32),
                   onPressed: () => Navigator.of(ctx).pop(),

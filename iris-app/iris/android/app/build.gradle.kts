@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     // START: FlutterFire Configuration
@@ -7,16 +10,22 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+// --- START: Load Keystore Properties (Kotlin DSL) ---
+val keystoreProperties = Properties()
+val keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(FileInputStream(keystorePropertiesFile))
+}
+// --- END: Load Keystore Properties (Kotlin DSL) ---
+
 android {
-    namespace = "com.example.iris" // Make sure this matches your app's namespace
+    namespace = "com.example.iris"
     compileSdk = flutter.compileSdkVersion
-    //ndkVersion = flutter.ndkVersion
     ndkVersion = "27.0.12077973"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_1_8
         targetCompatibility = JavaVersion.VERSION_1_8
-        // 1. THIS LINE ENABLES DESUGARING
         isCoreLibraryDesugaringEnabled = true
     }
 
@@ -25,16 +34,25 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.iris" // Make sure this matches your app's ID
+        applicationId = "com.example.iris"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            keyAlias = keystoreProperties["keyAlias"] as String?
+            keyPassword = keystoreProperties["keyPassword"] as String?
+            storeFile = file(keystoreProperties["storeFile"] as String)
+            storePassword = keystoreProperties["storePassword"] as String?
+        }
+    }
+
     buildTypes {
-        release {
-            signingConfig = signingConfigs.getByName("debug")
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("release")
         }
     }
 }
@@ -44,6 +62,5 @@ flutter {
 }
 
 dependencies {
-    // 2. THIS LINE ADDS THE DESUGARING LIBRARY
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
 }

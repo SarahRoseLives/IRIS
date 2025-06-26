@@ -6,6 +6,7 @@ import 'chat_state.dart';
 import 'chat_controller.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
+import '../models/encryption_session.dart'; // NEW: Import encryption status model
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
@@ -27,6 +28,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   StreamSubscription? _wsStatusSub;
   StreamSubscription? _errorSub;
+
+  // NEW: State for encryption UI
+  bool _shouldShowSafetyNumberDialog = false;
 
   MainLayoutViewModel({required this.username, this.token}) {
     if (token == null) {
@@ -65,7 +69,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   List<String> get unjoinedPublicChannelNames => chatState.unjoinedPublicChannelNames;
   List<String> get dmChannelNames => chatState.dmChannelNames;
 
-  // REPLACED: _initialize now orchestrates full loading/merging sequence and uses mergeChannels
+  // NEW: Getters for encryption status and UI flags
+  EncryptionStatus get currentEncryptionStatus => chatState.getEncryptionStatus(selectedConversationTarget);
+  bool get shouldShowSafetyNumberDialog => _shouldShowSafetyNumberDialog;
+
+
   void _initialize() async {
     WidgetsBinding.instance.addObserver(this);
 
@@ -74,41 +82,28 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _wsStatusSub = _chatController.wsStatusStream.listen(_onWsStatusChanged);
     _errorSub = _chatController.errorStream.listen(_onErrorChanged);
 
-    // --- Phase 1: Load local data from cache ---
     await _chatController.initialize();
-
-    // --- Phase 2: Fetch and merge server data ---
     _loadingChannels = true;
     notifyListeners();
     try {
-      // Fetch the channel list from the API (public channels)
       final serverChannels = await _chatController.apiService.fetchChannels();
-
-      // MERGE server list into cached list so cached DMs are not lost!
       chatState.mergeChannels(serverChannels);
-
-      // *** FIX: Ensure websocket connects on initial load! ***
       _chatController.connectWebSocket();
 
     } catch (e) {
       _channelError = "Failed to load conversations: $e";
     } finally {
       _loadingChannels = false;
-      // --- Phase 3: Fetch latest history for all known channels ---
       await _fetchLatestHistoryForAllChannels();
 
-      // --- PATCH: Load avatars for all users seen in members OR message history ---
       final allNicks = <String>{};
       for (final channel in chatState.channels) {
-        // Add all channel members
         for (final member in channel.members) {
           allNicks.add(member.nick);
         }
-        // Add DM usernames
         if (channel.name.startsWith('@')) {
           allNicks.add(channel.name.substring(1));
         }
-        // Add all senders from message history (including offline users)
         for (final msg in chatState.getMessagesForChannel(channel.name)) {
           allNicks.add(msg.from);
         }
@@ -122,6 +117,20 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _onChatStateChanged() {
+    // NEW: Check if a session just became active to trigger the Safety Number dialog
+    final currentStatus = chatState.getEncryptionStatus(selectedConversationTarget);
+    // We only want to trigger this once when the state flips to active.
+    if (currentStatus == EncryptionStatus.active && !_shouldShowSafetyNumberDialog) {
+        final messages = chatState.messagesForSelectedChannel;
+        if (messages.isNotEmpty) {
+            final lastMessage = messages.last;
+            // Check if the last message is the system message confirming activation.
+            if (lastMessage.isSystemInfo && lastMessage.content.contains('Session is now active')) {
+                _shouldShowSafetyNumberDialog = true;
+            }
+        }
+    }
+
     _scrollToBottomIfScrolled();
     notifyListeners();
   }
@@ -131,7 +140,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _loadingChannels = false;
       _channelError = null;
 
-      // Fetch all channel & DM history and check notifications on connect/reconnect
       _fetchLatestHistoryForAllChannels();
       _checkForPendingNotifications();
     } else {
@@ -142,8 +150,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void _checkForPendingNotifications() {
-    // TODO: Implement notification handling if needed.
-    // This is a placeholder for logic to open DM on notification tap and force refresh.
+    // This can be used in the future to handle incoming push notifications.
   }
 
   void _onErrorChanged(String? error) {
@@ -152,14 +159,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  // --- Always fetch latest history for all channels, deduplicated, on start/resume ---
   Future<void> _fetchLatestHistoryForAllChannels() async {
-    // First handle public channels
     for (final channel in chatState.channels) {
       if (!channel.name.startsWith('#')) continue;
       final messages = chatState.getMessagesForChannel(channel.name);
       if (messages.isEmpty) {
-        // No local messages, fetch recent history
         try {
           final response = await _chatController.apiService.fetchChannelMessages(channel.name, limit: 100);
           final newMessages = response.map((item) => Message.fromJson({
@@ -169,10 +173,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           })).toList();
           chatState.addMessageBatch(channel.name, newMessages);
         } catch (e) {
-          print('Error fetching history for $channel: $e');
+          print('Error fetching history for ${channel.name}: $e');
         }
       } else {
-        // Fetch only missed messages
         final lastTime = messages.last.time;
         try {
           final newMessages = await _chatController.apiService.fetchMessagesSince(
@@ -181,19 +184,17 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           );
           chatState.addMessageBatch(channel.name, newMessages);
         } catch (e) {
-          print('Error fetching missed messages for $channel: $e');
+          print('Error fetching missed messages for ${channel.name}: $e');
         }
       }
     }
 
-    // Then handle DM channels
     for (final dm in chatState.dmChannelNames) {
       final messages = chatState.getMessagesForChannel(dm);
       if (messages.isEmpty) {
         try {
           final response = await _chatController.apiService.fetchChannelMessages(dm, limit: 100);
           if (response.isNotEmpty) {
-            // PATCH: Ensure the DM channel exists in chatState
             if (!chatState.channels.any((c) => c.name == dm)) {
               chatState.addOrUpdateChannel(Channel(
                 name: dm,
@@ -205,7 +206,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
             ...item,
             'isHistorical': true,
             'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
-            'channel_name': dm, // Ensure DM channel name is preserved
+            'channel_name': dm,
           })).toList();
           chatState.addMessageBatch(dm, newMessages);
         } catch (e) {
@@ -226,19 +227,34 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // --- App Lifecycle Handling ---
-
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _chatController.disconnectWebSocket();
     } else if (state == AppLifecycleState.resumed) {
       _chatController.connectWebSocket();
       _fetchLatestHistoryForAllChannels();
-    } else if (state == AppLifecycleState.inactive) {
-      _chatController.disconnectWebSocket();
     }
   }
+
+  // --- NEW: Methods for Encryption UI ---
+
+  /// Toggles the encryption state for the current DM conversation.
+  void toggleEncryption() {
+      _chatController.initiateOrEndEncryption();
+  }
+
+  /// Gets the Safety Number for the current DM conversation.
+  Future<String?> getSafetyNumber() {
+      return _chatController.getSafetyNumberForTarget();
+  }
+
+  /// Resets the flag after the Safety Number dialog has been shown.
+  void didShowSafetyNumberDialog() {
+    _shouldShowSafetyNumberDialog = false;
+  }
+
+  // --- End of new methods ---
 
   void toggleLeftDrawer() {
     _showLeftDrawer = !_showLeftDrawer;
@@ -289,7 +305,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   void onChannelSelected(String channelName) {
     chatState.selectConversation(channelName);
     _scrollToBottom();
-    // No need to fetch history here; handled globally on resume/init.
   }
 
   void onUnjoinedChannelTap(String channelName) => _chatController.joinChannel(channelName);
@@ -305,16 +320,13 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  /// Uploads an attachment and returns the uploaded URL to be inserted in the message input.
   Future<String?> uploadAttachmentAndGetUrl(String filePath) async {
     return await _chatController.uploadAttachmentAndGetUrl(filePath);
   }
 
-  // ADD THIS METHOD TO ENABLE STARTING NEW DMs WITH OFFLINE USERS
   void startNewDM(String username) {
     String channelName = '@${username.trim()}';
 
-    // Create channel if not exists
     if (!chatState.channels.any((c) => c.name == channelName)) {
       chatState.addOrUpdateChannel(Channel(
         name: channelName,
@@ -322,7 +334,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       ));
     }
 
-    // Select the new DM channel
     chatState.selectConversation(channelName);
     notifyListeners();
   }

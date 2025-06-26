@@ -7,6 +7,8 @@ class Message {
   final DateTime time;
   final String id;
   final bool isHistorical;
+  final bool isEncrypted; // NEW
+  final bool isSystemInfo; // NEW
 
   Message({
     required this.from,
@@ -14,6 +16,8 @@ class Message {
     required this.time,
     required this.id,
     this.isHistorical = false,
+    this.isEncrypted = false, // NEW
+    this.isSystemInfo = false, // NEW
   });
 
   /// Creates a Message object from a JSON map.
@@ -23,7 +27,6 @@ class Message {
     final bool isHist = json['isHistorical'] ?? false;
     final String? id = json['id'];
 
-    // NEW: Generate consistent ID using channel + time (seconds) + sender
     final channel = json['channel_name'] ?? '';
     final time = DateTime.tryParse(timeStr)?.toLocal() ?? DateTime.now();
     final seconds = time.millisecondsSinceEpoch ~/ 1000;
@@ -37,6 +40,8 @@ class Message {
               ? 'hist-$channel-$seconds-$from'
               : 'real-$channel-$seconds-$from'),
       isHistorical: isHist,
+      isEncrypted: json['isEncrypted'] ?? false, // NEW
+      isSystemInfo: json['isSystemInfo'] ?? false, // NEW
     );
   }
 
@@ -47,6 +52,8 @@ class Message {
       'time': time.toIso8601String(),
       'id': id,
       'isHistorical': isHistorical,
+      'isEncrypted': isEncrypted, // NEW
+      'isSystemInfo': isSystemInfo, // NEW
     };
   }
 }

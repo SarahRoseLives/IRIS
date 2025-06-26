@@ -7,13 +7,64 @@ import '../widgets/right_drawer.dart';
 import '../widgets/message_list.dart';
 import '../widgets/message_input.dart';
 import '../screens/profile_screen.dart';
+import '../models/encryption_session.dart';
 
 class MainChatScreen extends StatelessWidget {
   const MainChatScreen({super.key});
 
+  // NEW: Helper to show the Safety Number dialog
+  void _showSafetyNumberDialog(BuildContext context, MainLayoutViewModel viewModel) {
+    showDialog(
+      context: context,
+      builder: (context) {
+        return FutureBuilder<String?>(
+          future: viewModel.getSafetyNumber(),
+          builder: (context, snapshot) {
+            Widget content;
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              content = const Center(child: CircularProgressIndicator());
+            } else if (snapshot.hasError || snapshot.data == null) {
+              content = const Text("Could not generate Safety Number. The session may not be secure.");
+            } else {
+              content = RichText(
+                textAlign: TextAlign.center,
+                text: TextSpan(
+                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 16),
+                  children: [
+                    const TextSpan(
+                      text: "To verify this connection is secure, compare this Safety Number with the other user through a separate channel (e.g., a phone call).\n\nIf they match, your connection is secure and private.\n\n",
+                    ),
+                    TextSpan(
+                      text: snapshot.data!,
+                      style: const TextStyle(
+                        fontWeight: FontWeight.bold,
+                        fontSize: 20,
+                        fontFamily: 'monospace',
+                        color: Colors.lightGreenAccent,
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            }
+            return AlertDialog(
+              title: const Text("Verify Safety Number"),
+              content: content,
+              actions: [
+                TextButton(
+                  child: const Text("OK"),
+                  onPressed: () => Navigator.of(context).pop(),
+                )
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    // Define drawer widths for animation positioning
     const double leftDrawerWidth = 280;
     const double rightDrawerWidth = 240;
 
@@ -24,38 +75,67 @@ class MainChatScreen extends StatelessWidget {
           ...viewModel.currentChannelMessages.map((m) => m.from),
         };
 
+        final isDm = viewModel.selectedConversationTarget.startsWith('@');
+        final encryptionStatus = viewModel.currentEncryptionStatus;
+
+        IconData lockIconData;
+        Color lockIconColor;
+        String lockTooltip;
+
+        switch (encryptionStatus) {
+          case EncryptionStatus.active:
+            lockIconData = Icons.lock;
+            lockIconColor = Colors.greenAccent;
+            lockTooltip = "Encrypted session is active. Click to end.";
+            break;
+          case EncryptionStatus.pending:
+            lockIconData = Icons.lock_clock;
+            lockIconColor = Colors.amber;
+            lockTooltip = "Encryption request is pending...";
+            break;
+          case EncryptionStatus.error:
+             lockIconData = Icons.error;
+            lockIconColor = Colors.redAccent;
+            lockTooltip = "Encryption error. Click to reset.";
+            break;
+          case EncryptionStatus.none:
+          default:
+            lockIconData = Icons.lock_open;
+            lockIconColor = Colors.white70;
+            lockTooltip = "Session is not encrypted. Click to start.";
+            break;
+        }
+
+        // Listen for when a session becomes active to show the dialog
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (viewModel.shouldShowSafetyNumberDialog) {
+            _showSafetyNumberDialog(context, viewModel);
+            viewModel.didShowSafetyNumberDialog(); // Reset the flag
+          }
+        });
+
         return Scaffold(
           backgroundColor: const Color(0xFF313338),
           body: GestureDetector(
-            // This detector handles swiping from the edges to OPEN drawers
-            // and swiping on the drawers themselves to CLOSE them.
             onHorizontalDragUpdate: (details) {
               final width = MediaQuery.of(context).size.width;
-              // Swipe right from left edge to open left drawer
               if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
                 if (!viewModel.showLeftDrawer && !viewModel.showRightDrawer) {
                   viewModel.toggleLeftDrawer();
                 }
-              }
-              // Swipe left from right edge to open right drawer
-              else if (details.delta.dx < -5 &&
+              } else if (details.delta.dx < -5 &&
                   details.globalPosition.dx > width - 50) {
                 if (!viewModel.showLeftDrawer && !viewModel.showRightDrawer) {
                   viewModel.toggleRightDrawer();
                 }
-              }
-              // Swipe left on an open left drawer to close it
-              else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
+              } else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
                 viewModel.toggleLeftDrawer();
-              }
-              // Swipe right on an open right drawer to close it
-              else if (viewModel.showRightDrawer && details.delta.dx > 5) {
+              } else if (viewModel.showRightDrawer && details.delta.dx > 5) {
                 viewModel.toggleRightDrawer();
               }
             },
             child: Stack(
               children: [
-                // --- Main Content Area ---
                 SafeArea(
                   child: Column(
                     children: [
@@ -77,6 +157,19 @@ class MainChatScreen extends StatelessWidget {
                               ),
                             ),
                             const Spacer(),
+                            // NEW: Encryption Lock Icon
+                            if (isDm)
+                              IconButton(
+                                icon: Icon(lockIconData, color: lockIconColor),
+                                tooltip: lockTooltip,
+                                onPressed: () {
+                                   if (encryptionStatus == EncryptionStatus.active) {
+                                      _showSafetyNumberDialog(context, viewModel);
+                                   } else {
+                                      viewModel.toggleEncryption();
+                                   }
+                                }
+                              ),
                             IconButton(
                               icon: const Icon(Icons.people, color: Colors.white70),
                               tooltip: "Open Members Drawer",
@@ -91,6 +184,8 @@ class MainChatScreen extends StatelessWidget {
                           scrollController: viewModel.scrollController,
                           userAvatars: viewModel.userAvatars,
                           currentUsername: viewModel.username,
+                          // NEW: Pass encryption status
+                          encryptionStatus: encryptionStatus,
                         ),
                       ),
                       MessageInput(
@@ -127,10 +222,6 @@ class MainChatScreen extends StatelessWidget {
                     ],
                   ),
                 ),
-
-                // --- Scrim (Dark Overlay) ---
-                // This appears when a drawer is open to dim the main content
-                // and provides a large tappable area to close the drawer.
                 if (viewModel.showLeftDrawer || viewModel.showRightDrawer)
                   AnimatedOpacity(
                     opacity: 1.0,
@@ -145,8 +236,6 @@ class MainChatScreen extends StatelessWidget {
                       ),
                     ),
                   ),
-
-                // --- Left Drawer (Animated) ---
                 AnimatedPositioned(
                   duration: const Duration(milliseconds: 300),
                   curve: Curves.easeInOut,
@@ -175,8 +264,6 @@ class MainChatScreen extends StatelessWidget {
                     onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
                   ),
                 ),
-
-                // --- Right Drawer (Animated) ---
                 AnimatedPositioned(
                   duration: const Duration(milliseconds: 300),
                   curve: Curves.easeInOut,

@@ -1,5 +1,6 @@
 /iris-gateway/serviceAccountKey.json
 /tag_and_push.sh
-!/iris-gateway/avatars/
-!/iris-gateway/images/
-!/iris-gateway/iris-gateway
+/iris-gateway/avatars/
+/iris-gateway/images/
+/iris-gateway/iris-gateway
+/release.keystore
