@@ -225,59 +225,84 @@ class _MessageInputState extends State<MessageInput> {
 
   @override
   Widget build(BuildContext context) {
+    // This container is now always "anchored" to the bottom.
+    // The Row is replaced by a Stack+IntrinsicHeight+Align to ensure
+    // the buttons stay anchored while the TextField grows in height.
     return Container(
       color: const Color(0xFF232428),
       padding: const EdgeInsets.symmetric(horizontal: 12.0, vertical: 8.0),
-      child: Row(
-        children: [
-          IconButton(
-            icon: const Icon(Icons.person, color: Colors.white70),
-            tooltip: "Profile",
-            onPressed: widget.onProfilePressed,
-          ),
-          // NEW Emoji Picker Button added here
-          IconButton(
-            icon: const Icon(Icons.emoji_emotions_outlined, color: Colors.white70),
-            tooltip: "Emoji Picker",
-            onPressed: _showEmojiPicker,
-          ),
-          IconButton(
-            icon: const Icon(Icons.attach_file, color: Colors.white70),
-            onPressed: _pickAndUploadImage,
-            tooltip: "Attach Image",
-          ),
-          Expanded(
-            child: TextField(
-              controller: widget.controller,
-              focusNode: _focusNode,
-              style: const TextStyle(color: Colors.white),
-              decoration: InputDecoration(
-                hintText: "Send a message...",
-                hintStyle: const TextStyle(color: Colors.white54, fontSize: 15),
-                filled: true,
-                fillColor: const Color(0xFF383A40),
-                border: OutlineInputBorder(
-                  borderRadius: BorderRadius.circular(12),
-                  borderSide: BorderSide.none,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          return Stack(
+            alignment: Alignment.bottomCenter,
+            children: [
+              // Row with buttons anchored to bottom
+              Align(
+                alignment: Alignment.bottomCenter,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.person, color: Colors.white70),
+                      tooltip: "Profile",
+                      onPressed: widget.onProfilePressed,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.emoji_emotions_outlined, color: Colors.white70),
+                      tooltip: "Emoji Picker",
+                      onPressed: _showEmojiPicker,
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.attach_file, color: Colors.white70),
+                      onPressed: _pickAndUploadImage,
+                      tooltip: "Attach Image",
+                    ),
+                    // Expanded TextField
+                    Expanded(
+                      child: ConstrainedBox(
+                        constraints: BoxConstraints(
+                          // You can tweak maxHeight as needed
+                          maxHeight: 120,
+                        ),
+                        child: Scrollbar(
+                          child: TextField(
+                            controller: widget.controller,
+                            focusNode: _focusNode,
+                            style: const TextStyle(color: Colors.white),
+                            decoration: InputDecoration(
+                              hintText: "Send a message...",
+                              hintStyle: const TextStyle(color: Colors.white54, fontSize: 15),
+                              filled: true,
+                              fillColor: const Color(0xFF383A40),
+                              border: OutlineInputBorder(
+                                borderRadius: BorderRadius.circular(12),
+                                borderSide: BorderSide.none,
+                              ),
+                              contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
+                            ),
+                            maxLines: null,
+                            keyboardType: TextInputType.multiline,
+                            textInputAction: TextInputAction.newline,
+                            onChanged: (value) => _onTextChanged(),
+                            onEditingComplete: _removeSuggestions,
+                          ),
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.send, color: Color(0xFF5865F2)),
+                      onPressed: () {
+                        widget.onSendMessage();
+                        _removeSuggestions();
+                      },
+                      tooltip: "Send",
+                    ),
+                  ],
                 ),
-                contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 10.0),
               ),
-              maxLines: null,
-              keyboardType: TextInputType.multiline,
-              textInputAction: TextInputAction.newline,
-              onChanged: (value) => _onTextChanged(),
-              onEditingComplete: _removeSuggestions,
-            ),
-          ),
-          IconButton(
-            icon: const Icon(Icons.send, color: Color(0xFF5865F2)),
-            onPressed: () {
-              widget.onSendMessage();
-              _removeSuggestions();
-            },
-            tooltip: "Send",
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
