@@ -7,6 +7,9 @@ import 'package:http/http.dart' as http;
 import '../config.dart';
 import 'package:iris/services/update_service.dart';
 
+// Add this import for fingerprint service
+import '../services/fingerprint_service.dart';
+
 class ProfileScreen extends StatefulWidget {
   final String authToken;
 
@@ -24,19 +27,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
   String? _avatarUrl;
   String? _bio; // Optionally load bio in the future
 
+  // Fingerprint variables
+  final FingerprintService _fingerprintService = FingerprintService();
+  bool _fingerprintEnabled = false;
+
   @override
   void initState() {
     super.initState();
     _loadUserInfo();
+    _loadFingerprintSetting();
   }
 
   Future<void> _loadUserInfo() async {
     final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _username = prefs.getString('username');
-      _bio = prefs.getString('bio'); // If you want to add a bio field
-    });
-    _loadAvatarUrl();
+    if (mounted) {
+      setState(() {
+        _username = prefs.getString('username');
+        _bio = prefs.getString('bio'); // If you want to add a bio field
+      });
+    }
+    await _loadAvatarUrl();
   }
 
   Future<void> _loadAvatarUrl() async {
@@ -45,7 +55,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       String? foundUrl;
 
       for (final ext in possibleExtensions) {
-        final String potentialAvatarUrl = 'http://$apiHost:$apiPort/avatars/$_username$ext';
+        final String potentialAvatarUrl =
+            'http://$apiHost:$apiPort/avatars/$_username$ext';
         try {
           final response = await http.head(Uri.parse(potentialAvatarUrl));
           if (response.statusCode == 200) {
@@ -57,8 +68,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
         }
       }
 
+      if (mounted) {
+        setState(() {
+          _avatarUrl = foundUrl;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadFingerprintSetting() async {
+    final enabled = await _fingerprintService.isFingerprintEnabled();
+    if (mounted) {
       setState(() {
-        _avatarUrl = foundUrl;
+        _fingerprintEnabled = enabled;
       });
     }
   }
@@ -68,17 +90,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
 
     if (pickedFile != null) {
-      setState(() {
-        _imageFile = File(pickedFile.path);
-      });
+      if (mounted) {
+        setState(() {
+          _imageFile = File(pickedFile.path);
+        });
+      }
     }
   }
 
   Future<void> _uploadAvatar() async {
     if (_imageFile == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select an image first.')),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please select an image first.')),
+        );
+      }
       return;
     }
 
@@ -87,23 +113,29 @@ class _ProfileScreenState extends State<ProfileScreen> {
     });
 
     try {
-      final response = await _apiService.uploadAvatar(_imageFile!, widget.authToken);
+      final response =
+          await _apiService.uploadAvatar(_imageFile!, widget.authToken);
       if (response['success'] == true) {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(response['message'] ?? 'Avatar uploaded successfully!')),
+            SnackBar(
+                content:
+                    Text(response['message'] ?? 'Avatar uploaded successfully!')),
           );
         }
-        setState(() {
-          _imageFile = null;
-          _avatarUrl = response['avatarUrl'] != null
-              ? 'http://$apiHost:$apiPort${response['avatarUrl']}'
-              : null;
-        });
+        if (mounted) {
+          setState(() {
+            _imageFile = null;
+            _avatarUrl = response['avatarUrl'] != null
+                ? 'http://$apiHost:$apiPort${response['avatarUrl']}'
+                : null;
+          });
+        }
       } else {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text(response['message'] ?? 'Failed to upload avatar.')),
+            SnackBar(
+                content: Text(response['message'] ?? 'Failed to upload avatar.')),
           );
         }
       }
@@ -114,9 +146,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
         );
       }
     } finally {
-      setState(() {
-        _isUploading = false;
-      });
+      if (mounted) {
+        setState(() {
+          _isUploading = false;
+        });
+      }
     }
   }
 
@@ -150,7 +184,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   shape: const CircleBorder(),
                   color: Colors.black54,
                   child: IconButton(
-                    icon: const Icon(Icons.camera_alt, color: Colors.white, size: 20),
+                    icon: const Icon(Icons.camera_alt,
+                        color: Colors.white, size: 20),
                     onPressed: _pickImage,
                     tooltip: "Change Avatar",
                     padding: EdgeInsets.zero,
@@ -169,13 +204,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Text(
                   _username ?? 'Not available',
                   style: const TextStyle(
-                    fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      color: Colors.white),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   _bio ?? "No bio set.",
                   style: TextStyle(color: Colors.grey[400], fontSize: 15),
-                  maxLines: 2, overflow: TextOverflow.ellipsis,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
               ],
             ),
@@ -201,7 +239,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
               backgroundColor: const Color(0xFF5865F2),
               padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
               textStyle: const TextStyle(fontSize: 15),
-              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
             ),
           ),
           const SizedBox(width: 12),
@@ -216,7 +255,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           if (_isUploading)
             const Padding(
               padding: EdgeInsets.only(left: 16),
-              child: CircularProgressIndicator(color: Color(0xFF5865F2), strokeWidth: 3),
+              child: CircularProgressIndicator(
+                  color: Color(0xFF5865F2), strokeWidth: 3),
             ),
         ],
       ),
@@ -226,6 +266,82 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildActionButtons() {
     return Column(
       children: [
+        // Fingerprint toggle switch
+        SwitchListTile(
+          title: const Text('Enable Fingerprint Security',
+              style: TextStyle(color: Colors.white)),
+          subtitle: const Text('Require fingerprint to open the app',
+              style: TextStyle(color: Colors.white70)),
+          value: _fingerprintEnabled,
+          onChanged: (value) async {
+            // Prevent any action if the widget is no longer visible.
+            if (!mounted) return;
+
+            if (value) {
+              // Logic for TURNING ON the switch
+              final canAuth = await _fingerprintService.canAuthenticate();
+              if (!canAuth) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                        'Fingerprint authentication is not available on this device.'),
+                    backgroundColor: Colors.orangeAccent,
+                  ),
+                );
+                // No need to set state, as _fingerprintEnabled is already false.
+                return;
+              }
+
+              final authenticated = await _fingerprintService.authenticate();
+              if (authenticated) {
+                // SUCCESS: User's fingerprint was verified.
+                await _fingerprintService.setFingerprintEnabled(true);
+                if (mounted) {
+                  setState(() {
+                    _fingerprintEnabled = true;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Fingerprint security has been enabled.'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              } else {
+                // FAILURE: User canceled or fingerprint was not recognized.
+                // Explicitly keep the switch off and inform the user.
+                await _fingerprintService.setFingerprintEnabled(false);
+                if (mounted) {
+                  setState(() {
+                    _fingerprintEnabled = false;
+                  });
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content:
+                          Text('Authentication failed. Setting was not changed.'),
+                      backgroundColor: Colors.redAccent,
+                    ),
+                  );
+                }
+              }
+            } else {
+              // Logic for TURNING OFF the switch
+              await _fingerprintService.setFingerprintEnabled(false);
+              if (mounted) {
+                setState(() {
+                  _fingerprintEnabled = false;
+                });
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Fingerprint security disabled.'),
+                  ),
+                );
+              }
+            }
+          },
+          activeColor: const Color(0xFF5865F2),
+        ),
+        const SizedBox(height: 12),
         ElevatedButton.icon(
           onPressed: _pickImage,
           icon: const Icon(Icons.image),
@@ -235,16 +351,19 @@ class _ProfileScreenState extends State<ProfileScreen> {
             backgroundColor: const Color(0xFF5865F2),
             minimumSize: const Size.fromHeight(48),
             textStyle: const TextStyle(fontSize: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
           ),
         ),
         const SizedBox(height: 12),
         ElevatedButton.icon(
           onPressed: () async {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('Checking for updates...')),
-            );
-            await UpdateService.checkForUpdates(context, forceCheck: true);
+            if (mounted) {
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Checking for updates...')),
+              );
+              await UpdateService.checkForUpdates(context, forceCheck: true);
+            }
           },
           icon: const Icon(Icons.update),
           label: const Text('Check for Updates'),
@@ -253,7 +372,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             backgroundColor: Colors.green[600],
             minimumSize: const Size.fromHeight(48),
             textStyle: const TextStyle(fontSize: 16),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12)),
           ),
         ),
       ],

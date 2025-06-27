@@ -11,6 +11,9 @@ import '../models/channel.dart';
 import '../models/channel_member.dart';
 import '../models/encryption_session.dart';
 
+// Add import for fingerprint service
+import '../services/fingerprint_service.dart';
+
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
   late final ChatState chatState;
@@ -64,6 +67,16 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  // Add FingerprintService instance
+  final FingerprintService _fingerprintService = FingerprintService();
+
+  // Flag to prevent auth loop when resuming the app
+  bool _isAuthenticating = false;
+
+  // --- START OF TIMESTAMP DEBOUNCE ---
+  DateTime? _lastAuthAttempt;
+  // --- END OF TIMESTAMP DEBOUNCE ---
+
   MainLayoutViewModel({required this.username, this.token}) {
     if (token == null) {
       print("[ViewModel] Error: Token is null. Cannot initialize.");
@@ -72,11 +85,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    // START OF CHANGE
-    // Use the global singleton instance of ChatState from GetIt instead of creating a new one.
-    // This preserves the state across app restarts/UI rebuilds.
+    // Use the global singleton instance of ChatState from GetIt
     chatState = getIt<ChatState>();
-    // END OF CHANGE
 
     _chatController = ChatController(
       username: username,
@@ -93,7 +103,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   // --- GETTERS ---
-
   bool get showLeftDrawer => _showLeftDrawer;
   bool get showRightDrawer => _showRightDrawer;
   bool get loadingChannels => _loadingChannels;
@@ -102,30 +111,29 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   bool get unjoinedChannelsExpanded => _unjoinedChannelsExpanded;
   TextEditingController get msgController => _msgController;
   ScrollController get scrollController => _scrollController;
-
-  List<Message> get currentChannelMessages => chatState.messagesForSelectedChannel;
+  List<Message> get currentChannelMessages =>
+      chatState.messagesForSelectedChannel;
   String get selectedConversationTarget => chatState.selectedConversationTarget;
   List<ChannelMember> get members => chatState.membersForSelectedChannel;
   Map<String, String> get userAvatars => chatState.userAvatars;
-  List<String> get joinedPublicChannelNames => chatState.joinedPublicChannelNames;
-  List<String> get unjoinedPublicChannelNames => chatState.unjoinedPublicChannelNames;
+  List<String> get joinedPublicChannelNames =>
+      chatState.joinedPublicChannelNames;
+  List<String> get unjoinedPublicChannelNames =>
+      chatState.unjoinedPublicChannelNames;
   List<String> get dmChannelNames => chatState.dmChannelNames;
-
-  EncryptionStatus get currentEncryptionStatus => chatState.getEncryptionStatus(selectedConversationTarget);
+  EncryptionStatus get currentEncryptionStatus =>
+      chatState.getEncryptionStatus(selectedConversationTarget);
   bool get shouldShowSafetyNumberDialog => _shouldShowSafetyNumberDialog;
-
-  // Provide these for LeftDrawer:
-  bool hasUnreadMessages(String channelName) => chatState.hasUnreadMessages(channelName);
-  Message? getLastMessage(String channelName) => chatState.getLastMessage(channelName);
+  bool hasUnreadMessages(String channelName) =>
+      chatState.hasUnreadMessages(channelName);
+  Message? getLastMessage(String channelName) =>
+      chatState.getLastMessage(channelName);
 
   void _initialize() async {
     WidgetsBinding.instance.addObserver(this);
-
     chatState.addListener(_onChatStateChanged);
-
     _wsStatusSub = _chatController.wsStatusStream.listen(_onWsStatusChanged);
     _errorSub = _chatController.errorStream.listen(_onErrorChanged);
-
     await _chatController.initialize();
     _loadingChannels = true;
     notifyListeners();
@@ -138,7 +146,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     } finally {
       _loadingChannels = false;
       await _fetchLatestHistoryForAllChannels();
-
       final allNicks = <String>{};
       for (final channel in chatState.channels) {
         for (final member in channel.members) {
@@ -154,18 +161,20 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       for (final nick in allNicks) {
         _chatController.loadAvatarForUser(nick);
       }
-
       notifyListeners();
     }
   }
 
   void _onChatStateChanged() {
-    final currentStatus = chatState.getEncryptionStatus(selectedConversationTarget);
-    if (currentStatus == EncryptionStatus.active && !_shouldShowSafetyNumberDialog) {
+    final currentStatus =
+        chatState.getEncryptionStatus(selectedConversationTarget);
+    if (currentStatus == EncryptionStatus.active &&
+        !_shouldShowSafetyNumberDialog) {
       final messages = chatState.messagesForSelectedChannel;
       if (messages.isNotEmpty) {
         final lastMessage = messages.last;
-        if (lastMessage.isSystemInfo && lastMessage.content.contains('Session is now active')) {
+        if (lastMessage.isSystemInfo &&
+            lastMessage.content.contains('Session is now active')) {
           _shouldShowSafetyNumberDialog = true;
         }
       }
@@ -201,12 +210,15 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final messages = chatState.getMessagesForChannel(channel.name);
       if (messages.isEmpty) {
         try {
-          final response = await _chatController.apiService.fetchChannelMessages(channel.name, limit: 100);
-          final newMessages = response.map((item) => Message.fromJson({
-            ...item,
-            'isHistorical': true,
-            'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
-          })).toList();
+          final response = await _chatController.apiService
+              .fetchChannelMessages(channel.name, limit: 100);
+          final newMessages = response
+              .map((item) => Message.fromJson({
+                    ...item,
+                    'isHistorical': true,
+                    'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
+                  }))
+              .toList();
           chatState.addMessageBatch(channel.name, newMessages);
         } catch (e) {
           print('Error fetching history for ${channel.name}: $e');
@@ -214,22 +226,20 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       } else {
         final lastTime = messages.last.time;
         try {
-          final newMessages = await _chatController.apiService.fetchMessagesSince(
-            channel.name,
-            lastTime,
-          );
+          final newMessages = await _chatController.apiService
+              .fetchMessagesSince(channel.name, lastTime);
           chatState.addMessageBatch(channel.name, newMessages);
         } catch (e) {
           print('Error fetching missed messages for ${channel.name}: $e');
         }
       }
     }
-
     for (final dm in chatState.dmChannelNames) {
       final messages = chatState.getMessagesForChannel(dm);
       if (messages.isEmpty) {
         try {
-          final response = await _chatController.apiService.fetchChannelMessages(dm, limit: 100);
+          final response =
+              await _chatController.apiService.fetchChannelMessages(dm, limit: 100);
           if (response.isNotEmpty) {
             if (!chatState.channels.any((c) => c.name == dm)) {
               chatState.addOrUpdateChannel(Channel(
@@ -238,12 +248,14 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
               ));
             }
           }
-          final newMessages = response.map((item) => Message.fromJson({
-            ...item,
-            'isHistorical': true,
-            'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
-            'channel_name': dm,
-          })).toList();
+          final newMessages = response
+              .map((item) => Message.fromJson({
+                    ...item,
+                    'isHistorical': true,
+                    'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
+                    'channel_name': dm,
+                  }))
+              .toList();
           chatState.addMessageBatch(dm, newMessages);
         } catch (e) {
           print('Error fetching history for DM $dm: $e');
@@ -251,10 +263,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       } else {
         final lastTime = messages.last.time;
         try {
-          final newMessages = await _chatController.apiService.fetchMessagesSince(
-            dm,
-            lastTime,
-          );
+          final newMessages =
+              await _chatController.apiService.fetchMessagesSince(dm, lastTime);
           chatState.addMessageBatch(dm, newMessages);
         } catch (e) {
           print('Error fetching missed messages for DM $dm: $e');
@@ -264,10 +274,39 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
+  void didChangeAppLifecycleState(AppLifecycleState state) async {
+    super.didChangeAppLifecycleState(state);
+
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _chatController.disconnectWebSocket();
     } else if (state == AppLifecycleState.resumed) {
+      // If an auth check is already in progress, do nothing.
+      if (_isAuthenticating) return;
+
+      // Check if the last authentication attempt was very recent (e.g., within 2 seconds).
+      // This prevents loops caused by the auth dialog itself triggering a resume event.
+      if (_lastAuthAttempt != null &&
+          DateTime.now().difference(_lastAuthAttempt!).inSeconds < 2) {
+        return;
+      }
+
+      final fingerprintEnabled =
+          await _fingerprintService.isFingerprintEnabled();
+      if (fingerprintEnabled) {
+        // Record the time we START this attempt.
+        _lastAuthAttempt = DateTime.now();
+        _isAuthenticating = true;
+
+        final authenticated = await _fingerprintService.authenticate();
+
+        _isAuthenticating = false;
+
+        if (!authenticated) {
+          return; // Lock the app by not proceeding.
+        }
+      }
+
+      // If fingerprint is disabled or authentication was successful, connect.
       _chatController.connectWebSocket();
       _fetchLatestHistoryForAllChannels();
     }
@@ -316,7 +355,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
   void _scrollToBottomIfScrolled() {
     if (_scrollController.hasClients) {
-      final isAtBottom = _scrollController.position.maxScrollExtent - _scrollController.offset < 200;
+      final isAtBottom =
+          _scrollController.position.maxScrollExtent - _scrollController.offset <
+              200;
       if (isAtBottom) {
         _scrollToBottom();
       }
@@ -341,9 +382,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _scrollToBottom();
   }
 
-  void onUnjoinedChannelTap(String channelName) => _chatController.joinChannel(channelName);
+  void onUnjoinedChannelTap(String channelName) =>
+      _chatController.joinChannel(channelName);
   void onDmSelected(String dmChannelName) => onChannelSelected(dmChannelName);
-  void partChannel(String channelName) => _chatController.partChannel(channelName);
+  void partChannel(String channelName) =>
+      _chatController.partChannel(channelName);
 
   void selectMainView() {
     final index = chatState.channels.indexWhere((c) => c.name.startsWith('#'));
@@ -375,24 +418,17 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void removeDmChannel(String dmChannelName) {
-    // If currently viewing this DM, switch to main/channel view
     if (selectedConversationTarget == dmChannelName) {
       selectMainView();
     }
     chatState.removeDmChannel(dmChannelName);
-    // Critical: Notify listeners after removal to update UI
     notifyListeners();
   }
 
-  // ------ CHANNEL TOPIC SUPPORT ------
-
-  /// Allows an operator to update the channel topic. Optimistically updates local state and sends the topic command.
   Future<void> updateChannelTopic(String newTopic) async {
     try {
       final channelName = selectedConversationTarget;
       if (channelName.startsWith('#')) {
-        // Send the topic change command via WebSocket
-        // This relies on a new method in ChatController to send a structured message.
         _chatController.sendRawWebSocketMessage({
           'type': 'topic_change',
           'payload': {
@@ -400,8 +436,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
             'topic': newTopic,
           },
         });
-
-        // Optimistically update the local state
         final updatedChannels = chatState.channels.map((c) {
           if (c.name == channelName) {
             return Channel(
@@ -412,7 +446,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           }
           return c;
         }).toList();
-
         chatState.setChannels(updatedChannels);
       }
     } catch (e) {

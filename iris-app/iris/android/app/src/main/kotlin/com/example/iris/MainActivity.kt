@@ -1,5 +1,8 @@
 package com.example.iris
 
-import io.flutter.embedding.android.FlutterActivity
+// 1. Change this import from FlutterActivity to FlutterFragmentActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// 2. Change the class your MainActivity extends
+class MainActivity: FlutterFragmentActivity() {
+}

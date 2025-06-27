@@ -14,7 +14,8 @@ class MainChatScreen extends StatelessWidget {
   const MainChatScreen({super.key});
 
   // Helper to show the Safety Number dialog
-  void _showSafetyNumberDialog(BuildContext context, MainLayoutViewModel viewModel) {
+  void _showSafetyNumberDialog(
+      BuildContext context, MainLayoutViewModel viewModel) {
     showDialog(
       context: context,
       builder: (context) {
@@ -25,15 +26,20 @@ class MainChatScreen extends StatelessWidget {
             if (snapshot.connectionState == ConnectionState.waiting) {
               content = const Center(child: CircularProgressIndicator());
             } else if (snapshot.hasError || snapshot.data == null) {
-              content = const Text("Could not generate Safety Number. The session may not be secure.");
+              content = const Text(
+                  "Could not generate Safety Number. The session may not be secure.");
             } else {
               content = RichText(
                 textAlign: TextAlign.center,
                 text: TextSpan(
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(fontSize: 16),
+                  style: Theme.of(context)
+                      .textTheme
+                      .bodyMedium
+                      ?.copyWith(fontSize: 16),
                   children: [
                     const TextSpan(
-                      text: "To verify this connection is secure, compare this Safety Number with the other user through a separate channel (e.g., a phone call).\n\nIf they match, your connection is secure and private.\n\n",
+                      text:
+                          "To verify this connection is secure, compare this Safety Number with the other user through a separate channel (e.g., a phone call).\n\nIf they match, your connection is secure and private.\n\n",
                     ),
                     TextSpan(
                       text: snapshot.data!,
@@ -65,7 +71,8 @@ class MainChatScreen extends StatelessWidget {
   }
 
   // NEW: Bottom sheet for encryption options
-  void _showEncryptionOptions(BuildContext context, MainLayoutViewModel viewModel, EncryptionStatus status) {
+  void _showEncryptionOptions(BuildContext context,
+      MainLayoutViewModel viewModel, EncryptionStatus status) {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF313338),
@@ -77,7 +84,8 @@ class MainChatScreen extends StatelessWidget {
               if (status == EncryptionStatus.active) ...[
                 ListTile(
                   leading: const Icon(Icons.verified_user, color: Colors.green),
-                  title: const Text('Verify Safety Number', style: TextStyle(color: Colors.white)),
+                  title: const Text('Verify Safety Number',
+                      style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     _showSafetyNumberDialog(context, viewModel);
@@ -85,7 +93,8 @@ class MainChatScreen extends StatelessWidget {
                 ),
                 ListTile(
                   leading: const Icon(Icons.lock_open, color: Colors.red),
-                  title: const Text('End Encryption', style: TextStyle(color: Colors.red)),
+                  title: const Text('End Encryption',
+                      style: TextStyle(color: Colors.red)),
                   onTap: () {
                     Navigator.pop(context);
                     viewModel.toggleEncryption();
@@ -94,7 +103,8 @@ class MainChatScreen extends StatelessWidget {
               ] else if (status == EncryptionStatus.none) ...[
                 ListTile(
                   leading: const Icon(Icons.lock, color: Colors.green),
-                  title: const Text('Start Encrypted Session', style: TextStyle(color: Colors.white)),
+                  title: const Text('Start Encrypted Session',
+                      style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     viewModel.toggleEncryption();
@@ -103,12 +113,14 @@ class MainChatScreen extends StatelessWidget {
               ] else if (status == EncryptionStatus.pending) ...[
                 const ListTile(
                   leading: Icon(Icons.lock_clock, color: Colors.amber),
-                  title: Text('Encryption Pending...', style: TextStyle(color: Colors.amber)),
+                  title: Text('Encryption Pending...',
+                      style: TextStyle(color: Colors.amber)),
                 ),
               ] else if (status == EncryptionStatus.error) ...[
                 ListTile(
                   leading: const Icon(Icons.error, color: Colors.red),
-                  title: const Text('Reset Encryption', style: TextStyle(color: Colors.white)),
+                  title: const Text('Reset Encryption',
+                      style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     viewModel.toggleEncryption();
@@ -118,7 +130,8 @@ class MainChatScreen extends StatelessWidget {
               const Divider(height: 1, color: Colors.white24),
               ListTile(
                 leading: const Icon(Icons.cancel, color: Colors.white),
-                title: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                title:
+                    const Text('Cancel', style: TextStyle(color: Colors.white)),
                 onTap: () => Navigator.pop(context),
               ),
             ],
@@ -159,7 +172,7 @@ class MainChatScreen extends StatelessWidget {
             lockTooltip = "Encryption request is pending...";
             break;
           case EncryptionStatus.error:
-             lockIconData = Icons.error;
+            lockIconData = Icons.error;
             lockIconColor = Colors.redAccent;
             lockTooltip = "Encryption error. Click to reset.";
             break;
@@ -210,34 +223,37 @@ class MainChatScreen extends StatelessWidget {
                         child: Row(
                           children: [
                             IconButton(
-                              icon: const Icon(Icons.menu, color: Colors.white54),
+                              icon:
+                                  const Icon(Icons.menu, color: Colors.white54),
                               tooltip: "Open Channels Drawer",
                               onPressed: viewModel.toggleLeftDrawer,
                             ),
                             Padding(
-                              padding: const EdgeInsets.symmetric(horizontal: 8),
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 8),
                               child: Text(
                                 viewModel.selectedConversationTarget,
-                                style: const TextStyle(color: Colors.white, fontSize: 20),
+                                style: const TextStyle(
+                                    color: Colors.white, fontSize: 20),
                               ),
                             ),
                             const Spacer(),
-                            // Encryption Lock Icon (now uses bottom sheet)
                             if (isDm)
                               IconButton(
                                 icon: Icon(lockIconData, color: lockIconColor),
                                 tooltip: lockTooltip,
-                                onPressed: () => _showEncryptionOptions(context, viewModel, encryptionStatus),
+                                onPressed: () => _showEncryptionOptions(
+                                    context, viewModel, encryptionStatus),
                               ),
                             IconButton(
-                              icon: const Icon(Icons.people, color: Colors.white70),
+                              icon: const Icon(Icons.people,
+                                  color: Colors.white70),
                               tooltip: "Open Members Drawer",
                               onPressed: viewModel.toggleRightDrawer,
                             ),
                           ],
                         ),
                       ),
-                      // Insert ChannelTopic widget for channels (not DMs)
                       if (!isDm) const ChannelTopic(),
                       Expanded(
                         child: MessageList(
@@ -252,29 +268,36 @@ class MainChatScreen extends StatelessWidget {
                         controller: viewModel.msgController,
                         onSendMessage: viewModel.handleSendMessage,
                         onProfilePressed: () {
+                          // --- REMOVED: viewModel.willNavigateInternally();
                           if (viewModel.token != null) {
                             Navigator.push(
                               context,
                               MaterialPageRoute(
-                                builder: (context) => ProfileScreen(authToken: viewModel.token!),
+                                builder: (context) => ProfileScreen(
+                                    authToken: viewModel.token!),
                               ),
                             );
                           }
                         },
                         allUsernames: allUsernames.toList(),
                         onAttachmentSelected: (filePath) async {
-                          final url = await viewModel.uploadAttachmentAndGetUrl(filePath);
+                          final url = await viewModel
+                              .uploadAttachmentAndGetUrl(filePath);
                           if (url != null && url.isNotEmpty) {
                             final controller = viewModel.msgController;
                             final text = controller.text;
                             final selection = controller.selection;
-                            final cursor = selection.baseOffset < 0 ? text.length : selection.baseOffset;
+                            final cursor = selection.baseOffset < 0
+                                ? text.length
+                                : selection.baseOffset;
                             final filename = url.split('/').last;
                             final hyperlink = '[$filename]($url)';
-                            final newText = text.replaceRange(cursor, cursor, hyperlink + ' ');
+                            final newText = text.replaceRange(
+                                cursor, cursor, hyperlink + ' ');
                             controller.value = controller.value.copyWith(
                               text: newText,
-                              selection: TextSelection.collapsed(offset: cursor + hyperlink.length + 1),
+                              selection: TextSelection.collapsed(
+                                  offset: cursor + hyperlink.length + 1),
                             );
                           }
                         },
@@ -288,8 +311,10 @@ class MainChatScreen extends StatelessWidget {
                     duration: const Duration(milliseconds: 300),
                     child: GestureDetector(
                       onTap: () {
-                        if (viewModel.showLeftDrawer) viewModel.toggleLeftDrawer();
-                        if (viewModel.showRightDrawer) viewModel.toggleRightDrawer();
+                        if (viewModel.showLeftDrawer)
+                          viewModel.toggleLeftDrawer();
+                        if (viewModel.showRightDrawer)
+                          viewModel.toggleRightDrawer();
                       },
                       child: Container(
                         color: Colors.black.withOpacity(0.5),
@@ -309,7 +334,8 @@ class MainChatScreen extends StatelessWidget {
                     userStatuses: viewModel.chatState.userStatuses,
                     joinedChannels: viewModel.joinedPublicChannelNames,
                     unjoinedChannels: viewModel.unjoinedPublicChannelNames,
-                    selectedConversationTarget: viewModel.selectedConversationTarget,
+                    selectedConversationTarget:
+                        viewModel.selectedConversationTarget,
                     onChannelSelected: viewModel.onChannelSelected,
                     onChannelPart: viewModel.partChannel,
                     onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,

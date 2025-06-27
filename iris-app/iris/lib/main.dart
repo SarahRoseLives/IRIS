@@ -12,9 +12,10 @@ import 'services/encryption_service.dart';
 import 'main_layout.dart';
 import 'screens/login_screen.dart';
 import 'package:iris/services/update_service.dart';
-// START OF CHANGE: Import ChatState to register it
+// Import ChatState to register it
 import 'package:iris/viewmodels/chat_state.dart';
-// END OF CHANGE
+// Import the fingerprint gate widget (only once!)
+import 'widgets/fingerprint_gate.dart';
 
 // Static class for pending notification navigation and message data.
 class PendingNotification {
@@ -25,49 +26,39 @@ class PendingNotification {
 final getIt = GetIt.instance;
 
 void setupLocator() {
-  // Register FlutterLocalNotificationsPlugin if not already registered
   if (!getIt.isRegistered<FlutterLocalNotificationsPlugin>()) {
     getIt.registerSingleton<FlutterLocalNotificationsPlugin>(
         FlutterLocalNotificationsPlugin());
   }
-  // Register NotificationService if not already registered
   if (!getIt.isRegistered<NotificationService>()) {
     getIt.registerSingleton<NotificationService>(NotificationService());
   }
-  // Register WebSocketService if not already registered
   if (!getIt.isRegistered<WebSocketService>()) {
     getIt.registerSingleton<WebSocketService>(WebSocketService());
   }
-  // Register EncryptionService if not already registered
   if (!getIt.isRegistered<EncryptionService>()) {
     getIt.registerSingleton<EncryptionService>(EncryptionService());
   }
-  // START OF CHANGE: Register ChatState as a singleton
-  // This ensures the state is not lost when the UI is rebuilt.
   if (!getIt.isRegistered<ChatState>()) {
     getIt.registerSingleton<ChatState>(ChatState());
   }
-  // END OF CHANGE
 }
 
 // Entry point for background Firebase messages
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  // Ensure locators are set up for background isolate
   setupLocator();
   final notificationService = getIt<NotificationService>();
   await notificationService.setupLocalNotifications();
   print("Handling a background message: ${message.messageId}");
 
-  // --- NEW: Store DM messages if received in background ---
   if (message.data['type'] == 'private_message') {
     final prefs = await SharedPreferences.getInstance();
     final pendingMessages = prefs.getStringList('pending_dm_messages') ?? [];
     pendingMessages.add(json.encode(message.data));
     await prefs.setStringList('pending_dm_messages', pendingMessages);
   }
-  // --------------------------------------------------------
   notificationService.showFlutterNotification(message);
 }
 
@@ -87,24 +78,18 @@ void onDidReceiveNotificationResponse(
 }
 
 Future<void> main() async {
-  // Ensure Flutter engine is initialized
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize Firebase
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
-  // Set up background message handler for Firebase
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
 
-  // Set up all service locators
   setupLocator();
 
-  // Initialize our custom services that depend on locators
   await getIt<EncryptionService>().initialize();
   await getIt<NotificationService>().init();
 
-  // Run the app
   runApp(const IRISApp());
 }
 
@@ -122,13 +107,14 @@ class IRISApp extends StatelessWidget {
           secondary: Color(0xFF5865F2),
         ),
       ),
-      home: AuthWrapper(),
+      home: FingerprintGate(
+        child: AuthWrapper(),
+      ),
       debugShowCheckedModeBanner: false,
     );
   }
 }
 
-// AuthWrapper handles the initial logic of checking if a user is logged in.
 class AuthWrapper extends StatefulWidget {
   static final GlobalKey<NavigatorState> globalKey = GlobalKey<NavigatorState>();
   static final GlobalKey<_AuthWrapperState> stateKey =
@@ -136,7 +122,6 @@ class AuthWrapper extends StatefulWidget {
 
   AuthWrapper() : super(key: stateKey);
 
-  // Global method to force logout from anywhere in the app
   static Future<void> forceLogout({bool showExpiredMessage = false}) async {
     stateKey.currentState?.logoutAndShowLogin(showExpiredMessage: showExpiredMessage);
   }
@@ -155,43 +140,36 @@ class _AuthWrapperState extends State<AuthWrapper> {
     _checkForUpdates();
   }
 
-  // Check SharedPreferences for a stored token to decide where to navigate
   Future<void> _checkLoginStatus() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token');
     final username = prefs.getString('username');
 
     if (mounted && token != null && username != null) {
-      // If token exists, go directly to the main layout
       Navigator.of(context).pushReplacement(
         MaterialPageRoute(
           builder: (_) => IrisLayout(username: username, token: token),
         ),
       );
     } else {
-      // Otherwise, show the login screen
       setState(() {
         _isLoading = false;
       });
     }
   }
 
-  // Periodically check for app updates from GitHub
   Future<void> _checkForUpdates() async {
-    // Add a small delay to not interfere with startup animations
     await Future.delayed(const Duration(seconds: 2));
     if (mounted) {
       await UpdateService.checkForUpdates(context);
     }
   }
 
-  // Clear credentials and navigate back to the login screen
   Future<void> logoutAndShowLogin({bool showExpiredMessage = false}) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
     await prefs.remove('username');
 
-    // Use the global navigator key to ensure we have a valid context
     if (AuthWrapper.globalKey.currentContext != null && mounted) {
       Navigator.of(AuthWrapper.globalKey.currentContext!).pushAndRemoveUntil(
         MaterialPageRoute(
@@ -203,7 +181,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
 
   @override
   Widget build(BuildContext context) {
-    // Show a loading spinner while checking login status
     if (_isLoading) {
       return const Scaffold(
         backgroundColor: Color(0xFF313338),
@@ -212,7 +189,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
         ),
       );
     }
-    // If not loading and not logged in, show the LoginScreen
     return LoginScreen(showExpiredMessage: false);
   }
 }
