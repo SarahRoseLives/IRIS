@@ -8,11 +8,12 @@ import '../widgets/message_list.dart';
 import '../widgets/message_input.dart';
 import '../screens/profile_screen.dart';
 import '../models/encryption_session.dart';
+import '../widgets/channel_topic.dart'; // <-- Add this import
 
 class MainChatScreen extends StatelessWidget {
   const MainChatScreen({super.key});
 
-  // NEW: Helper to show the Safety Number dialog
+  // Helper to show the Safety Number dialog
   void _showSafetyNumberDialog(BuildContext context, MainLayoutViewModel viewModel) {
     showDialog(
       context: context,
@@ -58,6 +59,70 @@ class MainChatScreen extends StatelessWidget {
               ],
             );
           },
+        );
+      },
+    );
+  }
+
+  // NEW: Bottom sheet for encryption options
+  void _showEncryptionOptions(BuildContext context, MainLayoutViewModel viewModel, EncryptionStatus status) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF313338),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (status == EncryptionStatus.active) ...[
+                ListTile(
+                  leading: const Icon(Icons.verified_user, color: Colors.green),
+                  title: const Text('Verify Safety Number', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    _showSafetyNumberDialog(context, viewModel);
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.lock_open, color: Colors.red),
+                  title: const Text('End Encryption', style: TextStyle(color: Colors.red)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    viewModel.toggleEncryption();
+                  },
+                ),
+              ] else if (status == EncryptionStatus.none) ...[
+                ListTile(
+                  leading: const Icon(Icons.lock, color: Colors.green),
+                  title: const Text('Start Encrypted Session', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    viewModel.toggleEncryption();
+                  },
+                ),
+              ] else if (status == EncryptionStatus.pending) ...[
+                const ListTile(
+                  leading: Icon(Icons.lock_clock, color: Colors.amber),
+                  title: Text('Encryption Pending...', style: TextStyle(color: Colors.amber)),
+                ),
+              ] else if (status == EncryptionStatus.error) ...[
+                ListTile(
+                  leading: const Icon(Icons.error, color: Colors.red),
+                  title: const Text('Reset Encryption', style: TextStyle(color: Colors.white)),
+                  onTap: () {
+                    Navigator.pop(context);
+                    viewModel.toggleEncryption();
+                  },
+                ),
+              ],
+              const Divider(height: 1, color: Colors.white24),
+              ListTile(
+                leading: const Icon(Icons.cancel, color: Colors.white),
+                title: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
         );
       },
     );
@@ -157,18 +222,12 @@ class MainChatScreen extends StatelessWidget {
                               ),
                             ),
                             const Spacer(),
-                            // NEW: Encryption Lock Icon
+                            // Encryption Lock Icon (now uses bottom sheet)
                             if (isDm)
                               IconButton(
                                 icon: Icon(lockIconData, color: lockIconColor),
                                 tooltip: lockTooltip,
-                                onPressed: () {
-                                   if (encryptionStatus == EncryptionStatus.active) {
-                                      _showSafetyNumberDialog(context, viewModel);
-                                   } else {
-                                      viewModel.toggleEncryption();
-                                   }
-                                }
+                                onPressed: () => _showEncryptionOptions(context, viewModel, encryptionStatus),
                               ),
                             IconButton(
                               icon: const Icon(Icons.people, color: Colors.white70),
@@ -178,6 +237,8 @@ class MainChatScreen extends StatelessWidget {
                           ],
                         ),
                       ),
+                      // Insert ChannelTopic widget for channels (not DMs)
+                      if (!isDm) const ChannelTopic(),
                       Expanded(
                         child: MessageList(
                           messages: viewModel.currentChannelMessages,
@@ -253,7 +314,7 @@ class MainChatScreen extends StatelessWidget {
                     onChannelPart: viewModel.partChannel,
                     onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
                     onDmSelected: viewModel.onDmSelected,
-                    onRemoveDm: viewModel.removeDmChannel, // <-- ADD THIS
+                    onRemoveDm: viewModel.removeDmChannel,
                     onIrisTap: viewModel.selectMainView,
                     loadingChannels: viewModel.loadingChannels,
                     error: viewModel.channelError,
@@ -262,9 +323,9 @@ class MainChatScreen extends StatelessWidget {
                     onCloseDrawer: viewModel.toggleLeftDrawer,
                     unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
                     onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
-                    hasUnreadMessages: viewModel.hasUnreadMessages, // <-- add this line
-                    getLastMessage: viewModel.getLastMessage,       // <-- and this
-                    currentUsername: viewModel.username,            // <-- and this
+                    hasUnreadMessages: viewModel.hasUnreadMessages,
+                    getLastMessage: viewModel.getLastMessage,
+                    currentUsername: viewModel.username,
                   ),
                 ),
                 AnimatedPositioned(

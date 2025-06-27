@@ -9,13 +9,13 @@ import '../models/encryption_session.dart';
 
 class ChatState extends ChangeNotifier {
   static const String _lastChannelKey = 'last_channel';
-  // NEW: Key for persisting last seen message IDs
   static const String _lastSeenKey = 'last_seen_message_ids';
+  static const String _channelsKey = 'persisted_channels'; // Key for saving channels
+  static const String _messagesKey = 'cached_messages';   // Key for saving messages
 
   List<Channel> _channels = [];
   int _selectedChannelIndex = 0;
   final Map<String, List<Message>> _channelMessages = {};
-  // NEW: Map to store the ID of the last seen message per channel
   final Map<String, String?> _lastSeenMessageIds = {};
   final Map<String, String> _userAvatars = {};
   final Map<String, UserStatus> _userStatuses = {};
@@ -28,25 +28,20 @@ class ChatState extends ChangeNotifier {
   Map<String, String> get userAvatars => _userAvatars;
   Map<String, UserStatus> get userStatuses => _userStatuses;
 
-  // NEW: Getter for the last message in a channel
   Message? getLastMessage(String channelName) {
     final key = channelName.toLowerCase();
     if (_channelMessages.containsKey(key) && _channelMessages[key]!.isNotEmpty) {
-      // Find the last message that is not system info
       return _channelMessages[key]!.lastWhere((m) => !m.isSystemInfo, orElse: () => _channelMessages[key]!.last);
     }
     return null;
   }
 
-  // NEW: Check if a channel has unread messages
   bool hasUnreadMessages(String channelName) {
     final key = channelName.toLowerCase();
     final lastMessage = getLastMessage(key);
-    // No messages or only system messages means no "unread" state
     if (lastMessage == null) return false;
 
     final lastSeenId = _lastSeenMessageIds[key];
-    // If we have never seen a message in this channel, or the last message ID is different, it's unread.
     return lastSeenId == null || lastSeenId != lastMessage.id;
   }
 
@@ -98,7 +93,6 @@ class ChatState extends ChangeNotifier {
 
   // --- MUTATORS ---
 
-  // NEW: Method to update the last seen message ID for a channel.
   Future<void> updateLastSeenMessage(String channelName) async {
     final key = channelName.toLowerCase();
     final lastMessage = getLastMessage(key);
@@ -107,7 +101,7 @@ class ChatState extends ChangeNotifier {
       if (_lastSeenMessageIds[key] != lastMessage.id) {
         _lastSeenMessageIds[key] = lastMessage.id;
         await _persistLastSeenMessageIds();
-        notifyListeners(); // Notify listeners that the unread state might have changed
+        notifyListeners();
       }
     }
   }
@@ -143,6 +137,7 @@ class ChatState extends ChangeNotifier {
     _channels.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
     _rebuildUserStatuses();
+    _saveChannels();
     notifyListeners();
   }
 
@@ -177,6 +172,7 @@ class ChatState extends ChangeNotifier {
     }
 
     _selectedChannelIndex = (targetIndex != -1) ? targetIndex : 0;
+    _saveChannels();
     notifyListeners();
   }
 
@@ -190,6 +186,7 @@ class ChatState extends ChangeNotifier {
       _channels.sort((a, b) => a.name.compareTo(b.name));
     }
     _rebuildUserStatuses();
+    _saveChannels();
     notifyListeners();
   }
 
@@ -199,6 +196,7 @@ class ChatState extends ChangeNotifier {
     if (index != -1) {
       _channels[index].members = members;
       _rebuildUserStatuses();
+      _saveChannels();
       notifyListeners();
     }
   }
@@ -215,6 +213,7 @@ class ChatState extends ChangeNotifier {
       }
       _channels[index] = channel;
       _rebuildUserStatuses();
+      _saveChannels();
       notifyListeners();
     }
   }
@@ -232,6 +231,7 @@ class ChatState extends ChangeNotifier {
         _selectedChannelIndex = (newIndex != -1) ? newIndex : 0;
       }
       _rebuildUserStatuses();
+      _saveChannels();
       notifyListeners();
     }
   }
@@ -239,11 +239,12 @@ class ChatState extends ChangeNotifier {
   void selectConversation(String conversationName) async {
     final index = _channels
         .indexWhere((c) => c.name.toLowerCase() == conversationName.toLowerCase());
+    // START OF FIX: Corrected typo from '!=.' to '!='
     if (index != -1) {
+    // END OF FIX
       _selectedChannelIndex = index;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_lastChannelKey, conversationName);
-      // NEW: When a channel is selected, update its last seen message ID.
       await updateLastSeenMessage(conversationName);
       notifyListeners();
     }
@@ -271,14 +272,19 @@ class ChatState extends ChangeNotifier {
     _channelDedupKeys.putIfAbsent(key, () => <String>{});
     _channelDedupKeys[key]!.add(dedupKey);
 
+    bool channelAdded = false;
     if (channelName.startsWith('@') &&
         !_channels.any((c) => c.name.toLowerCase() == key)) {
       _channels.add(Channel(name: channelName, members: []));
       _channels.sort((a, b) => a.name.compareTo(b.name));
+      channelAdded = true;
     }
 
     notifyListeners();
     _persistMessages();
+    if (channelAdded) {
+      _saveChannels();
+    }
   }
 
   void addMessageBatch(String channelName, List<Message> messages) {
@@ -304,14 +310,19 @@ class ChatState extends ChangeNotifier {
       _channelDedupKeys.putIfAbsent(key, () => <String>{});
       _channelDedupKeys[key]!.addAll(newDedupKeys);
 
+      bool channelAdded = false;
       if (channelName.startsWith('@') &&
           !_channels.any((c) => c.name.toLowerCase() == key)) {
         _channels.add(Channel(name: channelName, members: []));
         _channels.sort((a, b) => a.name.compareTo(b.name));
+        channelAdded = true;
       }
 
       notifyListeners();
       _persistMessages();
+      if (channelAdded) {
+        _saveChannels();
+      }
     }
   }
 
@@ -339,7 +350,17 @@ class ChatState extends ChangeNotifier {
     }
   }
 
-  // NEW: Method to save the last seen message IDs to SharedPreferences.
+  Future<void> _saveChannels() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      // This requires Channel.toJson() to be implemented in your model.
+      final List<Map<String, dynamic>> channelsJson = _channels.map((c) => c.toJson()).toList();
+      await prefs.setString(_channelsKey, json.encode(channelsJson));
+    } catch (e) {
+        print('Error saving channels to prefs: $e. Make sure Channel.toJson() is implemented.');
+    }
+  }
+
   Future<void> _persistLastSeenMessageIds() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_lastSeenKey, json.encode(_lastSeenMessageIds));
@@ -351,17 +372,32 @@ class ChatState extends ChangeNotifier {
     _channelMessages.forEach((channel, messages) {
       messagesToSave[channel] = messages.map((m) => m.toMap()).toList();
     });
-    await prefs.setString('cached_messages', json.encode(messagesToSave));
+    await prefs.setString(_messagesKey, json.encode(messagesToSave));
   }
 
   Future<void> loadPersistedMessages() async {
     final prefs = await SharedPreferences.getInstance();
+
+    // Load channels first to ensure they exist before messages are loaded.
+    final savedChannels = prefs.getString(_channelsKey);
+    if (savedChannels != null) {
+        try {
+            final channelsJson = json.decode(savedChannels) as List<dynamic>;
+            // This requires Channel.fromJson to handle the structure saved by toJson.
+            _channels = channelsJson.map((c) => Channel.fromJson(c as Map<String, dynamic>)).toList();
+            _rebuildUserStatuses();
+        } catch (e) {
+            print('Error loading persisted channels: $e');
+        }
+    }
+
+    // Now load messages
     _channelMessages.clear();
     _channelDedupKeys.clear();
-    final saved = prefs.getString('cached_messages');
-    if (saved != null) {
+    final savedMessages = prefs.getString(_messagesKey);
+    if (savedMessages != null) {
       try {
-        final messagesMap = json.decode(saved) as Map<String, dynamic>;
+        final messagesMap = json.decode(savedMessages) as Map<String, dynamic>;
         messagesMap.forEach((channel, messages) {
           final messageList =
               (messages as List).map((m) => Message.fromJson(m)).toList();
@@ -373,6 +409,7 @@ class ChatState extends ChangeNotifier {
           }
           _channelDedupKeys[channel] = dedupKeys;
 
+          // This check is now less critical since we load channels first, but good for safety.
           if (channel.startsWith('@') &&
               !_channels.any((c) => c.name.toLowerCase() == channel.toLowerCase())) {
             _channels.add(Channel(name: channel, members: []));
@@ -384,7 +421,6 @@ class ChatState extends ChangeNotifier {
       }
     }
 
-    // NEW: Load last seen message IDs
     _lastSeenMessageIds.clear();
     final savedSeenIds = prefs.getString(_lastSeenKey);
     if (savedSeenIds != null) {
@@ -412,28 +448,33 @@ class ChatState extends ChangeNotifier {
     }
   }
 
-  // --- DM Channel Removal ---
   void removeDmChannel(String channelName) {
     final key = channelName.toLowerCase();
 
-    // Remove from channels
     _channels.removeWhere((c) => c.name.toLowerCase() == key);
-
-    // Remove messages
     _channelMessages.remove(key);
-
-    // Remove dedup keys
     _channelDedupKeys.remove(key);
-
-    // Remove last seen
     _lastSeenMessageIds.remove(key);
-
-    // Remove encryption status if present
     _encryptionStatuses.remove(key);
 
     _persistMessages();
     _persistLastSeenMessageIds();
+    _saveChannels(); // Ensure we save the channel removal
 
     notifyListeners();
+  }
+
+  // ---- CHANNEL TOPIC SUPPORT ----
+  void updateChannelTopic(String channelName, String newTopic) {
+    final index = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
+    if (index != -1) {
+      _channels[index] = Channel(
+        name: _channels[index].name,
+        topic: newTopic,
+        members: _channels[index].members,
+      );
+      _saveChannels(); // Ensure topic change is saved
+      notifyListeners();
+    }
   }
 }

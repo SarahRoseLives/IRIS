@@ -12,6 +12,7 @@ import (
 
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
+	"iris-gateway/events"
 	"iris-gateway/push"
 	"iris-gateway/session"
 )
@@ -256,6 +257,29 @@ func InitGatewayBot() error {
 			}
 		})
 		// --- END UPDATED LOGIC ---
+	})
+
+	// --- TOPIC HANDLING: Add callback for TOPIC and broadcast to all sessions in channel ---
+	ircConn.AddCallback("TOPIC", func(e *ircevent.Event) {
+		if len(e.Arguments) >= 2 {
+			channel := e.Arguments[0]
+			topic := e.Arguments[1]
+
+			// Broadcast topic change to all users in the channel
+			session.ForEachSession(func(s *session.UserSession) {
+				s.Mutex.RLock()
+				_, inChannel := s.Channels[strings.ToLower(channel)]
+				s.Mutex.RUnlock()
+
+				if inChannel {
+					s.Broadcast(events.EventTypeTopicChange, map[string]interface{}{
+						"channel": channel,
+						"topic":   topic,
+						"set_by":  e.Nick,
+					})
+				}
+			})
+		}
 	})
 
 	ircConn.AddCallback("INVITE", func(e *ircevent.Event) {

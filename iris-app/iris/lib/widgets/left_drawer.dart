@@ -113,6 +113,48 @@ class LeftDrawer extends StatelessWidget {
     );
   }
 
+  void _showLeaveDialog(BuildContext context, String channel) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF313338),
+      builder: (BuildContext context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  'Leave $channel?',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+              const Divider(height: 1, color: Colors.white24),
+              ListTile(
+                leading: const Icon(Icons.exit_to_app, color: Colors.red),
+                title: const Text('Leave Channel', style: TextStyle(color: Colors.red)),
+                onTap: () {
+                  Navigator.pop(context);
+                  onChannelPart(channel);
+                  onCloseDrawer();
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.cancel, color: Colors.white),
+                title: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final sortedDms = List<String>.from(dms)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
@@ -321,32 +363,6 @@ class LeftDrawer extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-
-  void _showLeaveDialog(BuildContext context, String channel) {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) {
-        return AlertDialog(
-          title: const Text('Leave Channel'),
-          content: Text('Are you sure you want to leave $channel?'),
-          actions: <Widget>[
-            TextButton(
-              child: const Text('Cancel'),
-              onPressed: () => Navigator.of(context).pop(),
-            ),
-            TextButton(
-              child: const Text('Leave', style: TextStyle(color: Colors.red)),
-              onPressed: () {
-                Navigator.of(context).pop();
-                onChannelPart(channel);
-                onCloseDrawer();
-              },
-            ),
-          ],
-        );
-      },
     );
   }
 }

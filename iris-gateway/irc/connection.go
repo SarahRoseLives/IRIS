@@ -180,6 +180,8 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 			})
 			connClient.SendRaw("NAMES " + channelName)
 			log.Printf("[IRC] Requested NAMES for newly joined channel %s", channelName)
+			// Request the channel topic after joining
+			connClient.SendRaw("TOPIC " + channelName)
 		} else {
 			log.Printf("[IRC] Another user (%s) joined %s. Refreshing NAMES.", joiningUser, channelName)
 			connClient.SendRaw("NAMES " + channelName)
@@ -202,6 +204,59 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 			connClient.SendRaw("NAMES " + channelName)
 		}
 	})
+
+	// --- START OF CHANGES ---
+
+	// This handles RPL_TOPIC, which is sent on joining a channel to give the current topic.
+	connClient.AddCallback("332", func(e *ircevent.Event) {
+		if len(e.Arguments) >= 3 {
+			channelName := e.Arguments[1]
+			topic := e.Arguments[2]
+
+			log.Printf("[IRC] Received initial TOPIC (332) for %s: %s", channelName, topic)
+
+			userSession.Mutex.Lock()
+			if channelState, exists := userSession.Channels[strings.ToLower(channelName)]; exists {
+				channelState.Mutex.Lock()
+				channelState.Topic = topic
+				channelState.LastUpdate = time.Now()
+				channelState.Mutex.Unlock()
+			}
+			userSession.Mutex.Unlock()
+
+			// Broadcast the topic to all clients so the UI updates
+			userSession.Broadcast("topic_change", map[string]interface{}{
+				"channel": channelName,
+				"topic":   topic,
+			})
+		}
+	})
+
+	// This handles the TOPIC command, which is sent when a user changes the topic.
+	connClient.AddCallback("TOPIC", func(e *ircevent.Event) {
+		if len(e.Arguments) >= 2 {
+			channelName := e.Arguments[0]
+			topic := e.Arguments[1]
+
+			userSession.Mutex.Lock()
+			if channelState, exists := userSession.Channels[strings.ToLower(channelName)]; exists {
+				channelState.Mutex.Lock()
+				channelState.Topic = topic
+				channelState.LastUpdate = time.Now()
+				channelState.Mutex.Unlock()
+
+				// Broadcast the topic change to all clients
+				userSession.Broadcast("topic_change", map[string]interface{}{
+					"channel": channelName,
+					"topic":   topic,
+					"set_by":  e.Nick,
+				})
+			}
+			userSession.Mutex.Unlock()
+		}
+	})
+
+	// --- END OF CHANGES ---
 
 	if username != config.Cfg.GatewayNick {
 		connClient.AddCallback("PRIVMSG", func(e *ircevent.Event) {
@@ -307,6 +362,8 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		log.Printf("[IRC] Received AWAY notification for %s. IsAway: %t", awayUserNick, isNowAway)
 		session.UpdateAwayStatusForAllSessions(awayUserNick, isNowAway)
 	})
+
+
 
 	connClient.AddCallback("QUIT", func(e *ircevent.Event) {
 		quittingUser := e.Nick

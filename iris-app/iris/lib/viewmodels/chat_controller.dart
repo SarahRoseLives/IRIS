@@ -186,6 +186,31 @@ class ChatController {
       chatState.addMessage(conversationTarget, newMessage);
       loadAvatarForUser(sender);
     });
+
+    // ----------- CHANNEL TOPIC SUPPORT -----------
+    _webSocketService.eventStream.listen((event) {
+      final String eventType = event['type'] ?? '';
+      final payload = event['payload'] ?? {};
+
+      if (eventType == 'topic_change') {
+        final channelName = payload['channel'] as String?;
+        final topic = payload['topic'] as String?;
+        if (channelName != null && topic != null) {
+          final updatedChannels = chatState.channels.map((c) {
+            if (c.name.toLowerCase() == channelName.toLowerCase()) {
+              return Channel(
+                name: c.name,
+                topic: topic,
+                members: c.members,
+              );
+            }
+            return c;
+          }).toList();
+          chatState.setChannels(updatedChannels);
+        }
+      }
+    });
+    // ----------- END CHANNEL TOPIC SUPPORT -----------
   }
 
   void _listenToMembersUpdate() {
@@ -208,6 +233,17 @@ class ChatController {
       _errorController.add(error);
     });
   }
+
+  // START OF CHANGE
+  /// Sends a raw structured message to the WebSocket.
+  /// This is used for commands that are not standard chat messages, like 'topic_change'.
+  void sendRawWebSocketMessage(Map<String, dynamic> message) {
+    // Note: This assumes your WebSocketService has a generic `send` method
+    // for sending any JSON object to the server, as the existing `sendMessage`
+    // is specific to sending chat messages (PRIVMSG).
+    _webSocketService.send(message);
+  }
+  // END OF CHANGE
 
   Future<void> handleSendMessage(String text) async {
     if (text.trim().isEmpty) return;

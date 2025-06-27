@@ -20,9 +20,10 @@ type ChannelMember struct {
 
 type ChannelState struct {
 	Name       string          `json:"name"`
+	Topic      string          `json:"topic"` // Now exported and included for topic support
 	Members    []ChannelMember `json:"members"`
 	LastUpdate time.Time       `json:"last_update"`
-	mutex      sync.Mutex      `json:"-"`
+	Mutex      sync.Mutex      `json:"-"`
 }
 
 func NewUserSession(username string) *UserSession {
@@ -62,6 +63,7 @@ func (s *UserSession) AddChannelToSession(channelName string) {
 	if _, ok := s.Channels[normalizedChannelName]; !ok {
 		s.Channels[normalizedChannelName] = &ChannelState{
 			Name:       normalizedChannelName,
+			Topic:      "",
 			Members:    []ChannelMember{},
 			LastUpdate: time.Now(),
 		}
@@ -146,10 +148,10 @@ func (s *UserSession) FinalizeChannelMembers(channelName string) {
 	s.Mutex.Unlock()
 
 	if exists {
-		channelState.mutex.Lock()
+		channelState.Mutex.Lock()
 		channelState.Members = parsedMembers
 		channelState.LastUpdate = time.Now()
-		channelState.mutex.Unlock()
+		channelState.Mutex.Unlock()
 		log.Printf("[Session.FinalizeChannelMembers] Finalized %d members for channel '%s', broadcasting update.", len(parsedMembers), normalizedChannelName)
 
 		go s.Broadcast("members_update", map[string]interface{}{
@@ -161,8 +163,6 @@ func (s *UserSession) FinalizeChannelMembers(channelName string) {
 	}
 }
 
-// UpdateAwayStatusForAllSessions is called by the AWAY IRCv3 event handler.
-// It updates away status for all sessions/channels where the user is visible and broadcasts updates.
 func UpdateAwayStatusForAllSessions(nick string, isAway bool) {
 	mutex.RLock()
 	defer mutex.RUnlock()
@@ -171,7 +171,7 @@ func UpdateAwayStatusForAllSessions(nick string, isAway bool) {
 		channelsToUpdate := make([]string, 0)
 		s.Mutex.RLock()
 		for chName, chState := range s.Channels {
-			chState.mutex.Lock()
+			chState.Mutex.Lock()
 			memberUpdated := false
 			for i := range chState.Members {
 				if strings.EqualFold(chState.Members[i].Nick, nick) {
@@ -180,7 +180,7 @@ func UpdateAwayStatusForAllSessions(nick string, isAway bool) {
 					break
 				}
 			}
-			chState.mutex.Unlock()
+			chState.Mutex.Unlock()
 			if memberUpdated {
 				channelsToUpdate = append(channelsToUpdate, chName)
 			}
@@ -193,10 +193,10 @@ func UpdateAwayStatusForAllSessions(nick string, isAway bool) {
 			s.Mutex.RUnlock()
 
 			if channelState != nil {
-				channelState.mutex.Lock()
+				channelState.Mutex.Lock()
 				finalMembers := make([]ChannelMember, len(channelState.Members))
 				copy(finalMembers, channelState.Members)
-				channelState.mutex.Unlock()
+				channelState.Mutex.Unlock()
 
 				log.Printf("[Session.UpdateAway] Broadcasting updated member list for channel %s to user %s", chName, s.Username)
 				go s.Broadcast("members_update", map[string]interface{}{

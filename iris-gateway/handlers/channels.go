@@ -114,6 +114,7 @@ func ListChannelsHandler(c *gin.Context) {
 
 	type channelInfo struct {
 		Name       string                  `json:"name"`
+		Topic      string                  `json:"topic"` // Add this line to include the topic
 		LastUpdate time.Time               `json:"last_update"`
 		Members    []session.ChannelMember `json:"members"`
 	}
@@ -122,6 +123,7 @@ func ListChannelsHandler(c *gin.Context) {
 	for _, ch := range sess.Channels {
 		channels = append(channels, channelInfo{
 			Name:       ch.Name,
+			Topic:      ch.Topic, // Add this line to set the topic
 			LastUpdate: ch.LastUpdate,
 			Members:    ch.Members,
 		})

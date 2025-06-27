@@ -4,3 +4,5 @@
 /iris-gateway/images/
 /iris-gateway/iris-gateway
 /release.keystore
+/iris-app/iris/web/firebase.json
+/iris-app/iris/firebase.json

@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"strings"
@@ -53,7 +54,7 @@ func WebSocketHandler(c *gin.Context) {
 	// This event contains everything the client needs to restore its UI.
 	sess.Mutex.RLock()
 	initialStatePayload := gin.H{
-		"channels": sess.Channels,
+		"channels": sess.Channels, // Now includes topics automatically since Topic is part of ChannelState
 		// You could add other initial state data here, like user settings etc.
 	}
 	sess.Mutex.RUnlock()
@@ -108,38 +109,60 @@ func WebSocketHandler(c *gin.Context) {
 			log.Printf("[WS] Received message from %s: %s (Type: %d)", sess.Username, string(p), messageType)
 
 			var clientMsg events.WsEvent
-			if err := json.Unmarshal(p, &clientMsg); err == nil {
-				if clientMsg.Type == "message" {
-					if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
-						channelName, channelOk := payload["channel_name"].(string)
-						text, textOk := payload["text"].(string)
+			if err := json.Unmarshal(p, &clientMsg); err != nil {
+				log.Printf("[WS] Failed to unmarshal incoming message from %s: %v", sess.Username, err)
+				continue
+			}
 
-						if channelOk && textOk {
-							lines := strings.Split(text, "\n")
-							for _, line := range lines {
-								ircLine := line
-								if len(ircLine) == 0 {
-									// Sending an empty line might not be supported, send a space instead
-									ircLine = " "
-								}
-								log.Printf("[WS] Sending IRC line to channel %s from %s: '%s'", channelName, sess.Username, ircLine)
-								sess.IRC.Privmsg(channelName, ircLine)
-								// Add a small delay to prevent being kicked for flooding
-								time.Sleep(100 * time.Millisecond)
+			// START OF CHANGES
+			switch clientMsg.Type {
+			case "message":
+				if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
+					channelName, channelOk := payload["channel_name"].(string)
+					text, textOk := payload["text"].(string)
+
+					if channelOk && textOk {
+						lines := strings.Split(text, "\n")
+						for _, line := range lines {
+							ircLine := line
+							if len(ircLine) == 0 {
+								// Sending an empty line might not be supported, send a space instead
+								ircLine = " "
 							}
-						} else {
-							log.Printf("[WS] Received malformed 'message' payload from %s: %v", sess.Username, payload)
+							log.Printf("[WS] Sending IRC line to channel %s from %s: '%s'", channelName, sess.Username, ircLine)
+							sess.IRC.Privmsg(channelName, ircLine)
+							// Add a small delay to prevent being kicked for flooding
+							time.Sleep(100 * time.Millisecond)
 						}
 					} else {
-						log.Printf("[WS] Invalid payload structure in 'message' from %s", sess.Username)
+						log.Printf("[WS] Received malformed 'message' payload from %s: %v", sess.Username, payload)
 					}
 				} else {
-					// Handle other event types like 'history' request, etc.
-					log.Printf("[WS] Received unhandled event type '%s' from %s", clientMsg.Type, sess.Username)
+					log.Printf("[WS] Invalid payload structure in 'message' from %s", sess.Username)
 				}
-			} else {
-				log.Printf("[WS] Failed to unmarshal incoming message from %s: %v", sess.Username, err)
+
+			case "topic_change":
+				if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
+					channel, chanOk := payload["channel"].(string)
+					newTopic, topicOk := payload["topic"].(string)
+
+					if chanOk && topicOk {
+						// Send to IRC
+						if sess.IRC != nil {
+							log.Printf("[WS] User %s sending TOPIC command for channel %s", sess.Username, channel)
+							sess.IRC.SendRaw(fmt.Sprintf("TOPIC %s :%s", channel, newTopic))
+						}
+					} else {
+						log.Printf("[WS] Received malformed 'topic_change' payload from %s: %v", sess.Username, payload)
+					}
+				} else {
+					log.Printf("[WS] Invalid payload structure in 'topic_change' from %s", sess.Username)
+				}
+
+			default:
+				log.Printf("[WS] Received unhandled event type '%s' from %s", clientMsg.Type, sess.Username)
 			}
+			// END OF CHANGES
 		}
 	}()
 }

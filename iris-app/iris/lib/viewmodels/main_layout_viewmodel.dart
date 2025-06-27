@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
+import 'package:get_it/get_it.dart';
 
+import '../main.dart';
 import '../services/websocket_service.dart';
 import '../services/notification_service.dart';
 import 'chat_state.dart';
@@ -70,7 +72,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    chatState = ChatState();
+    // START OF CHANGE
+    // Use the global singleton instance of ChatState from GetIt instead of creating a new one.
+    // This preserves the state across app restarts/UI rebuilds.
+    chatState = getIt<ChatState>();
+    // END OF CHANGE
+
     _chatController = ChatController(
       username: username,
       token: token!,
@@ -375,6 +382,45 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     chatState.removeDmChannel(dmChannelName);
     // Critical: Notify listeners after removal to update UI
     notifyListeners();
+  }
+
+  // ------ CHANNEL TOPIC SUPPORT ------
+
+  /// Allows an operator to update the channel topic. Optimistically updates local state and sends the topic command.
+  Future<void> updateChannelTopic(String newTopic) async {
+    try {
+      final channelName = selectedConversationTarget;
+      if (channelName.startsWith('#')) {
+        // Send the topic change command via WebSocket
+        // This relies on a new method in ChatController to send a structured message.
+        _chatController.sendRawWebSocketMessage({
+          'type': 'topic_change',
+          'payload': {
+            'channel': channelName,
+            'topic': newTopic,
+          },
+        });
+
+        // Optimistically update the local state
+        final updatedChannels = chatState.channels.map((c) {
+          if (c.name == channelName) {
+            return Channel(
+              name: c.name,
+              topic: newTopic,
+              members: c.members,
+            );
+          }
+          return c;
+        }).toList();
+
+        chatState.setChannels(updatedChannels);
+      }
+    } catch (e) {
+      chatState.addSystemMessage(
+        selectedConversationTarget,
+        'Failed to update topic: ${e.toString()}',
+      );
+    }
   }
 
   @override

@@ -38,20 +38,18 @@ class WebSocketService {
   final _errorController = StreamController<String>.broadcast();
   Stream<String> get errorStream => _errorController.stream;
 
+  // --- NEW: Event stream for server events like topic changes ---
+  final _eventController = StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get eventStream => _eventController.stream;
+
   WebSocketService() {
     _statusController.stream.listen((status) {
       _currentWsStatus = status;
     });
   }
 
-  // FIX: Remove incorrect line and add robust guard to prevent reconnecting
   void connect(String token) {
     if (_isDisposed) return;
-
-    // --- FIX: Remove this incorrect line ---
-    // _currentWsStatus = WebSocketStatus.disconnected;
-
-    // --- FIX: Prevent reconnecting if already connecting or connected ---
     if (_currentWsStatus == WebSocketStatus.connected || _currentWsStatus == WebSocketStatus.connecting) {
       print("[WebSocketService] Already connected or connecting. Skipping new connection attempt.");
       return;
@@ -100,7 +98,6 @@ class WebSocketService {
             }
             break;
           case 'message':
-            // --- DM SYNC ENHANCEMENT: Consistent DM channel naming ---
             String channelName = payload['channel_name']?.toLowerCase() ?? '';
             final bool isPrivateMessage = !channelName.startsWith('#');
 
@@ -128,6 +125,13 @@ class WebSocketService {
             break;
           case 'unauthorized':
             _handleUnauthorized();
+            break;
+          // --- NEW: handle topic_change and other server events ---
+          default:
+            if (!_isDisposed && event['type'] != null && payload != null) {
+              _eventController.add({'type': event['type'], 'payload': payload});
+              print("[WebSocketService] Event forwarded to eventStream: type=${event['type']} payload=${jsonEncode(payload)}");
+            }
             break;
         }
       }, onError: (e) {
@@ -208,14 +212,27 @@ class WebSocketService {
     print("[WebSocketService] Sent message: $messageToSend");
   }
 
-  // PATCH: Improved disconnect logic (cancel timer, close ws, only update status if not disposed)
+  // START OF CHANGE
+  /// Sends a generic, structured message to the WebSocket server.
+  void send(Map<String, dynamic> message) {
+    if (_isDisposed) return;
+    if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
+      if (!_isDisposed) _errorController.add("Cannot send event: WebSocket not connected.");
+      print("[WebSocketService] Cannot send event: WS not connected.");
+      return;
+    }
+    final messageToSend = jsonEncode(message);
+    _ws?.sink.add(messageToSend);
+    print("[WebSocketService] Sent event: $messageToSend");
+  }
+  // END OF CHANGE
+
   void disconnect() {
     if (_isDisposed) return;
 
     _reconnectTimer?.cancel();
     _ws?.sink.close();
 
-    // Only update status if not disposed
     if (!_isDisposed) {
       _statusController.add(WebSocketStatus.disconnected);
     }
@@ -232,5 +249,6 @@ class WebSocketService {
     _membersUpdateController.close();
     _initialStateController.close();
     _errorController.close();
+    _eventController.close();
   }
 }

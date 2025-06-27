@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../models/channel_member.dart';
 import '../models/user_status.dart';
 import 'user_avatar.dart';
 import '../utils/irc_helpers.dart';
+import '../viewmodels/main_layout_viewmodel.dart';
 
 class RightDrawer extends StatelessWidget {
   final List<ChannelMember> members;
@@ -42,6 +44,37 @@ class RightDrawer extends StatelessWidget {
       map.putIfAbsent(prefix, () => []).add(member);
     }
     return map;
+  }
+
+  // Member options bottom sheet with working DM
+  void _showMemberOptions(BuildContext context, String username) {
+    final viewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: const Color(0xFF313338),
+      builder: (context) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.message, color: Colors.white),
+                title: const Text('Send Direct Message', style: TextStyle(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(context);
+                  viewModel.startNewDM(username);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.cancel, color: Colors.white),
+                title: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                onTap: () => Navigator.pop(context),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -104,6 +137,7 @@ class RightDrawer extends StatelessWidget {
                   ]
                 ],
               ),
+              onLongPress: () => _showMemberOptions(context, member.nick),
             );
           }));
         }

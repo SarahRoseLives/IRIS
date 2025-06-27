@@ -58,13 +58,15 @@ class Message {
   }
 }
 
-/// Represents an IRC channel, including its members.
+/// Represents an IRC channel, including its members and topic.
 class Channel {
   final String name;
+  final String topic; // Added topic field
   List<ChannelMember> members;
 
   Channel({
     required this.name,
+    this.topic = '', // Default to empty string
     required this.members,
   });
 
@@ -74,7 +76,20 @@ class Channel {
 
     return Channel(
       name: json['name'] ?? '',
+      topic: json['topic'] ?? '', // Parse topic from JSON
       members: members,
     );
   }
+
+  // START OF CHANGE
+  /// Converts a Channel instance to a JSON map for persistence.
+  Map<String, dynamic> toJson() {
+    return {
+      'name': name,
+      'topic': topic,
+      // This requires the ChannelMember class to also have a toJson() method.
+      'members': members.map((m) => m.toJson()).toList(),
+    };
+  }
+  // END OF CHANGE
 }

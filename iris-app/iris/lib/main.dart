@@ -12,6 +12,9 @@ import 'services/encryption_service.dart';
 import 'main_layout.dart';
 import 'screens/login_screen.dart';
 import 'package:iris/services/update_service.dart';
+// START OF CHANGE: Import ChatState to register it
+import 'package:iris/viewmodels/chat_state.dart';
+// END OF CHANGE
 
 // Static class for pending notification navigation and message data.
 class PendingNotification {
@@ -39,6 +42,12 @@ void setupLocator() {
   if (!getIt.isRegistered<EncryptionService>()) {
     getIt.registerSingleton<EncryptionService>(EncryptionService());
   }
+  // START OF CHANGE: Register ChatState as a singleton
+  // This ensures the state is not lost when the UI is rebuilt.
+  if (!getIt.isRegistered<ChatState>()) {
+    getIt.registerSingleton<ChatState>(ChatState());
+  }
+  // END OF CHANGE
 }
 
 // Entry point for background Firebase messages

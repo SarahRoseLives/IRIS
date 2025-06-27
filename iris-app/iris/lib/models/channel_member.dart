@@ -16,4 +16,13 @@ class ChannelMember {
       isAway: json['is_away'] ?? false, // ADDED: expects backend to send 'is_away'
     );
   }
+
+  // START OF CHANGE
+  /// Converts a ChannelMember instance to a JSON map for persistence.
+  Map<String, dynamic> toJson() => {
+        'nick': nick,
+        'prefix': prefix,
+        'is_away': isAway,
+      };
+  // END OF CHANGE
 }
