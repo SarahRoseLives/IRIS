@@ -3,9 +3,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../models/login_response.dart';
 import '../main_layout.dart';
+import '../utils/motd.dart'; // <-- Add this import
 
 class LoginScreen extends StatefulWidget {
-  // MODIFIED: Accept a flag to show the expired message.
   final bool showExpiredMessage;
   const LoginScreen({super.key, this.showExpiredMessage = false});
 
@@ -21,17 +21,19 @@ class _LoginScreenState extends State<LoginScreen> {
   String? _message;
   final ApiService _apiService = ApiService();
 
+  late final String _motd;
+
   @override
   void initState() {
     super.initState();
-    // NEW: If the flag is true, set the message after the first frame.
+    _motd = Motd.random(); // Set once per screen instantiation
     if (widget.showExpiredMessage) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-         if (mounted) {
-           setState(() {
-              _message = 'Your session has expired. Please login again.';
-           });
-         }
+        if (mounted) {
+          setState(() {
+            _message = 'Your session has expired. Please login again.';
+          });
+        }
       });
     }
   }
@@ -113,6 +115,11 @@ class _LoginScreenState extends State<LoginScreen> {
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 children: [
+                  Image.asset(
+                    'assets/logo.png',
+                    height: 84,
+                  ),
+                  const SizedBox(height: 18),
                   const Text(
                     'IRIS',
                     style: TextStyle(
@@ -130,7 +137,18 @@ class _LoginScreenState extends State<LoginScreen> {
                       ],
                     ),
                   ),
-                  const SizedBox(height: 30),
+                  const SizedBox(height: 8),
+                  // --- MOTD under IRIS title ---
+                  Text(
+                    _motd,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Colors.white70,
+                      fontStyle: FontStyle.italic,
+                      fontSize: 15,
+                    ),
+                  ),
+                  const SizedBox(height: 22),
                   TextFormField(
                     controller: _usernameController,
                     decoration: InputDecoration(
