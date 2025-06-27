@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 	"iris-gateway/config"
 	"iris-gateway/handlers"
@@ -56,6 +57,22 @@ func main() {
 	}()
 
 	router := gin.Default()
+
+	// ---- CORS Middleware ----
+	// For development, allow all origins.
+	router.Use(cors.Default())
+
+	// For production, use this instead:
+	/*
+	router.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{"http://localhost:38807"}, // your Flutter web address
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge: 12 * time.Hour,
+	}))
+	*/
 
 	// Serve static avatar files
 	router.StaticFS("/avatars", http.Dir(config.Cfg.AvatarDir))

@@ -6,3 +6,4 @@
 /release.keystore
 /iris-app/iris/web/firebase.json
 /iris-app/iris/firebase.json
+/iris-app/iris/web/firebase-messaging-sw.js
