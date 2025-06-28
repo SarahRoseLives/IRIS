@@ -9,7 +9,7 @@ class MessageInput extends StatefulWidget {
   final TextEditingController controller;
   final VoidCallback onSendMessage;
   final VoidCallback onProfilePressed;
-  final Future<void> Function(String) onAttachmentSelected;
+  final Future<String?> Function(String) onAttachmentSelected; // <-- FIXED!
   final List<String> allUsernames;
 
   const MessageInput({
@@ -42,7 +42,24 @@ class _MessageInputState extends State<MessageInput> {
     final picker = ImagePicker();
     final pickedFile = await picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
-      await widget.onAttachmentSelected(pickedFile.path);
+      final url = await widget.onAttachmentSelected(pickedFile.path); // now returns String?
+      if (url != null && url.isNotEmpty) {
+        final controller = widget.controller;
+        final text = controller.text;
+        final selection = controller.selection;
+        final cursor = selection.baseOffset < 0
+            ? text.length
+            : selection.baseOffset;
+        final filename = url.split('/').last;
+        final hyperlink = '[$filename]($url)';
+        final newText = text.replaceRange(
+            cursor, cursor, hyperlink + ' ');
+        controller.value = controller.value.copyWith(
+          text: newText,
+          selection: TextSelection.collapsed(
+              offset: cursor + hyperlink.length + 1),
+        );
+      }
     }
   }
 

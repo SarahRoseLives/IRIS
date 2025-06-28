@@ -29,7 +29,7 @@ func UploadAttachmentHandler(c *gin.Context) {
 	}
 
 	// Retrieve the file from the form data
-	file, err := c.FormFile("file")
+	file, err := c.FormFile("attachment")
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": fmt.Sprintf("Error retrieving file: %v", err)})
 		return

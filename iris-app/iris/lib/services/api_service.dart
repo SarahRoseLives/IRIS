@@ -295,6 +295,7 @@ class ApiService {
     }
   }
 
+  // UPDATED: Returns full HTTPS url for attachment after upload
   Future<String?> uploadAttachmentAndGetUrl(File file) async {
     // Secure upload URL using HTTPS
     final uri = Uri.parse('$baseUrl/upload-attachment');
@@ -336,7 +337,8 @@ class ApiService {
     if (response.statusCode == 200) {
       print("[ApiService] uploadAttachmentAndGetUrl: Success, status 200.");
       final data = json.decode(responseBody);
-      return data['url'] as String?;
+      // Return the full URL including the baseSecureUrl
+      return '$baseSecureUrl${data['url']}';
     } else {
       print("[ApiService] uploadAttachmentAndGetUrl: Upload failed, status ${response.statusCode}, body: $responseBody");
       final errorData = json.decode(responseBody);

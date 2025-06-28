@@ -401,13 +401,14 @@ class ChatController {
     }
   }
 
-  // REPLACED: uploadAttachmentAndGetUrl to use baseSecureUrl and delegate to apiService
+  // UPDATED: uploadAttachmentAndGetUrl to expect a full URL from ApiService, no longer prepends baseSecureUrl
   Future<String?> uploadAttachmentAndGetUrl(String filePath) async {
     try {
       final file = File(filePath);
-      final relativeUrl = await apiService.uploadAttachmentAndGetUrl(file);
-      if (relativeUrl != null) {
-        return '$baseSecureUrl$relativeUrl';
+      final fullUrl = await apiService.uploadAttachmentAndGetUrl(file);
+      if (fullUrl != null) {
+        // The API service should return the full URL now, so we don't need to prepend baseSecureUrl
+        return fullUrl;
       }
       return null;
     } catch (e) {
