@@ -38,6 +38,12 @@ class EncryptionService {
     }
   }
 
+  /// Clears all active encryption sessions from memory.
+  void reset() {
+    _sessions.clear();
+    print('[EncryptionService] All encryption sessions cleared.');
+  }
+
   EncryptionStatus getSessionStatus(String target) =>
       _sessions[target.toLowerCase()]?.status ?? EncryptionStatus.none;
 

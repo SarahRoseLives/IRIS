@@ -3,6 +3,7 @@ package session
 import (
 	"encoding/json"
 	"log"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,16 @@ import (
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/events"
 )
+
+// SerializableSession is a struct designed for safely marshaling session data to JSON.
+type SerializableSession struct {
+	Username    string   `json:"username"`
+	Password    string   `json:"password"` // Stored to re-authenticate on restart.
+	FCMToken    string   `json:"fcm_token"`
+	Channels    []string `json:"channels"`
+	IsAway      bool     `json:"is_away"`
+	AwayMessage string   `json:"away_message"`
+}
 
 type ChannelMember struct {
 	Nick   string `json:"nick"`
@@ -37,6 +48,7 @@ func NewUserSession(username string) *UserSession {
 type UserSession struct {
 	Token        string
 	Username     string
+	Password     string // Added to store password for session persistence
 	FCMToken     string
 	IRC          *ircevent.Connection
 	Channels     map[string]*ChannelState
@@ -62,12 +74,12 @@ func (s *UserSession) AddChannelToSession(channelName string) {
 
 	if _, ok := s.Channels[normalizedChannelName]; !ok {
 		s.Channels[normalizedChannelName] = &ChannelState{
-			Name:       normalizedChannelName,
+			Name:       channelName, // Store with original casing
 			Topic:      "",
 			Members:    []ChannelMember{},
 			LastUpdate: time.Now(),
 		}
-		log.Printf("[Session.AddChannelToSession] User %s added new channel '%s'", s.Username, normalizedChannelName)
+		log.Printf("[Session.AddChannelToSession] User %s added new channel '%s'", s.Username, channelName)
 	}
 }
 
@@ -97,8 +109,8 @@ func (s *UserSession) SyncChannels(channels []string) {
 	for _, ch := range channels {
 		nc := strings.ToLower(ch)
 		if !existing[nc] {
-			s.AddChannelToSession(nc)
-			log.Printf("[Session] Synced channel %s for %s", nc, s.Username)
+			s.AddChannelToSession(ch) // Use original casing
+			log.Printf("[Session] Synced channel %s for %s", ch, s.Username)
 		}
 	}
 }
@@ -209,10 +221,12 @@ func UpdateAwayStatusForAllSessions(nick string, isAway bool) {
 }
 
 var (
-	sessionMap = make(map[string]*UserSession)
-	mutex      = sync.RWMutex{}
+	sessionMap          = make(map[string]*UserSession)
+	mutex               = sync.RWMutex{}
+	sessionsPersistFile = "persisted_sessions.json"
 )
 
+// AddSession adds a new session to the in-memory map.
 func AddSession(token string, s *UserSession) {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -233,6 +247,7 @@ func GetSession(token string) (*UserSession, bool) {
 	return s, ok
 }
 
+// RemoveSession removes a session from the in-memory map and quits its IRC connection.
 func RemoveSession(token string) {
 	mutex.Lock()
 	defer mutex.Unlock()
@@ -243,11 +258,77 @@ func RemoveSession(token string) {
 			conn.Close()
 		}
 		sess.WebSockets = nil
+		if sess.IRC != nil {
+			sess.IRC.Quit()
+		}
 		sess.Mutex.Unlock()
 	}
 	delete(sessionMap, token)
 	log.Printf("[Session.RemoveSession] Session removed for token '%s'", token)
 }
+
+// PersistAllSessions saves the entire current session map to a file.
+func PersistAllSessions() {
+	mutex.RLock() // Use a read lock to allow concurrent session access while we prepare data.
+
+	persistableSessions := make(map[string]SerializableSession)
+	for token, session := range sessionMap {
+		session.Mutex.RLock()
+
+		channelNames := make([]string, 0, len(session.Channels))
+		for _, chState := range session.Channels {
+			channelNames = append(channelNames, chState.Name) // Persist with original casing
+		}
+
+		persistableSessions[token] = SerializableSession{
+			Username:    session.Username,
+			Password:    session.Password,
+			FCMToken:    session.FCMToken,
+			Channels:    channelNames,
+			IsAway:      session.IsAway,
+			AwayMessage: session.AwayMessage,
+		}
+		session.Mutex.RUnlock()
+	}
+	mutex.RUnlock() // Release the lock before I/O operation
+
+	data, err := json.MarshalIndent(persistableSessions, "", "  ")
+	if err != nil {
+		log.Printf("[Session] Failed to marshal sessions: %v", err)
+		return
+	}
+
+	if err := os.WriteFile(sessionsPersistFile, data, 0644); err != nil {
+		log.Printf("[Session] Failed to write sessions to file '%s': %v", sessionsPersistFile, err)
+	} else {
+		log.Printf("[Session] Successfully persisted %d sessions to %s", len(persistableSessions), sessionsPersistFile)
+	}
+}
+
+// LoadPersistedData reads the session file and returns the data for rehydration.
+func LoadPersistedData() (map[string]SerializableSession, error) {
+	data, err := os.ReadFile(sessionsPersistFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Printf("[Session] Persisted session file not found ('%s'), starting fresh.", sessionsPersistFile)
+			return nil, nil // Not an error, just no file yet
+		}
+		return nil, err
+	}
+
+	if len(data) == 0 {
+		return nil, nil // File is empty
+	}
+
+	var persistedSessions map[string]SerializableSession
+	if err := json.Unmarshal(data, &persistedSessions); err != nil {
+		return nil, err
+	}
+
+	log.Printf("[Session] Loaded %d sessions from %s", len(persistedSessions), sessionsPersistFile)
+	return persistedSessions, nil
+}
+
 
 func (s *UserSession) AddWebSocket(conn *websocket.Conn) {
 	s.Mutex.Lock()

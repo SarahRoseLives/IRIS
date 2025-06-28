@@ -99,10 +99,11 @@ func LoginHandler(c *gin.Context) {
 		log.Printf("Could not split host port for RemoteAddr '%s', using full address as IP: %v", c.Request.RemoteAddr, err)
 	}
 
-	// MODIFIED: Use the new constructor function instead of a struct literal.
 	userSession := session.NewUserSession(req.Username)
+	// Store the password in the session for persistence.
+	// This is required to re-authenticate with the IRC server on application restart.
+	userSession.Password = req.Password
 
-	// MODIFIED: Pass the entire userSession object, which also satisfies the ChannelStateUpdater interface.
 	client, err := irc.AuthenticateWithNickServ(req.Username, req.Password, clientIP, userSession)
 	if err != nil {
 		log.Printf("IRC login failed for user %s: %v", req.Username, err)
@@ -115,11 +116,12 @@ func LoginHandler(c *gin.Context) {
 
 	defaultChannel := "#welcome"
 	client.Join(defaultChannel)
-	userSession.AddChannelToSession(defaultChannel)
-	log.Printf("[LoginHandler] Immediately added %s to session for user %s", defaultChannel, userSession.Username)
+	// The JOIN callback will add the channel to the session state.
 
 	token := uuid.New().String()
 	session.AddSession(token, userSession)
+	// Immediately persist all sessions to save the newly created one.
+	session.PersistAllSessions()
 
 	log.Printf("[SESSION] Created for %s with token %s", req.Username, token)
 

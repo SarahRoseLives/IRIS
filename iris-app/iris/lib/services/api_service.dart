@@ -16,13 +16,18 @@ class ApiService {
     _token = token;
   }
 
+  // START OF CHANGE: Improved session expiration handling with delayed logout
   bool _checkForTokenInvalidation(http.Response response) {
     if (response.statusCode == 401) {
-      AuthWrapper.forceLogout(showExpiredMessage: true);
+      // Use a delay to allow the current operation to complete before logging out
+      Future.delayed(const Duration(milliseconds: 100), () {
+        AuthWrapper.forceLogout(showExpiredMessage: true);
+      });
       return true;
     }
     return false;
   }
+  // END OF CHANGE
 
   Future<LoginResponse> login(String username, String password) async {
     final url = Uri.parse('$baseUrl/login');
@@ -281,7 +286,10 @@ class ApiService {
     final responseBody = await response.stream.bytesToString();
 
     if (response.statusCode == 401) {
-      AuthWrapper.forceLogout(showExpiredMessage: true);
+      // Use a delay to allow the current operation to complete before logging out
+      Future.delayed(const Duration(milliseconds: 100), () {
+        AuthWrapper.forceLogout(showExpiredMessage: true);
+      });
       throw Exception('Session expired');
     }
 
@@ -295,9 +303,7 @@ class ApiService {
     }
   }
 
-  // UPDATED: Returns full HTTPS url for attachment after upload
   Future<String?> uploadAttachmentAndGetUrl(File file) async {
-    // Secure upload URL using HTTPS
     final uri = Uri.parse('$baseUrl/upload-attachment');
     print("[ApiService] uploadAttachmentAndGetUrl: Uploading attachment to $uri");
     final request = http.MultipartRequest('POST', uri)
@@ -330,14 +336,16 @@ class ApiService {
     final responseBody = await response.stream.bytesToString();
 
     if (response.statusCode == 401) {
-      AuthWrapper.forceLogout(showExpiredMessage: true);
+      // Use a delay to allow the current operation to complete before logging out
+      Future.delayed(const Duration(milliseconds: 100), () {
+        AuthWrapper.forceLogout(showExpiredMessage: true);
+      });
       throw Exception('Session expired');
     }
 
     if (response.statusCode == 200) {
       print("[ApiService] uploadAttachmentAndGetUrl: Success, status 200.");
       final data = json.decode(responseBody);
-      // Return the full URL including the baseSecureUrl
       return '$baseSecureUrl${data['url']}';
     } else {
       print("[ApiService] uploadAttachmentAndGetUrl: Upload failed, status ${response.statusCode}, body: $responseBody");
@@ -345,4 +353,18 @@ class ApiService {
       throw Exception('Failed to upload attachment: ${response.statusCode} - ${errorData['message'] ?? responseBody}');
     }
   }
+
+  // START OF CHANGE: Session validation endpoint for periodic checks
+  Future<bool> validateSession() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/validate-session'),
+        headers: {'Authorization': 'Bearer ${_getToken()}'},
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
+    }
+  }
+  // END OF CHANGE
 }

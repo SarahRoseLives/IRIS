@@ -1,13 +1,16 @@
-import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 import 'dart:io';
-import '../services/api_service.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:http/http.dart' as http;
-import '../config.dart';
-import 'package:iris/services/update_service.dart';
 
-// Add this import for fingerprint service
+import 'package:flutter/foundation.dart'
+    show defaultTargetPlatform, kIsWeb, TargetPlatform;
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
+import 'package:iris/main.dart'; // Import main.dart to access AuthWrapper
+import 'package:iris/services/update_service.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../config.dart';
+import '../services/api_service.dart';
 import '../services/fingerprint_service.dart';
 
 class ProfileScreen extends StatefulWidget {
@@ -77,6 +80,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadFingerprintSetting() async {
+    // Only try to load settings on mobile
+    if (kIsWeb) return;
     final enabled = await _fingerprintService.isFingerprintEnabled();
     if (mounted) {
       setState(() {
@@ -150,6 +155,18 @@ class _ProfileScreenState extends State<ProfileScreen> {
         setState(() {
           _isUploading = false;
         });
+      }
+    }
+  }
+
+  Future<void> _logout() async {
+    try {
+      await AuthWrapper.forceLogout();
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Logout failed: ${e.toString()}')),
+        );
       }
     }
   }
@@ -266,82 +283,73 @@ class _ProfileScreenState extends State<ProfileScreen> {
   Widget _buildActionButtons() {
     return Column(
       children: [
-        // Fingerprint toggle switch
-        SwitchListTile(
-          title: const Text('Enable Fingerprint Security',
-              style: TextStyle(color: Colors.white)),
-          subtitle: const Text('Require fingerprint to open the app',
-              style: TextStyle(color: Colors.white70)),
-          value: _fingerprintEnabled,
-          onChanged: (value) async {
-            // Prevent any action if the widget is no longer visible.
-            if (!mounted) return;
-
-            if (value) {
-              // Logic for TURNING ON the switch
-              final canAuth = await _fingerprintService.canAuthenticate();
-              if (!canAuth) {
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                        'Fingerprint authentication is not available on this device.'),
-                    backgroundColor: Colors.orangeAccent,
-                  ),
-                );
-                // No need to set state, as _fingerprintEnabled is already false.
-                return;
-              }
-
-              final authenticated = await _fingerprintService.authenticate();
-              if (authenticated) {
-                // SUCCESS: User's fingerprint was verified.
-                await _fingerprintService.setFingerprintEnabled(true);
-                if (mounted) {
-                  setState(() {
-                    _fingerprintEnabled = true;
-                  });
+        // --- START OF CHANGE ---
+        // Conditionally show Fingerprint options only on Android
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ...[
+          SwitchListTile(
+            title: const Text('Enable Fingerprint Security',
+                style: TextStyle(color: Colors.white)),
+            subtitle: const Text('Require fingerprint to open the app',
+                style: TextStyle(color: Colors.white70)),
+            value: _fingerprintEnabled,
+            onChanged: (value) async {
+              if (!mounted) return;
+              if (value) {
+                final canAuth = await _fingerprintService.canAuthenticate();
+                if (!canAuth) {
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content: Text('Fingerprint security has been enabled.'),
-                      backgroundColor: Colors.green,
+                      content: Text(
+                          'Fingerprint authentication is not available on this device.'),
+                      backgroundColor: Colors.orangeAccent,
                     ),
                   );
+                  return;
+                }
+                final authenticated =
+                    await _fingerprintService.authenticate();
+                if (authenticated) {
+                  await _fingerprintService.setFingerprintEnabled(true);
+                  if (mounted) {
+                    setState(() => _fingerprintEnabled = true);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content:
+                            Text('Fingerprint security has been enabled.'),
+                        backgroundColor: Colors.green,
+                      ),
+                    );
+                  }
+                } else {
+                  await _fingerprintService.setFingerprintEnabled(false);
+                  if (mounted) {
+                    setState(() => _fingerprintEnabled = false);
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text(
+                            'Authentication failed. Setting was not changed.'),
+                        backgroundColor: Colors.redAccent,
+                      ),
+                    );
+                  }
                 }
               } else {
-                // FAILURE: User canceled or fingerprint was not recognized.
-                // Explicitly keep the switch off and inform the user.
                 await _fingerprintService.setFingerprintEnabled(false);
                 if (mounted) {
-                  setState(() {
-                    _fingerprintEnabled = false;
-                  });
+                  setState(() => _fingerprintEnabled = false);
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(
-                      content:
-                          Text('Authentication failed. Setting was not changed.'),
-                      backgroundColor: Colors.redAccent,
-                    ),
+                        content: Text('Fingerprint security disabled.')),
                   );
                 }
               }
-            } else {
-              // Logic for TURNING OFF the switch
-              await _fingerprintService.setFingerprintEnabled(false);
-              if (mounted) {
-                setState(() {
-                  _fingerprintEnabled = false;
-                });
-                ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(
-                    content: Text('Fingerprint security disabled.'),
-                  ),
-                );
-              }
-            }
-          },
-          activeColor: const Color(0xFF5865F2),
-        ),
-        const SizedBox(height: 12),
+            },
+            activeColor: const Color(0xFF5865F2),
+          ),
+          const SizedBox(height: 12),
+        ],
+        // --- END OF CHANGE ---
+
         ElevatedButton.icon(
           onPressed: _pickImage,
           icon: const Icon(Icons.image),
@@ -355,21 +363,42 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 borderRadius: BorderRadius.circular(12)),
           ),
         ),
+
+        // --- START OF CHANGE ---
+        // Conditionally show the "Check for Updates" button only on Android
+        if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ...[
+          const SizedBox(height: 12),
+          ElevatedButton.icon(
+            onPressed: () async {
+              if (mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('Checking for updates...')),
+                );
+                await UpdateService.checkForUpdates(context, forceCheck: true);
+              }
+            },
+            icon: const Icon(Icons.update),
+            label: const Text('Check for Updates'),
+            style: ElevatedButton.styleFrom(
+              foregroundColor: Colors.white,
+              backgroundColor: Colors.green[600],
+              minimumSize: const Size.fromHeight(48),
+              textStyle: const TextStyle(fontSize: 16),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+          ),
+        ],
+        // --- END OF CHANGE ---
+
         const SizedBox(height: 12),
         ElevatedButton.icon(
-          onPressed: () async {
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Checking for updates...')),
-              );
-              await UpdateService.checkForUpdates(context, forceCheck: true);
-            }
-          },
-          icon: const Icon(Icons.update),
-          label: const Text('Check for Updates'),
+          onPressed: _logout,
+          icon: const Icon(Icons.logout),
+          label: const Text('Logout'),
           style: ElevatedButton.styleFrom(
             foregroundColor: Colors.white,
-            backgroundColor: Colors.green[600],
+            backgroundColor: Colors.redAccent,
             minimumSize: const Size.fromHeight(48),
             textStyle: const TextStyle(fontSize: 16),
             shape: RoundedRectangleBorder(

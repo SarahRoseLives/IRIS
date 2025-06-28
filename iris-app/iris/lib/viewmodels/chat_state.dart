@@ -23,6 +23,20 @@ class ChatState extends ChangeNotifier {
 
   final Map<String, Set<String>> _channelDedupKeys = {};
 
+  /// Resets the entire chat state to its initial values.
+  void reset() {
+    _channels = [];
+    _selectedChannelIndex = 0;
+    _channelMessages.clear();
+    _lastSeenMessageIds.clear();
+    _userAvatars.clear();
+    _userStatuses.clear();
+    _encryptionStatuses.clear();
+    _channelDedupKeys.clear();
+    print('[ChatState] State has been reset.');
+    notifyListeners(); // Notify listeners that the state is cleared
+  }
+
   // --- GETTERS ---
   List<Channel> get channels => _channels;
   Map<String, String> get userAvatars => _userAvatars;
@@ -239,9 +253,7 @@ class ChatState extends ChangeNotifier {
   void selectConversation(String conversationName) async {
     final index = _channels
         .indexWhere((c) => c.name.toLowerCase() == conversationName.toLowerCase());
-    // START OF FIX: Corrected typo from '!=.' to '!='
     if (index != -1) {
-    // END OF FIX
       _selectedChannelIndex = index;
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_lastChannelKey, conversationName);
@@ -353,7 +365,6 @@ class ChatState extends ChangeNotifier {
   Future<void> _saveChannels() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      // This requires Channel.toJson() to be implemented in your model.
       final List<Map<String, dynamic>> channelsJson = _channels.map((c) => c.toJson()).toList();
       await prefs.setString(_channelsKey, json.encode(channelsJson));
     } catch (e) {
@@ -378,12 +389,10 @@ class ChatState extends ChangeNotifier {
   Future<void> loadPersistedMessages() async {
     final prefs = await SharedPreferences.getInstance();
 
-    // Load channels first to ensure they exist before messages are loaded.
     final savedChannels = prefs.getString(_channelsKey);
     if (savedChannels != null) {
         try {
             final channelsJson = json.decode(savedChannels) as List<dynamic>;
-            // This requires Channel.fromJson to handle the structure saved by toJson.
             _channels = channelsJson.map((c) => Channel.fromJson(c as Map<String, dynamic>)).toList();
             _rebuildUserStatuses();
         } catch (e) {
@@ -391,7 +400,6 @@ class ChatState extends ChangeNotifier {
         }
     }
 
-    // Now load messages
     _channelMessages.clear();
     _channelDedupKeys.clear();
     final savedMessages = prefs.getString(_messagesKey);
@@ -409,7 +417,6 @@ class ChatState extends ChangeNotifier {
           }
           _channelDedupKeys[channel] = dedupKeys;
 
-          // This check is now less critical since we load channels first, but good for safety.
           if (channel.startsWith('@') &&
               !_channels.any((c) => c.name.toLowerCase() == channel.toLowerCase())) {
             _channels.add(Channel(name: channel, members: []));
@@ -437,8 +444,6 @@ class ChatState extends ChangeNotifier {
     notifyListeners();
   }
 
-  // --- DM Message Removal ---
-
   void removeDmMessage(Message message) {
     final target = selectedConversationTarget.toLowerCase();
     if (_channelMessages.containsKey(target)) {
@@ -459,12 +464,11 @@ class ChatState extends ChangeNotifier {
 
     _persistMessages();
     _persistLastSeenMessageIds();
-    _saveChannels(); // Ensure we save the channel removal
+    _saveChannels();
 
     notifyListeners();
   }
 
-  // ---- CHANNEL TOPIC SUPPORT ----
   void updateChannelTopic(String channelName, String newTopic) {
     final index = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
     if (index != -1) {
@@ -473,7 +477,7 @@ class ChatState extends ChangeNotifier {
         topic: newTopic,
         members: _channels[index].members,
       );
-      _saveChannels(); // Ensure topic change is saved
+      _saveChannels();
       notifyListeners();
     }
   }

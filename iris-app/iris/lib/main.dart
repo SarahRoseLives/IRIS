@@ -1,20 +1,21 @@
-import 'package:flutter/material.dart';
 import 'dart:convert';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
-import 'package:iris/firebase_options.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:get_it/get_it.dart';
+import 'package:iris/firebase_options.dart';
+import 'package:iris/main_layout.dart';
+import 'package:iris/screens/login_screen.dart';
+import 'package:iris/services/encryption_service.dart';
 import 'package:iris/services/notification_service.dart';
-import 'package:iris/services/websocket_service.dart';
-import 'services/encryption_service.dart';
-import 'main_layout.dart';
-import 'screens/login_screen.dart';
 import 'package:iris/services/update_service.dart';
+import 'package:iris/services/websocket_service.dart';
+import 'package:iris/utils/web_check.dart'; // ✅ Platform-safe import
 import 'package:iris/viewmodels/chat_state.dart';
-import 'widgets/fingerprint_gate.dart';
-import 'utils/web_check.dart'; // ✅ Platform-safe import
+import 'package:iris/widgets/fingerprint_gate.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class PendingNotification {
   static String? channelToNavigateTo;
@@ -131,21 +132,44 @@ class AuthWrapper extends StatefulWidget {
   AuthWrapper() : super(key: stateKey);
 
   static Future<void> forceLogout({bool showExpiredMessage = false}) async {
-    stateKey.currentState?.logoutAndShowLogin(showExpiredMessage: showExpiredMessage);
+    stateKey.currentState
+        ?.logoutAndShowLogin(showExpiredMessage: showExpiredMessage);
   }
 
   @override
   State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
-class _AuthWrapperState extends State<AuthWrapper> {
+class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   bool _isLoading = true;
+  bool _isLoggedIn = false; // PATCH: Add explicit login state tracking
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _checkLoginStatus();
     _checkForUpdates();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) async {
+    super.didChangeAppLifecycleState(state);
+
+    if (state == AppLifecycleState.resumed) {
+      // Check if session is still valid
+      final prefs = await SharedPreferences.getInstance();
+      final token = prefs.getString('auth_token');
+      if (token == null) {
+        AuthWrapper.forceLogout();
+      }
+    }
   }
 
   Future<void> _checkLoginStatus() async {
@@ -154,14 +178,21 @@ class _AuthWrapperState extends State<AuthWrapper> {
     final username = prefs.getString('username');
 
     if (mounted && token != null && username != null) {
-      Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => IrisLayout(username: username, token: token),
-        ),
-      );
+      setState(() {
+        _isLoggedIn = true;
+      });
+      // Use globalKey for navigation to prevent stale context
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        AuthWrapper.globalKey.currentState?.pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => IrisLayout(username: username, token: token),
+          ),
+        );
+      });
     } else {
       setState(() {
         _isLoading = false;
+        _isLoggedIn = false;
       });
     }
   }
@@ -173,19 +204,67 @@ class _AuthWrapperState extends State<AuthWrapper> {
     }
   }
 
+  // --- UPDATED logoutAndShowLogin ---
   Future<void> logoutAndShowLogin({bool showExpiredMessage = false}) async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('auth_token');
-    await prefs.remove('username');
+    print('[Auth] Beginning logout process...');
 
-    if (AuthWrapper.globalKey.currentContext != null && mounted) {
-      Navigator.of(AuthWrapper.globalKey.currentContext!).pushAndRemoveUntil(
-        MaterialPageRoute(
-            builder: (_) => LoginScreen(showExpiredMessage: showExpiredMessage)),
-        (route) => false,
-      );
+    try {
+      // Disconnect WebSocket
+      if (getIt.isRegistered<WebSocketService>()) {
+        print('[Auth] Disconnecting WebSocket...');
+        getIt<WebSocketService>().disconnect();
+      }
+
+      // Reset Encryption Service State
+      if (getIt.isRegistered<EncryptionService>()) {
+        print('[Auth] Resetting encryption state...');
+        getIt<EncryptionService>().reset();
+      }
+
+      // Reset Chat State
+      if (getIt.isRegistered<ChatState>()) {
+        print('[Auth] Resetting chat state...');
+        getIt<ChatState>().reset();
+      }
+
+      // Clear all persisted data for a clean logout
+      final prefs = await SharedPreferences.getInstance();
+      print('[Auth] Clearing all SharedPreferences...');
+      await prefs.clear();
+
+      // PATCH: Always update state
+      setState(() {
+        _isLoading = false;
+        _isLoggedIn = false;
+      });
+
+      // PATCH: Use globalKey's Navigator for all navigation
+      final navigator = AuthWrapper.globalKey.currentState;
+      if (navigator != null && mounted) {
+        print('[Auth] Navigating to LoginScreen...');
+        navigator.pushAndRemoveUntil(
+          MaterialPageRoute(
+              builder: (_) => LoginScreen(showExpiredMessage: showExpiredMessage)),
+          (route) => false,
+        );
+      } else {
+        print('[Auth] Could not navigate to LoginScreen. Navigator or mounted state is invalid.');
+        // PATCH: Fallback to forcing rebuild and showing login
+        setState(() {
+          _isLoading = false;
+          _isLoggedIn = false;
+        });
+      }
+    } catch (e) {
+      print('[Auth] Error during logout: $e');
+      // PATCH: Fallback
+      setState(() {
+        _isLoading = false;
+        _isLoggedIn = false;
+      });
     }
   }
+  // --- END OF CHANGE ---
 
   @override
   Widget build(BuildContext context) {
@@ -197,6 +276,18 @@ class _AuthWrapperState extends State<AuthWrapper> {
         ),
       );
     }
-    return LoginScreen(showExpiredMessage: false);
+
+    // PATCH: Show login screen if not logged in
+    if (!_isLoggedIn) {
+      return LoginScreen(showExpiredMessage: false);
+    }
+
+    // PATCH: If logged in, show a placeholder until navigation completes
+    return const Scaffold(
+      backgroundColor: Color(0xFF313338),
+      body: Center(
+        child: CircularProgressIndicator(color: Color(0xFF5865F2)),
+      ),
+    );
   }
 }

@@ -462,6 +462,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     chatState.removeListener(_onChatStateChanged);
     _wsStatusSub?.cancel();
     _errorSub?.cancel();
+
+    // Ensure WebSocket is properly disconnected
+    if (_wsStatus == WebSocketStatus.connected) {
+      _chatController.disconnectWebSocket();
+    }
+
     _chatController.dispose();
     _msgController.dispose();
     _scrollController.dispose();

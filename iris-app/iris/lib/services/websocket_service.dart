@@ -152,7 +152,11 @@ class WebSocketService {
     print("[WebSocketService] Unauthorized token — force logout.");
     if (!_isDisposed) _statusController.add(WebSocketStatus.unauthorized);
     disconnect();
-    AuthWrapper.forceLogout(showExpiredMessage: true);
+
+    // Use a delay to ensure the WebSocket is fully disconnected before forcing logout
+    Future.delayed(const Duration(milliseconds: 500), () {
+      AuthWrapper.forceLogout(showExpiredMessage: true);
+    });
   }
 
   void _handleWebSocketError(dynamic error) {
@@ -212,7 +216,6 @@ class WebSocketService {
     print("[WebSocketService] Sent message: $messageToSend");
   }
 
-  // START OF CHANGE
   /// Sends a generic, structured message to the WebSocket server.
   void send(Map<String, dynamic> message) {
     if (_isDisposed) return;
@@ -225,7 +228,6 @@ class WebSocketService {
     _ws?.sink.add(messageToSend);
     print("[WebSocketService] Sent event: $messageToSend");
   }
-  // END OF CHANGE
 
   void disconnect() {
     if (_isDisposed) return;
