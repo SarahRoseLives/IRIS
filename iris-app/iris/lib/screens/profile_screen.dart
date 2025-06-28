@@ -56,7 +56,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       for (final ext in possibleExtensions) {
         final String potentialAvatarUrl =
-            'http://$apiHost:$apiPort/avatars/$_username$ext';
+            '$baseSecureUrl/avatars/$_username$ext'; // USE baseSecureUrl
         try {
           final response = await http.head(Uri.parse(potentialAvatarUrl));
           if (response.statusCode == 200) {
@@ -127,7 +127,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           setState(() {
             _imageFile = null;
             _avatarUrl = response['avatarUrl'] != null
-                ? 'http://$apiHost:$apiPort${response['avatarUrl']}'
+                ? '$baseSecureUrl${response['avatarUrl']}' // USE baseSecureUrl
                 : null;
           });
         }

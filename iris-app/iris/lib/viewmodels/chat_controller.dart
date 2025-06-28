@@ -401,40 +401,29 @@ class ChatController {
     }
   }
 
+  // REPLACED: uploadAttachmentAndGetUrl to use baseSecureUrl and delegate to apiService
   Future<String?> uploadAttachmentAndGetUrl(String filePath) async {
     try {
       final file = File(filePath);
-      final request = http.MultipartRequest(
-        'POST',
-        Uri.parse('http://$apiHost:$apiPort/api/upload-attachment'),
-      );
-      request.headers['Authorization'] = 'Bearer $token';
-      request.files.add(await http.MultipartFile.fromPath('file', file.path));
-
-      final response = await request.send();
-      final responseBody = await response.stream.bytesToString();
-      final jsonResponse = json.decode(responseBody);
-
-      if (response.statusCode == 200 && jsonResponse['success'] == true) {
-        final fileUrl = jsonResponse['url'];
-        final fullFileUrl = 'http://$apiHost:$apiPort$fileUrl';
-        return fullFileUrl;
-      } else {
-        chatState.addSystemMessage('IRIS Bot','Failed to upload attachment: ${jsonResponse['message'] ?? 'Unknown error'}');
-        return null;
+      final relativeUrl = await apiService.uploadAttachmentAndGetUrl(file);
+      if (relativeUrl != null) {
+        return '$baseSecureUrl$relativeUrl';
       }
+      return null;
     } catch (e) {
       chatState.addSystemMessage('IRIS Bot', 'Attachment upload failed: $e');
       return null;
     }
   }
 
+  // REPLACED: loadAvatarForUser to use baseSecureUrl
   Future<void> loadAvatarForUser(String nick) async {
     if (nick.isEmpty || chatState.hasAvatar(nick)) return;
     chatState.setAvatarPlaceholder(nick);
     final exts = ['.png', '.jpg', '.jpeg', '.gif'];
     for (final ext in exts) {
-      final url = 'http://$apiHost:$apiPort/avatars/$nick$ext';
+      // Use HTTPS for avatar URLs via baseSecureUrl
+      final url = '$baseSecureUrl/avatars/$nick$ext'; // USE baseSecureUrl
       try {
         final response = await http.head(Uri.parse(url));
         if (response.statusCode == 200) {

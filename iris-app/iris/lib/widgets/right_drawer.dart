@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // Added for kIsWeb
 import 'package:provider/provider.dart';
 import '../models/channel_member.dart';
 import '../models/user_status.dart';
@@ -86,6 +87,8 @@ class RightDrawer extends StatelessWidget {
     final onlineGroups = _groupByRole(onlineMembers);
     final awayGroups = _groupByRole(awayMembers);
 
+    final isWeb = kIsWeb;
+
     List<Widget> buildSection(Map<String, List<ChannelMember>> groups, {String? sectionLabel}) {
       final widgets = <Widget>[];
       for (final prefix in _roleOrder) {
@@ -156,9 +159,9 @@ class RightDrawer extends StatelessWidget {
               width: 20,
               height: double.infinity,
               color: const Color(0xFF232428),
-              child: const Center(
+              child: Center(
                 child: Icon(
-                  Icons.chevron_right,
+                  isWeb ? Icons.close : Icons.chevron_right,
                   color: Colors.white54,
                 ),
               ),

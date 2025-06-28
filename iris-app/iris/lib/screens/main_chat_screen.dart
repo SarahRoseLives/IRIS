@@ -1,4 +1,6 @@
+// main_chat_screen.dart (Modified for web layout and improved drawer logic)
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // For kIsWeb
 import 'package:provider/provider.dart';
 
 import '../viewmodels/main_layout_viewmodel.dart';
@@ -8,14 +10,15 @@ import '../widgets/message_list.dart';
 import '../widgets/message_input.dart';
 import '../screens/profile_screen.dart';
 import '../models/encryption_session.dart';
-import '../widgets/channel_topic.dart'; // <-- Add this import
+import '../widgets/channel_topic.dart';
 
 class MainChatScreen extends StatelessWidget {
   const MainChatScreen({super.key});
 
-  // Helper to show the Safety Number dialog
   void _showSafetyNumberDialog(
-      BuildContext context, MainLayoutViewModel viewModel) {
+    BuildContext context,
+    MainLayoutViewModel viewModel,
+  ) {
     showDialog(
       context: context,
       builder: (context) {
@@ -70,9 +73,11 @@ class MainChatScreen extends StatelessWidget {
     );
   }
 
-  // NEW: Bottom sheet for encryption options
-  void _showEncryptionOptions(BuildContext context,
-      MainLayoutViewModel viewModel, EncryptionStatus status) {
+  void _showEncryptionOptions(
+    BuildContext context,
+    MainLayoutViewModel viewModel,
+    EncryptionStatus status,
+  ) {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF313338),
@@ -192,183 +197,249 @@ class MainChatScreen extends StatelessWidget {
           }
         });
 
+        final isWeb = kIsWeb;
+
         return Scaffold(
           backgroundColor: const Color(0xFF313338),
-          body: GestureDetector(
-            onHorizontalDragUpdate: (details) {
-              final width = MediaQuery.of(context).size.width;
-              if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
-                if (!viewModel.showLeftDrawer && !viewModel.showRightDrawer) {
-                  viewModel.toggleLeftDrawer();
-                }
-              } else if (details.delta.dx < -5 &&
-                  details.globalPosition.dx > width - 50) {
-                if (!viewModel.showLeftDrawer && !viewModel.showRightDrawer) {
-                  viewModel.toggleRightDrawer();
-                }
-              } else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
-                viewModel.toggleLeftDrawer();
-              } else if (viewModel.showRightDrawer && details.delta.dx > 5) {
-                viewModel.toggleRightDrawer();
-              }
-            },
-            child: Stack(
-              children: [
-                SafeArea(
-                  child: Column(
-                    children: [
-                      Container(
-                        color: const Color(0xFF232428),
-                        height: 56,
-                        child: Row(
-                          children: [
-                            IconButton(
-                              icon:
-                                  const Icon(Icons.menu, color: Colors.white54),
-                              tooltip: "Open Channels Drawer",
-                              onPressed: viewModel.toggleLeftDrawer,
-                            ),
-                            Padding(
-                              padding:
-                                  const EdgeInsets.symmetric(horizontal: 8),
-                              child: Text(
-                                viewModel.selectedConversationTarget,
-                                style: const TextStyle(
-                                    color: Colors.white, fontSize: 20),
-                              ),
-                            ),
-                            const Spacer(),
-                            if (isDm)
-                              IconButton(
-                                icon: Icon(lockIconData, color: lockIconColor),
-                                tooltip: lockTooltip,
-                                onPressed: () => _showEncryptionOptions(
-                                    context, viewModel, encryptionStatus),
-                              ),
-                            IconButton(
-                              icon: const Icon(Icons.people,
-                                  color: Colors.white70),
-                              tooltip: "Open Members Drawer",
-                              onPressed: viewModel.toggleRightDrawer,
+          body: Row(
+            children: [
+              // Left drawer (web: always visible, mobile: overlay)
+              if (isWeb || viewModel.showLeftDrawer)
+                Container(
+                  width: leftDrawerWidth,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2B2D31),
+                    boxShadow: isWeb
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.5),
+                              blurRadius: 10,
+                              spreadRadius: 5,
                             ),
                           ],
+                  ),
+                  child: Column(
+                    children: [
+                      if (isWeb)
+                        Align(
+                          alignment: Alignment.topRight,
+                          child: IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white70),
+                            onPressed: viewModel.toggleLeftDrawer,
+                          ),
                         ),
-                      ),
-                      if (!isDm) const ChannelTopic(),
                       Expanded(
-                        child: MessageList(
-                          messages: viewModel.currentChannelMessages,
-                          scrollController: viewModel.scrollController,
+                        child: LeftDrawer(
+                          dms: viewModel.dmChannelNames,
                           userAvatars: viewModel.userAvatars,
+                          userStatuses: viewModel.chatState.userStatuses,
+                          joinedChannels: viewModel.joinedPublicChannelNames,
+                          unjoinedChannels: viewModel.unjoinedPublicChannelNames,
+                          selectedConversationTarget:
+                              viewModel.selectedConversationTarget,
+                          onChannelSelected: viewModel.onChannelSelected,
+                          onChannelPart: viewModel.partChannel,
+                          onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
+                          onDmSelected: viewModel.onDmSelected,
+                          onRemoveDm: viewModel.removeDmChannel,
+                          onIrisTap: viewModel.selectMainView,
+                          loadingChannels: viewModel.loadingChannels,
+                          error: viewModel.channelError,
+                          wsStatus: viewModel.wsStatus,
+                          showDrawer: viewModel.showLeftDrawer,
+                          onCloseDrawer: viewModel.toggleLeftDrawer,
+                          unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
+                          onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
+                          hasUnreadMessages: viewModel.hasUnreadMessages,
+                          getLastMessage: viewModel.getLastMessage,
                           currentUsername: viewModel.username,
-                          encryptionStatus: encryptionStatus,
                         ),
-                      ),
-                      MessageInput(
-                        controller: viewModel.msgController,
-                        onSendMessage: viewModel.handleSendMessage,
-                        onProfilePressed: () {
-                          // --- REMOVED: viewModel.willNavigateInternally();
-                          if (viewModel.token != null) {
-                            Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => ProfileScreen(
-                                    authToken: viewModel.token!),
-                              ),
-                            );
-                          }
-                        },
-                        allUsernames: allUsernames.toList(),
-                        onAttachmentSelected: (filePath) async {
-                          final url = await viewModel
-                              .uploadAttachmentAndGetUrl(filePath);
-                          if (url != null && url.isNotEmpty) {
-                            final controller = viewModel.msgController;
-                            final text = controller.text;
-                            final selection = controller.selection;
-                            final cursor = selection.baseOffset < 0
-                                ? text.length
-                                : selection.baseOffset;
-                            final filename = url.split('/').last;
-                            final hyperlink = '[$filename]($url)';
-                            final newText = text.replaceRange(
-                                cursor, cursor, hyperlink + ' ');
-                            controller.value = controller.value.copyWith(
-                              text: newText,
-                              selection: TextSelection.collapsed(
-                                  offset: cursor + hyperlink.length + 1),
-                            );
-                          }
-                        },
                       ),
                     ],
                   ),
                 ),
-                if (viewModel.showLeftDrawer || viewModel.showRightDrawer)
-                  AnimatedOpacity(
-                    opacity: 1.0,
-                    duration: const Duration(milliseconds: 300),
-                    child: GestureDetector(
-                      onTap: () {
-                        if (viewModel.showLeftDrawer)
-                          viewModel.toggleLeftDrawer();
-                        if (viewModel.showRightDrawer)
-                          viewModel.toggleRightDrawer();
-                      },
-                      child: Container(
-                        color: Colors.black.withOpacity(0.5),
+
+              // Main content area
+              Expanded(
+                child: GestureDetector(
+                  onHorizontalDragUpdate: (details) {
+                    if (isWeb) return; // Disable swipe gestures in web mode
+
+                    final width = MediaQuery.of(context).size.width;
+                    if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
+                      if (!viewModel.showLeftDrawer &&
+                          !viewModel.showRightDrawer) {
+                        viewModel.toggleLeftDrawer();
+                      }
+                    } else if (details.delta.dx < -5 &&
+                        details.globalPosition.dx > width - 50) {
+                      if (!viewModel.showLeftDrawer &&
+                          !viewModel.showRightDrawer) {
+                        viewModel.toggleRightDrawer();
+                      }
+                    } else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
+                      viewModel.toggleLeftDrawer();
+                    } else if (viewModel.showRightDrawer && details.delta.dx > 5) {
+                      viewModel.toggleRightDrawer();
+                    }
+                  },
+                  child: Stack(
+                    children: [
+                      SafeArea(
+                        child: Column(
+                          children: [
+                            Container(
+                              color: const Color(0xFF232428),
+                              height: 56,
+                              child: Row(
+                                children: [
+                                  if (!isWeb)
+                                    IconButton(
+                                      icon: const Icon(Icons.menu,
+                                          color: Colors.white54),
+                                      tooltip: "Open Channels Drawer",
+                                      onPressed: viewModel.toggleLeftDrawer,
+                                    ),
+                                  Padding(
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8),
+                                    child: Text(
+                                      viewModel.selectedConversationTarget,
+                                      style: const TextStyle(
+                                          color: Colors.white, fontSize: 20),
+                                    ),
+                                  ),
+                                  const Spacer(),
+                                  if (isDm)
+                                    IconButton(
+                                      icon: Icon(lockIconData,
+                                          color: lockIconColor),
+                                      tooltip: lockTooltip,
+                                      onPressed: () => _showEncryptionOptions(
+                                          context,
+                                          viewModel,
+                                          encryptionStatus),
+                                    ),
+                                  if (!isWeb)
+                                    IconButton(
+                                      icon: const Icon(Icons.people,
+                                          color: Colors.white70),
+                                      tooltip: "Open Members Drawer",
+                                      onPressed: viewModel.toggleRightDrawer,
+                                    ),
+                                ],
+                              ),
+                            ),
+                            if (!isDm) const ChannelTopic(),
+                            Expanded(
+                              child: MessageList(
+                                messages: viewModel.currentChannelMessages,
+                                scrollController: viewModel.scrollController,
+                                userAvatars: viewModel.userAvatars,
+                                currentUsername: viewModel.username,
+                                encryptionStatus: encryptionStatus,
+                              ),
+                            ),
+                            MessageInput(
+                              controller: viewModel.msgController,
+                              onSendMessage: viewModel.handleSendMessage,
+                              onProfilePressed: () {
+                                if (viewModel.token != null) {
+                                  Navigator.push(
+                                    context,
+                                    MaterialPageRoute(
+                                      builder: (context) => ProfileScreen(
+                                          authToken: viewModel.token!),
+                                    ),
+                                  );
+                                }
+                              },
+                              allUsernames: allUsernames.toList(),
+                              onAttachmentSelected: (filePath) async {
+                                final url = await viewModel
+                                    .uploadAttachmentAndGetUrl(filePath);
+                                if (url != null && url.isNotEmpty) {
+                                  final controller = viewModel.msgController;
+                                  final text = controller.text;
+                                  final selection = controller.selection;
+                                  final cursor = selection.baseOffset < 0
+                                      ? text.length
+                                      : selection.baseOffset;
+                                  final filename = url.split('/').last;
+                                  final hyperlink = '[$filename]($url)';
+                                  final newText = text.replaceRange(
+                                      cursor, cursor, hyperlink + ' ');
+                                  controller.value = controller.value.copyWith(
+                                    text: newText,
+                                    selection: TextSelection.collapsed(
+                                        offset: cursor + hyperlink.length + 1),
+                                  );
+                                }
+                              },
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ),
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  left: viewModel.showLeftDrawer ? 0 : -leftDrawerWidth,
-                  top: 0,
-                  bottom: 0,
-                  width: leftDrawerWidth,
-                  child: LeftDrawer(
-                    dms: viewModel.dmChannelNames,
-                    userAvatars: viewModel.userAvatars,
-                    userStatuses: viewModel.chatState.userStatuses,
-                    joinedChannels: viewModel.joinedPublicChannelNames,
-                    unjoinedChannels: viewModel.unjoinedPublicChannelNames,
-                    selectedConversationTarget:
-                        viewModel.selectedConversationTarget,
-                    onChannelSelected: viewModel.onChannelSelected,
-                    onChannelPart: viewModel.partChannel,
-                    onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
-                    onDmSelected: viewModel.onDmSelected,
-                    onRemoveDm: viewModel.removeDmChannel,
-                    onIrisTap: viewModel.selectMainView,
-                    loadingChannels: viewModel.loadingChannels,
-                    error: viewModel.channelError,
-                    wsStatus: viewModel.wsStatus,
-                    showDrawer: viewModel.showLeftDrawer,
-                    onCloseDrawer: viewModel.toggleLeftDrawer,
-                    unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
-                    onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
-                    hasUnreadMessages: viewModel.hasUnreadMessages,
-                    getLastMessage: viewModel.getLastMessage,
-                    currentUsername: viewModel.username,
+                      // Overlay for mobile when drawers are open
+                      if (!isWeb &&
+                          (viewModel.showLeftDrawer ||
+                              viewModel.showRightDrawer))
+                        Positioned.fill(
+                          child: GestureDetector(
+                            onTap: () {
+                              if (viewModel.showLeftDrawer)
+                                viewModel.toggleLeftDrawer();
+                              if (viewModel.showRightDrawer)
+                                viewModel.toggleRightDrawer();
+                            },
+                            child: Container(
+                              color: Colors.black.withOpacity(0.5),
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-                AnimatedPositioned(
-                  duration: const Duration(milliseconds: 300),
-                  curve: Curves.easeInOut,
-                  right: viewModel.showRightDrawer ? 0 : -rightDrawerWidth,
-                  top: 0,
-                  bottom: 0,
+              ),
+
+              // Right drawer (web: always visible, mobile: overlay)
+              if (isWeb || viewModel.showRightDrawer)
+                Container(
                   width: rightDrawerWidth,
-                  child: RightDrawer(
-                    members: viewModel.members,
-                    userAvatars: viewModel.userAvatars,
-                    onCloseDrawer: viewModel.toggleRightDrawer,
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF2B2D31),
+                    boxShadow: isWeb
+                        ? null
+                        : [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.5),
+                              blurRadius: 10,
+                              spreadRadius: 5,
+                            ),
+                          ],
+                  ),
+                  child: Column(
+                    children: [
+                      if (isWeb)
+                        Align(
+                          alignment: Alignment.topRight,
+                          child: IconButton(
+                            icon: const Icon(Icons.close, color: Colors.white70),
+                            onPressed: viewModel.toggleRightDrawer,
+                          ),
+                        ),
+                      Expanded(
+                        child: RightDrawer(
+                          members: viewModel.members,
+                          userAvatars: viewModel.userAvatars,
+                          onCloseDrawer: viewModel.toggleRightDrawer,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
         );
       },

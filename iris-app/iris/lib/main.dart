@@ -12,15 +12,13 @@ import 'services/encryption_service.dart';
 import 'main_layout.dart';
 import 'screens/login_screen.dart';
 import 'package:iris/services/update_service.dart';
-// Import ChatState to register it
 import 'package:iris/viewmodels/chat_state.dart';
-// Import the fingerprint gate widget (only once!)
 import 'widgets/fingerprint_gate.dart';
+import 'utils/web_check.dart'; // ✅ Platform-safe import
 
-// Static class for pending notification navigation and message data.
 class PendingNotification {
   static String? channelToNavigateTo;
-  static Map<String, dynamic>? messageData; // NEW: Store message data for DM persistence
+  static Map<String, dynamic>? messageData;
 }
 
 final getIt = GetIt.instance;
@@ -44,7 +42,6 @@ void setupLocator() {
   }
 }
 
-// Entry point for background Firebase messages
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -62,7 +59,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   notificationService.showFlutterNotification(message);
 }
 
-// Entry point for notification tap responses
 @pragma('vm:entry-point')
 void onDidReceiveNotificationResponse(
     NotificationResponse notificationResponse) async {
@@ -79,16 +75,28 @@ void onDidReceiveNotificationResponse(
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  await Firebase.initializeApp(
-    options: DefaultFirebaseOptions.currentPlatform,
-  );
-  FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  if (isFirebaseMessagingSupported()) {
+    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  } else {
+    print('[Firebase Messaging] Skipped: unsupported web environment');
+  }
 
   setupLocator();
 
   await getIt<EncryptionService>().initialize();
   await getIt<NotificationService>().init();
+
+  if (isFirebaseMessagingSupported()) {
+    try {
+      await FirebaseMessaging.instance.requestPermission();
+      final token = await FirebaseMessaging.instance.getToken();
+      print('[Firebase Messaging] Token: $token');
+    } catch (e) {
+      print('[Firebase Messaging] Error: $e');
+    }
+  }
 
   runApp(const IRISApp());
 }

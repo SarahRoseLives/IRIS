@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // Added for kIsWeb
 import '../models/channel.dart';
 import '../services/websocket_service.dart';
 import '../models/user_status.dart';
@@ -158,6 +159,7 @@ class LeftDrawer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sortedDms = List<String>.from(dms)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final isWeb = kIsWeb;
 
     return Material(
       color: Colors.transparent,
@@ -356,8 +358,11 @@ class LeftDrawer extends StatelessWidget {
               width: 20,
               height: double.infinity,
               color: const Color(0xFF232428),
-              child: const Center(
-                child: Icon(Icons.chevron_left, color: Colors.white54),
+              child: Center(
+                child: Icon(
+                  isWeb ? Icons.close : Icons.chevron_left,
+                  color: Colors.white54,
+                ),
               ),
             ),
           ),

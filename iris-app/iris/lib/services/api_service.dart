@@ -1,5 +1,3 @@
-// services/api_service.dart
-
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
@@ -294,6 +292,55 @@ class ApiService {
       print("[ApiService] uploadAvatar: Upload failed, status ${response.statusCode}, body: $responseBody");
       final errorData = json.decode(responseBody);
       throw Exception('Failed to upload avatar: ${response.statusCode} - ${errorData['message'] ?? responseBody}');
+    }
+  }
+
+  Future<String?> uploadAttachmentAndGetUrl(File file) async {
+    // Secure upload URL using HTTPS
+    final uri = Uri.parse('$baseUrl/upload-attachment');
+    print("[ApiService] uploadAttachmentAndGetUrl: Uploading attachment to $uri");
+    final request = http.MultipartRequest('POST', uri)
+      ..headers['Authorization'] = 'Bearer ${_getToken()}';
+    String? mimeType;
+    final String fileExtension = file.path.split('.').last.toLowerCase();
+    switch (fileExtension) {
+      case 'jpg':
+      case 'jpeg':
+        mimeType = 'image/jpeg';
+        break;
+      case 'png':
+        mimeType = 'image/png';
+        break;
+      case 'gif':
+        mimeType = 'image/gif';
+        break;
+      default:
+        mimeType = 'application/octet-stream';
+    }
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'attachment',
+        file.path,
+        contentType: mimeType != null ? MediaType.parse(mimeType) : null,
+      ),
+    );
+
+    final response = await request.send();
+    final responseBody = await response.stream.bytesToString();
+
+    if (response.statusCode == 401) {
+      AuthWrapper.forceLogout(showExpiredMessage: true);
+      throw Exception('Session expired');
+    }
+
+    if (response.statusCode == 200) {
+      print("[ApiService] uploadAttachmentAndGetUrl: Success, status 200.");
+      final data = json.decode(responseBody);
+      return data['url'] as String?;
+    } else {
+      print("[ApiService] uploadAttachmentAndGetUrl: Upload failed, status ${response.statusCode}, body: $responseBody");
+      final errorData = json.decode(responseBody);
+      throw Exception('Failed to upload attachment: ${response.statusCode} - ${errorData['message'] ?? responseBody}');
     }
   }
 }
