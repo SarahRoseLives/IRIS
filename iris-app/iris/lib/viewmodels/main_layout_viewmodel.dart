@@ -448,10 +448,13 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
+  // --- START OF CHANGE ---
+  // This method is now corrected to only send the command to the server.
   Future<void> updateChannelTopic(String newTopic) async {
     try {
       final channelName = selectedConversationTarget;
       if (channelName.startsWith('#')) {
+        // Send the request to the server.
         _chatController.sendRawWebSocketMessage({
           'type': 'topic_change',
           'payload': {
@@ -459,25 +462,18 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
             'topic': newTopic,
           },
         });
-        final updatedChannels = chatState.channels.map((c) {
-          if (c.name == channelName) {
-            return Channel(
-              name: c.name,
-              topic: newTopic,
-              members: c.members,
-            );
-          }
-          return c;
-        }).toList();
-        chatState.setChannels(updatedChannels);
+        // The optimistic UI update has been removed. The UI will now wait for
+        // the server to send back a 'topic_change' event, which is handled
+        // by the ChatController and ChatState.
       }
     } catch (e) {
       chatState.addSystemMessage(
         selectedConversationTarget,
-        'Failed to update topic: ${e.toString()}',
+        'Failed to send topic update request: ${e.toString()}',
       );
     }
   }
+  // --- END OF CHANGE ---
 
   @override
   void dispose() {
