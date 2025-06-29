@@ -19,11 +19,11 @@ func ChannelHistoryHandler(c *gin.Context) {
 		return
 	}
 
-	// Get limit from query param, default to 100
-	limitStr := c.DefaultQuery("limit", "100")
+	// Get limit from query param, default to 5000
+	limitStr := c.DefaultQuery("limit", "5000")
 	limit, err := strconv.Atoi(limitStr)
 	if err != nil || limit < 1 {
-		limit = 100
+		limit = 5000
 	}
 
 	// Parse optional "since" query parameter

@@ -113,7 +113,7 @@ class ApiService {
     }
   }
 
-  Future<List<Map<String, dynamic>>> fetchChannelMessages(String channelName, {int limit = 100}) async {
+  Future<List<Map<String, dynamic>>> fetchChannelMessages(String channelName, {int limit = 5000}) async {
     print("[ApiService] fetchChannelMessages: Attempting to fetch history for $channelName");
     if (channelName.isEmpty) {
       print("[ApiService] fetchChannelMessages: Channel name is empty, returning empty list.");
