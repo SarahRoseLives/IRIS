@@ -62,6 +62,7 @@ class MessageList extends StatelessWidget {
 
     return ListView.builder(
       controller: scrollController,
+      physics: const ClampingScrollPhysics(), // <-- Added to prevent bounce
       itemCount: messages.length,
       itemBuilder: (context, index) {
         final message = messages[index];
@@ -85,6 +86,7 @@ class MessageList extends StatelessWidget {
 
         if (isBlockedUser || isMessageHidden) {
           return GestureDetector(
+            key: ValueKey(message.id), // <-- ADD KEY FOR PERFORMANCE
             onLongPress: () => _showHiddenOptions(context, message, isBlockedUser, viewModel),
             child: Container(
               margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
@@ -126,6 +128,7 @@ class MessageList extends StatelessWidget {
         final messageColor = message.isEncrypted ? const Color(0xFFC8E6C9) : Colors.white;
 
         return GestureDetector(
+          key: ValueKey(message.id), // <-- ADD KEY FOR PERFORMANCE
           onLongPress: () => _showMessageOptions(context, message, isDm, viewModel),
           child: Container(
             decoration: BoxDecoration(

@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/gin-contrib/cors"
@@ -15,80 +14,7 @@ import (
 	"iris-gateway/handlers"
 	"iris-gateway/irc"
 	"iris-gateway/push"
-	"iris-gateway/session"
 )
-
-// rehydrateSessions loads persisted sessions from disk and reconnects them to IRC.
-func rehydrateSessions() {
-	persistedData, err := session.LoadPersistedData()
-	if err != nil {
-		log.Printf("[Main] Error loading persisted sessions: %v. Starting with a clean slate.", err)
-		return
-	}
-	if len(persistedData) == 0 {
-		log.Println("[Main] No sessions to rehydrate.")
-		return
-	}
-	log.Printf("[Main] Rehydrating %d sessions...", len(persistedData))
-
-	var wg sync.WaitGroup
-	// Use a channel to collect successfully rehydrated sessions to avoid race conditions on the session map.
-	rehydratedSessions := make(chan struct {
-		token string
-		sess  *session.UserSession
-	}, len(persistedData))
-
-	for token, data := range persistedData {
-		wg.Add(1)
-		go func(token string, data session.SerializableSession) {
-			defer wg.Done()
-			log.Printf("[Main] Rehydrating session for user: %s", data.Username)
-
-			userSession := session.NewUserSession(data.Username)
-			userSession.Password = data.Password
-			userSession.FCMToken = data.FCMToken
-
-			client, err := irc.AuthenticateWithNickServ(data.Username, data.Password, "127.0.0.1", userSession)
-			if err != nil {
-				log.Printf("[Main] Failed to re-authenticate user %s for persisted session: %v. Dropping session.", data.Username, err)
-				return // End this goroutine, session will not be re-added.
-			}
-
-			userSession.IRC = client
-			log.Printf("[Main] Re-authenticated user %s.", data.Username)
-
-			// The JOIN callback in irc/connection.go will handle adding channels to the session state.
-			for _, channelName := range data.Channels {
-				userSession.IRC.Join(channelName)
-			}
-
-			// Restore away status after a short delay to ensure connection is established.
-			if data.IsAway {
-				time.AfterFunc(5*time.Second, func() {
-					userSession.SetAway(data.AwayMessage)
-					log.Printf("[Main] Restored AWAY status for user %s.", data.Username)
-				})
-			}
-
-			rehydratedSessions <- struct {
-				token string
-				sess  *session.UserSession
-			}{token, userSession}
-		}(token, data)
-	}
-
-	wg.Wait()
-	close(rehydratedSessions)
-
-	// Add all successfully rehydrated sessions to the main map.
-	for s := range rehydratedSessions {
-		session.AddSession(s.token, s.sess)
-	}
-
-	log.Printf("[Main] Finished rehydration. Persisting final session state.")
-	// Perform a single save after all sessions have been re-added.
-	session.PersistAllSessions()
-}
 
 func main() {
 	// Initialize Firebase Cloud Messaging
@@ -98,20 +24,6 @@ func main() {
 	if err := irc.InitGatewayBot(); err != nil {
 		log.Fatalf("Failed to initialize IRC gateway bot: %v", err)
 	}
-
-	// Load and rehydrate sessions from the persisted file.
-	rehydrateSessions()
-
-	// Start a goroutine to periodically persist all sessions.
-	go func() {
-		// This ensures that changes like joining/parting channels are saved.
-		ticker := time.NewTicker(2 * time.Minute)
-		defer ticker.Stop()
-		for range ticker.C {
-			log.Println("[Main] Periodically persisting all sessions...")
-			session.PersistAllSessions()
-		}
-	}()
 
 	// Clean up any files older than configured duration on startup
 	go func() {

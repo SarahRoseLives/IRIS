@@ -100,8 +100,6 @@ func LoginHandler(c *gin.Context) {
 	}
 
 	userSession := session.NewUserSession(req.Username)
-	// Store the password in the session for persistence.
-	// This is required to re-authenticate with the IRC server on application restart.
 	userSession.Password = req.Password
 
 	client, err := irc.AuthenticateWithNickServ(req.Username, req.Password, clientIP, userSession)
@@ -111,22 +109,14 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	log.Printf("[SESSION] IRC pointer for user %s: %p", req.Username, client)
 	userSession.IRC = client
 
 	defaultChannel := "#welcome"
 	client.Join(defaultChannel)
-	// The JOIN callback will add the channel to the session state.
 
 	token := uuid.New().String()
 	session.AddSession(token, userSession)
-	// Immediately persist all sessions to save the newly created one.
-	session.PersistAllSessions()
 
-	log.Printf("[SESSION] Created for %s with token %s", req.Username, token)
-
-	// --- OFFLINE DM DELIVERY ---
-	// After successful login, deliver any queued messages for this user.
 	go func(username string, userSession *session.UserSession) {
 		time.Sleep(2 * time.Second)
 		messages := irc.GetAndClearOfflineMessages(username)
@@ -139,7 +129,6 @@ func LoginHandler(c *gin.Context) {
 			})
 		}
 	}(req.Username, userSession)
-	// --- END OFFLINE DM DELIVERY ---
 
 	c.JSON(http.StatusOK, LoginResponse{
 		Success: true,

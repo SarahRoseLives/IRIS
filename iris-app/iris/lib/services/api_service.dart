@@ -7,6 +7,16 @@ import '../models/login_response.dart';
 import '../models/channel.dart'; // Use Message and Channel from here
 import '../main.dart';
 
+// Define the custom exception class here for better organization
+class SessionExpiredException implements Exception {
+  final String message;
+  SessionExpiredException([this.message = "Your session has expired. Please log in again."]);
+
+  @override
+  String toString() => message;
+}
+
+
 class ApiService {
   String? _token;
 
@@ -16,18 +26,12 @@ class ApiService {
     _token = token;
   }
 
-  // START OF CHANGE: Improved session expiration handling with delayed logout
-  bool _checkForTokenInvalidation(http.Response response) {
+  // This centralized method checks for a 401 and throws our custom exception.
+  void _handleResponseError(http.Response response) {
     if (response.statusCode == 401) {
-      // Use a delay to allow the current operation to complete before logging out
-      Future.delayed(const Duration(milliseconds: 100), () {
-        AuthWrapper.forceLogout(showExpiredMessage: true);
-      });
-      return true;
+      throw SessionExpiredException();
     }
-    return false;
   }
-  // END OF CHANGE
 
   Future<LoginResponse> login(String username, String password) async {
     final url = Uri.parse('$baseUrl/login');
@@ -58,6 +62,7 @@ class ApiService {
 
   String _getToken() {
     if (_token == null) {
+      // Throwing an exception here is better for debugging than a silent failure.
       throw Exception("Authentication token is not set for ApiService.");
     }
     return _token!;
@@ -66,54 +71,45 @@ class ApiService {
   Future<void> registerFCMToken(String fcmToken) async {
     final url = Uri.parse('$baseUrl/register-fcm-token');
     print("[ApiService] registerFCMToken: Calling POST $url");
-    try {
-      final response = await http.post(
-        url,
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${_getToken()}',
-        },
-        body: json.encode({'fcm_token': fcmToken}),
-      );
-      if (_checkForTokenInvalidation(response)) {
-        print("[ApiService] registerFCMToken: Token invalid, force logout.");
-        return;
-      }
-      if (response.statusCode == 200) {
-        print("[ApiService] registerFCMToken: Success");
-      } else {
-        print("[ApiService] registerFCMToken: Failed with status ${response.statusCode}, body: ${response.body}");
-      }
-    } catch (e) {
-      print("[ApiService] registerFCMToken Error: $e");
+
+    final response = await http.post(
+      url,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ${_getToken()}',
+      },
+      body: json.encode({'fcm_token': fcmToken}),
+    );
+
+    _handleResponseError(response); // Check for 401
+
+    if (response.statusCode == 200) {
+      print("[ApiService] registerFCMToken: Success");
+    } else {
+      print("[ApiService] registerFCMToken: Failed with status ${response.statusCode}, body: ${response.body}");
+      // Optionally throw a different exception for other errors
     }
   }
 
   Future<List<Channel>> fetchChannels() async {
     final url = Uri.parse('$baseUrl/channels');
-    print("[ApiService] fetchChannels: Calling GET $url with token: $_token");
-    try {
-      final response = await http.get(
-        url,
-        headers: {'Authorization': 'Bearer ${_getToken()}'},
-      );
+    print("[ApiService] fetchChannels: Calling GET $url");
 
-      if (_checkForTokenInvalidation(response)) {
-        throw Exception("Session expired");
-      }
+    final response = await http.get(
+      url,
+      headers: {'Authorization': 'Bearer ${_getToken()}'},
+    );
 
-      print("[ApiService] fetchChannels: Received status code ${response.statusCode}");
+    _handleResponseError(response); // Check for 401
 
-      final data = jsonDecode(response.body);
-      if (response.statusCode == 200 && data['success'] == true) {
-        final List<dynamic> apiChannels = data['channels'] ?? [];
-        return apiChannels.map((c) => Channel.fromJson(c)).toList();
-      } else {
-        throw Exception(data['message'] ?? "Failed to load channels");
-      }
-    } catch (e) {
-      print("[ApiService] fetchChannels Error: $e");
-      throw Exception("Network error fetching channels: $e");
+    print("[ApiService] fetchChannels: Received status code ${response.statusCode}");
+
+    final data = jsonDecode(response.body);
+    if (response.statusCode == 200 && data['success'] == true) {
+      final List<dynamic> apiChannels = data['channels'] ?? [];
+      return apiChannels.map((c) => Channel.fromJson(c)).toList();
+    } else {
+      throw Exception(data['message'] ?? "Failed to load channels");
     }
   }
 
@@ -126,78 +122,63 @@ class ApiService {
 
     final encodedChannelName = Uri.encodeComponent(channelName);
     final url = Uri.parse('$baseUrl/history/$encodedChannelName?limit=$limit');
-    final token = _getToken();
     print("[ApiService] fetchChannelMessages: Calling GET $url");
 
-    try {
-      final response = await http.get(
-        url,
-        headers: {'Authorization': 'Bearer $token'},
-      );
+    final response = await http.get(
+      url,
+      headers: {'Authorization': 'Bearer ${_getToken()}'},
+    );
 
-      if (_checkForTokenInvalidation(response)) {
-        throw Exception("Session expired");
-      }
+    _handleResponseError(response); // Check for 401
 
-      print("[ApiService] fetchChannelMessages: Received status code ${response.statusCode} for $channelName");
+    print("[ApiService] fetchChannelMessages: Received status code ${response.statusCode} for $channelName");
 
-      final data = jsonDecode(response.body);
+    final data = jsonDecode(response.body);
 
-      if (response.statusCode == 200 && data['success'] == true) {
-        final List<dynamic> history = data['history'] ?? [];
-        print("[ApiService] fetchChannelMessages: Successfully fetched ${history.length} messages for $channelName");
-        return history.map((msg) => {
-              'from': msg['sender'] ?? 'Unknown',
-              'content': msg['text'] ?? '',
-              'time': msg['timestamp'] ?? DateTime.now().toIso8601String(),
-              'id': msg['id'] ?? 'hist-${msg['timestamp']}-${msg['sender']}',
-            }).toList();
-      } else {
-        print("[ApiService] fetchChannelMessages: API returned non-200 status for $channelName: ${response.statusCode}");
-        throw Exception("Failed to load messages: Status ${response.statusCode}, Body: ${response.body}");
-      }
-    } catch (e) {
-      print("[ApiService] fetchChannelMessages Error for $channelName: $e");
-      throw Exception("Network error fetching messages: $e");
+    if (response.statusCode == 200 && data['success'] == true) {
+      final List<dynamic> history = data['history'] ?? [];
+      print("[ApiService] fetchChannelMessages: Successfully fetched ${history.length} messages for $channelName");
+      return history.map((msg) => {
+        'from': msg['sender'] ?? 'Unknown',
+        'content': msg['text'] ?? '',
+        'time': msg['timestamp'] ?? DateTime.now().toIso8601String(),
+        'id': msg['id'] ?? 'hist-${msg['timestamp']}-${msg['sender']}',
+      }).toList();
+    } else {
+      print("[ApiService] fetchChannelMessages: API returned non-200 status for $channelName: ${response.statusCode}");
+      throw Exception("Failed to load messages: Status ${response.statusCode}, Body: ${response.body}");
     }
   }
 
   Future<List<Message>> fetchMessagesSince(String channelName, DateTime since) async {
     final encodedChannel = Uri.encodeComponent(channelName);
     final url = Uri.parse('$baseUrl/history/$encodedChannel?since=${since.toIso8601String()}');
-    final token = _getToken();
     print("[ApiService] fetchMessagesSince: Calling GET $url");
-    try {
-      final response = await http.get(
-        url,
-        headers: {'Authorization': 'Bearer $token'},
-      );
 
-      if (_checkForTokenInvalidation(response)) {
-        throw Exception("Session expired");
-      }
+    final response = await http.get(
+      url,
+      headers: {'Authorization': 'Bearer ${_getToken()}'},
+    );
 
-      print("[ApiService] fetchMessagesSince: Received status code ${response.statusCode} for $channelName");
+    _handleResponseError(response); // Check for 401
 
-      final data = jsonDecode(response.body);
+    print("[ApiService] fetchMessagesSince: Received status code ${response.statusCode} for $channelName");
 
-      if (response.statusCode == 200 && data['success'] == true) {
-        final List<dynamic> history = data['history'] ?? [];
-        print("[ApiService] fetchMessagesSince: Successfully fetched ${history.length} missed messages for $channelName since $since");
-        return history.map<Message>((msg) => Message(
-              from: msg['sender'] ?? 'Unknown',
-              content: msg['text'] ?? '',
-              time: DateTime.tryParse(msg['timestamp'] ?? '')?.toLocal() ?? DateTime.now(),
-              id: (msg['id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
-              isHistorical: true,
-            )).toList();
-      } else {
-        print("[ApiService] fetchMessagesSince: API returned non-200 status for $channelName: ${response.statusCode}");
-        throw Exception("Failed to load missed messages: Status ${response.statusCode}, Body: ${response.body}");
-      }
-    } catch (e) {
-      print("[ApiService] fetchMessagesSince Error for $channelName: $e");
-      throw Exception("Network error fetching missed messages: $e");
+    final data = jsonDecode(response.body);
+
+    if (response.statusCode == 200 && data['success'] == true) {
+      final List<dynamic> history = data['history'] ?? [];
+      print("[ApiService] fetchMessagesSince: Successfully fetched ${history.length} missed messages for $channelName since $since");
+      return history.map<Message>((msg) => Message(
+        from: msg['sender'] ?? 'Unknown',
+        content: msg['text'] ?? '',
+        time: DateTime.tryParse(msg['timestamp'] ?? '')?.toLocal() ?? DateTime.now(),
+        id: (msg['id'] ?? DateTime.now().millisecondsSinceEpoch).toString(),
+        isHistorical: true,
+      )).toList();
+    } else {
+      print("[ApiService] fetchMessagesSince: API returned non-200 status for $channelName: ${response.statusCode}");
+      throw Exception("Failed to load missed messages: Status ${response.statusCode}, Body: ${response.body}");
     }
   }
 
@@ -213,9 +194,7 @@ class ApiService {
       body: json.encode({'channel': channelName}),
     );
 
-    if (_checkForTokenInvalidation(response)) {
-      throw Exception("Session expired");
-    }
+    _handleResponseError(response); // Check for 401
 
     final responseData = json.decode(response.body);
     print("[ApiService] joinChannel: Received status code ${response.statusCode}, success: ${responseData['success']}");
@@ -238,9 +217,7 @@ class ApiService {
       body: json.encode({'channel': channelName}),
     );
 
-    if (_checkForTokenInvalidation(response)) {
-      throw Exception("Session expired");
-    }
+    _handleResponseError(response); // Check for 401
 
     final responseData = json.decode(response.body);
     print("[ApiService] partChannel: Received status code ${response.statusCode}, success: ${responseData['success']}");
@@ -282,17 +259,12 @@ class ApiService {
       ),
     );
 
-    final response = await request.send();
-    final responseBody = await response.stream.bytesToString();
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
 
-    if (response.statusCode == 401) {
-      // Use a delay to allow the current operation to complete before logging out
-      Future.delayed(const Duration(milliseconds: 100), () {
-        AuthWrapper.forceLogout(showExpiredMessage: true);
-      });
-      throw Exception('Session expired');
-    }
+    _handleResponseError(response); // Check for 401
 
+    final responseBody = response.body;
     if (response.statusCode == 200) {
       print("[ApiService] uploadAvatar: Upload successful, status 200.");
       return json.decode(responseBody);
@@ -332,17 +304,12 @@ class ApiService {
       ),
     );
 
-    final response = await request.send();
-    final responseBody = await response.stream.bytesToString();
+    final streamedResponse = await request.send();
+    final response = await http.Response.fromStream(streamedResponse);
 
-    if (response.statusCode == 401) {
-      // Use a delay to allow the current operation to complete before logging out
-      Future.delayed(const Duration(milliseconds: 100), () {
-        AuthWrapper.forceLogout(showExpiredMessage: true);
-      });
-      throw Exception('Session expired');
-    }
+    _handleResponseError(response); // Check for 401
 
+    final responseBody = response.body;
     if (response.statusCode == 200) {
       print("[ApiService] uploadAttachmentAndGetUrl: Success, status 200.");
       final data = json.decode(responseBody);
@@ -354,17 +321,17 @@ class ApiService {
     }
   }
 
-  // START OF CHANGE: Session validation endpoint for periodic checks
   Future<bool> validateSession() async {
     try {
       final response = await http.get(
         Uri.parse('$baseUrl/validate-session'),
         headers: {'Authorization': 'Bearer ${_getToken()}'},
       );
+      // We only care about success (200) vs fail (anything else)
       return response.statusCode == 200;
     } catch (e) {
+      // Catching network errors etc. should also count as a validation failure.
       return false;
     }
   }
-  // END OF CHANGE
 }

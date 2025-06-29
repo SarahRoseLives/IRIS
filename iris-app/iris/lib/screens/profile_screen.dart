@@ -161,7 +161,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   Future<void> _logout() async {
     try {
-      await AuthWrapper.forceLogout();
+      await AuthManager.forceLogout();
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(

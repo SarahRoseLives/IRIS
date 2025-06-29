@@ -8,6 +8,7 @@ import 'package:get_it/get_it.dart';
 import 'package:iris/firebase_options.dart';
 import 'package:iris/main_layout.dart';
 import 'package:iris/screens/login_screen.dart';
+import 'package:iris/services/api_service.dart'; // Import ApiService for the exception
 import 'package:iris/services/encryption_service.dart';
 import 'package:iris/services/notification_service.dart';
 import 'package:iris/services/update_service.dart';
@@ -17,12 +18,15 @@ import 'package:iris/viewmodels/chat_state.dart';
 import 'package:iris/widgets/fingerprint_gate.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+// --- CHANGE 1: Define navigatorKey and GetIt instance at the top level ---
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+final getIt = GetIt.instance;
+
+
 class PendingNotification {
   static String? channelToNavigateTo;
   static Map<String, dynamic>? messageData;
 }
-
-final getIt = GetIt.instance;
 
 void setupLocator() {
   if (!getIt.isRegistered<FlutterLocalNotificationsPlugin>()) {
@@ -41,10 +45,53 @@ void setupLocator() {
   if (!getIt.isRegistered<ChatState>()) {
     getIt.registerSingleton<ChatState>(ChatState());
   }
+  // Register ApiService if not already registered
+  if (!getIt.isRegistered<ApiService>()) {
+    getIt.registerSingleton<ApiService>(ApiService());
+  }
 }
+
+// --- CHANGE 2: Create a dedicated AuthManager class for logout logic ---
+class AuthManager {
+  static Future<void> forceLogout({bool showExpiredMessage = false}) async {
+    print('[AuthManager] Beginning force logout process...');
+
+    try {
+      // Disconnect services
+      if (getIt.isRegistered<WebSocketService>()) {
+        getIt<WebSocketService>().disconnect();
+      }
+      if (getIt.isRegistered<EncryptionService>()) {
+        getIt<EncryptionService>().reset();
+      }
+      if (getIt.isRegistered<ChatState>()) {
+        getIt<ChatState>().reset();
+      }
+
+      // Clear all persisted data for a clean logout
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.clear();
+
+      // Use the global navigatorKey to navigate to the LoginScreen
+      final navigator = navigatorKey.currentState;
+      if (navigator != null) {
+        print('[AuthManager] Navigating to LoginScreen...');
+        navigator.pushAndRemoveUntil(
+          MaterialPageRoute(
+              builder: (_) => LoginScreen(showExpiredMessage: showExpiredMessage)),
+          (route) => false, // This predicate removes all routes from the stack
+        );
+      }
+    } catch (e) {
+      print('[AuthManager] Error during forceLogout: $e');
+    }
+  }
+}
+
 
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
+  // ... (no changes needed here)
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   setupLocator();
   final notificationService = getIt<NotificationService>();
@@ -63,6 +110,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 @pragma('vm:entry-point')
 void onDidReceiveNotificationResponse(
     NotificationResponse notificationResponse) async {
+  // ... (no changes needed here)
   final String? payload = notificationResponse.payload;
   if (payload != null) {
     try {
@@ -75,6 +123,7 @@ void onDidReceiveNotificationResponse(
 }
 
 Future<void> main() async {
+  // ... (no changes needed here)
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
@@ -109,7 +158,8 @@ class IRISApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'IRIS',
-      navigatorKey: AuthWrapper.globalKey,
+      // --- CHANGE 3: Use the top-level navigatorKey ---
+      navigatorKey: navigatorKey,
       theme: ThemeData.dark().copyWith(
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF5865F2),
@@ -124,25 +174,18 @@ class IRISApp extends StatelessWidget {
   }
 }
 
+
+// --- CHANGE 4: AuthWrapper is now a simpler stateful widget ---
 class AuthWrapper extends StatefulWidget {
-  static final GlobalKey<NavigatorState> globalKey = GlobalKey<NavigatorState>();
-  static final GlobalKey<_AuthWrapperState> stateKey =
-      GlobalKey<_AuthWrapperState>();
-
-  AuthWrapper() : super(key: stateKey);
-
-  static Future<void> forceLogout({bool showExpiredMessage = false}) async {
-    stateKey.currentState
-        ?.logoutAndShowLogin(showExpiredMessage: showExpiredMessage);
-  }
-
   @override
   State<AuthWrapper> createState() => _AuthWrapperState();
 }
 
 class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   bool _isLoading = true;
-  bool _isLoggedIn = false; // PATCH: Add explicit login state tracking
+  bool _isLoggedIn = false;
+  String? _username;
+  String? _token;
 
   @override
   void initState() {
@@ -161,13 +204,12 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
-
-    if (state == AppLifecycleState.resumed) {
-      // Check if session is still valid
-      final prefs = await SharedPreferences.getInstance();
-      final token = prefs.getString('auth_token');
-      if (token == null) {
-        AuthWrapper.forceLogout();
+    if (state == AppLifecycleState.resumed && _isLoggedIn) {
+      // When app resumes, validate the session with the server
+      final isValid = await getIt<ApiService>().validateSession();
+      if (!isValid) {
+        // Use the new global logout manager
+        AuthManager.forceLogout(showExpiredMessage: true);
       }
     }
   }
@@ -177,23 +219,20 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
     final token = prefs.getString('auth_token');
     final username = prefs.getString('username');
 
-    if (mounted && token != null && username != null) {
-      setState(() {
-        _isLoggedIn = true;
-      });
-      // Use globalKey for navigation to prevent stale context
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        AuthWrapper.globalKey.currentState?.pushReplacement(
-          MaterialPageRoute(
-            builder: (_) => IrisLayout(username: username, token: token),
-          ),
-        );
-      });
-    } else {
-      setState(() {
-        _isLoading = false;
-        _isLoggedIn = false;
-      });
+    if (mounted) {
+      if (token != null && username != null) {
+        setState(() {
+          _isLoggedIn = true;
+          _isLoading = false;
+          _username = username;
+          _token = token;
+        });
+      } else {
+        setState(() {
+          _isLoggedIn = false;
+          _isLoading = false;
+        });
+      }
     }
   }
 
@@ -203,68 +242,6 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
       await UpdateService.checkForUpdates(context);
     }
   }
-
-  // --- UPDATED logoutAndShowLogin ---
-  Future<void> logoutAndShowLogin({bool showExpiredMessage = false}) async {
-    print('[Auth] Beginning logout process...');
-
-    try {
-      // Disconnect WebSocket
-      if (getIt.isRegistered<WebSocketService>()) {
-        print('[Auth] Disconnecting WebSocket...');
-        getIt<WebSocketService>().disconnect();
-      }
-
-      // Reset Encryption Service State
-      if (getIt.isRegistered<EncryptionService>()) {
-        print('[Auth] Resetting encryption state...');
-        getIt<EncryptionService>().reset();
-      }
-
-      // Reset Chat State
-      if (getIt.isRegistered<ChatState>()) {
-        print('[Auth] Resetting chat state...');
-        getIt<ChatState>().reset();
-      }
-
-      // Clear all persisted data for a clean logout
-      final prefs = await SharedPreferences.getInstance();
-      print('[Auth] Clearing all SharedPreferences...');
-      await prefs.clear();
-
-      // PATCH: Always update state
-      setState(() {
-        _isLoading = false;
-        _isLoggedIn = false;
-      });
-
-      // PATCH: Use globalKey's Navigator for all navigation
-      final navigator = AuthWrapper.globalKey.currentState;
-      if (navigator != null && mounted) {
-        print('[Auth] Navigating to LoginScreen...');
-        navigator.pushAndRemoveUntil(
-          MaterialPageRoute(
-              builder: (_) => LoginScreen(showExpiredMessage: showExpiredMessage)),
-          (route) => false,
-        );
-      } else {
-        print('[Auth] Could not navigate to LoginScreen. Navigator or mounted state is invalid.');
-        // PATCH: Fallback to forcing rebuild and showing login
-        setState(() {
-          _isLoading = false;
-          _isLoggedIn = false;
-        });
-      }
-    } catch (e) {
-      print('[Auth] Error during logout: $e');
-      // PATCH: Fallback
-      setState(() {
-        _isLoading = false;
-        _isLoggedIn = false;
-      });
-    }
-  }
-  // --- END OF CHANGE ---
 
   @override
   Widget build(BuildContext context) {
@@ -277,17 +254,12 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
       );
     }
 
-    // PATCH: Show login screen if not logged in
-    if (!_isLoggedIn) {
-      return LoginScreen(showExpiredMessage: false);
+    // This build method is now declarative. It builds the UI based on state
+    // without performing navigation as a side-effect.
+    if (_isLoggedIn && _username != null && _token != null) {
+      return IrisLayout(username: _username!, token: _token!);
+    } else {
+      return LoginScreen();
     }
-
-    // PATCH: If logged in, show a placeholder until navigation completes
-    return const Scaffold(
-      backgroundColor: Color(0xFF313338),
-      body: Center(
-        child: CircularProgressIndicator(color: Color(0xFF5865F2)),
-      ),
-    );
   }
 }

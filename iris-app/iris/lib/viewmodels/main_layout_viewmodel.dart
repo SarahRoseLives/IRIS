@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:get_it/get_it.dart';
+import 'package:flutter/foundation.dart'; // <-- Needed for kIsWeb
 
-import '../main.dart';
+// --- CHANGE 1: Add necessary imports for the new error handling ---
+import '../main.dart'; // Provides AuthManager
+import '../services/api_service.dart'; // Provides SessionExpiredException
+
 import '../services/websocket_service.dart';
 import '../services/notification_service.dart';
 import 'chat_state.dart';
@@ -10,9 +14,8 @@ import 'chat_controller.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
 import '../models/encryption_session.dart';
-
-// Add import for fingerprint service
 import '../services/fingerprint_service.dart';
+
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
@@ -35,18 +38,16 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   StreamSubscription? _wsStatusSub;
   StreamSubscription? _errorSub;
 
-  // NEW: State for encryption UI
   bool _shouldShowSafetyNumberDialog = false;
 
-  // --- NEW: Hide/Block state ---
   final Set<String> _blockedUsers = {};
   final Set<String> _hiddenMessageIds = {};
 
-  // --- GETTERS for Hide/Block ---
+  bool _userScrolledUp = false;
+
   Set<String> get blockedUsers => _blockedUsers;
   Set<String> get hiddenMessageIds => _hiddenMessageIds;
 
-  // --- Methods for Hide/Block ---
   void blockUser(String username) {
     _blockedUsers.add(username);
     notifyListeners();
@@ -67,15 +68,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  // Add FingerprintService instance
   final FingerprintService _fingerprintService = FingerprintService();
 
-  // Flag to prevent auth loop when resuming the app
   bool _isAuthenticating = false;
 
-  // --- START OF TIMESTAMP DEBOUNCE ---
   DateTime? _lastAuthAttempt;
-  // --- END OF TIMESTAMP DEBOUNCE ---
 
   MainLayoutViewModel({required this.username, this.token}) {
     if (token == null) {
@@ -85,7 +82,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
 
-    // Use the global singleton instance of ChatState from GetIt
     chatState = getIt<ChatState>();
 
     _chatController = ChatController(
@@ -98,6 +94,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final target = chatState.selectedConversationTarget;
       return target.startsWith('@') ? target : null;
     };
+
+    _scrollController.addListener(_onScroll);
 
     _initialize();
   }
@@ -141,6 +139,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final serverChannels = await _chatController.apiService.fetchChannels();
       chatState.mergeChannels(serverChannels);
       _chatController.connectWebSocket();
+    // --- CHANGE 2: Catch the specific SessionExpiredException ---
+    } on SessionExpiredException {
+      AuthManager.forceLogout(showExpiredMessage: true);
     } catch (e) {
       _channelError = "Failed to load conversations: $e";
     } finally {
@@ -179,8 +180,19 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
     }
-    _scrollToBottomIfScrolled();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _scrollToBottomIfUserAtBottom();
+    });
+
     notifyListeners();
+  }
+
+  void _onScroll() {
+    if (!_scrollController.hasClients) return;
+    final position = _scrollController.position;
+    final atBottom = (position.maxScrollExtent - position.pixels) <= 50.0;
+    _userScrolledUp = !atBottom;
   }
 
   void _onWsStatusChanged(WebSocketStatus status) {
@@ -220,6 +232,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
                   }))
               .toList();
           chatState.addMessageBatch(channel.name, newMessages);
+        // --- CHANGE 3: Handle session expiration for each API call ---
+        } on SessionExpiredException {
+          AuthManager.forceLogout(showExpiredMessage: true);
+          return; // Stop fetching more history
         } catch (e) {
           print('Error fetching history for ${channel.name}: $e');
         }
@@ -229,6 +245,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           final newMessages = await _chatController.apiService
               .fetchMessagesSince(channel.name, lastTime);
           chatState.addMessageBatch(channel.name, newMessages);
+        // --- CHANGE 3: Handle session expiration for each API call ---
+        } on SessionExpiredException {
+          AuthManager.forceLogout(showExpiredMessage: true);
+          return; // Stop fetching more history
         } catch (e) {
           print('Error fetching missed messages for ${channel.name}: $e');
         }
@@ -257,6 +277,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
                   }))
               .toList();
           chatState.addMessageBatch(dm, newMessages);
+        // --- CHANGE 3: Handle session expiration for each API call ---
+        } on SessionExpiredException {
+          AuthManager.forceLogout(showExpiredMessage: true);
+          return; // Stop fetching more history
         } catch (e) {
           print('Error fetching history for DM $dm: $e');
         }
@@ -266,6 +290,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           final newMessages =
               await _chatController.apiService.fetchMessagesSince(dm, lastTime);
           chatState.addMessageBatch(dm, newMessages);
+        // --- CHANGE 3: Handle session expiration for each API call ---
+        } on SessionExpiredException {
+          AuthManager.forceLogout(showExpiredMessage: true);
+          return; // Stop fetching more history
         } catch (e) {
           print('Error fetching missed messages for DM $dm: $e');
         }
@@ -280,11 +308,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
       _chatController.disconnectWebSocket();
     } else if (state == AppLifecycleState.resumed) {
-      // If an auth check is already in progress, do nothing.
       if (_isAuthenticating) return;
 
-      // Check if the last authentication attempt was very recent (e.g., within 2 seconds).
-      // This prevents loops caused by the auth dialog itself triggering a resume event.
       if (_lastAuthAttempt != null &&
           DateTime.now().difference(_lastAuthAttempt!).inSeconds < 2) {
         return;
@@ -293,7 +318,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final fingerprintEnabled =
           await _fingerprintService.isFingerprintEnabled();
       if (fingerprintEnabled) {
-        // Record the time we START this attempt.
         _lastAuthAttempt = DateTime.now();
         _isAuthenticating = true;
 
@@ -302,11 +326,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         _isAuthenticating = false;
 
         if (!authenticated) {
-          return; // Lock the app by not proceeding.
+          return;
         }
       }
 
-      // If fingerprint is disabled or authentication was successful, connect.
       _chatController.connectWebSocket();
       _fetchLatestHistoryForAllChannels();
     }
@@ -325,14 +348,22 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void toggleLeftDrawer() {
-    _showLeftDrawer = !_showLeftDrawer;
-    if (_showLeftDrawer) _showRightDrawer = false;
+    if (kIsWeb) {
+      _showLeftDrawer = !_showLeftDrawer;
+    } else {
+      _showLeftDrawer = !_showLeftDrawer;
+      if (_showLeftDrawer) _showRightDrawer = false;
+    }
     notifyListeners();
   }
 
   void toggleRightDrawer() {
-    _showRightDrawer = !_showRightDrawer;
-    if (_showRightDrawer) _showLeftDrawer = false;
+    if (kIsWeb) {
+      _showRightDrawer = !_showRightDrawer;
+    } else {
+      _showRightDrawer = !_showRightDrawer;
+      if (_showRightDrawer) _showLeftDrawer = false;
+    }
     notifyListeners();
   }
 
@@ -353,14 +384,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  void _scrollToBottomIfScrolled() {
-    if (_scrollController.hasClients) {
-      final isAtBottom =
-          _scrollController.position.maxScrollExtent - _scrollController.offset <
-              200;
-      if (isAtBottom) {
-        _scrollToBottom();
-      }
+  void _scrollToBottomIfUserAtBottom() {
+    if (_scrollController.hasClients && !_userScrolledUp) {
+      _scrollToBottom();
     }
   }
 
@@ -369,6 +395,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     if (text.trim().isEmpty) return;
     _msgController.clear();
     await _chatController.handleSendMessage(text);
+    _userScrolledUp = false;
     _scrollToBottom();
   }
 
@@ -379,6 +406,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final target = chatState.selectedConversationTarget;
       return target.startsWith('@') ? target : null;
     };
+    _userScrolledUp = false;
     _scrollToBottom();
   }
 
@@ -411,11 +439,15 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
     chatState.selectConversation(channelName);
     notifyListeners();
+    _userScrolledUp = false;
+    _scrollToBottom();
   }
 
   void removeDmMessage(Message message) {
     chatState.removeDmMessage(message);
   }
+
+
 
   void removeDmChannel(String dmChannelName) {
     if (selectedConversationTarget == dmChannelName) {
@@ -463,11 +495,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _wsStatusSub?.cancel();
     _errorSub?.cancel();
 
-    // Ensure WebSocket is properly disconnected
     if (_wsStatus == WebSocketStatus.connected) {
       _chatController.disconnectWebSocket();
     }
 
+    _scrollController.removeListener(_onScroll);
     _chatController.dispose();
     _msgController.dispose();
     _scrollController.dispose();

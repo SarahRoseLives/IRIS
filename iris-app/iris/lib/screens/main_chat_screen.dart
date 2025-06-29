@@ -1,4 +1,3 @@
-// main_chat_screen.dart (Modified for web layout and improved drawer logic)
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // For kIsWeb
 import 'package:provider/provider.dart';
@@ -205,88 +204,66 @@ class MainChatScreen extends StatelessWidget {
             children: [
               // Left drawer (web: always visible, mobile: overlay)
               if (isWeb || viewModel.showLeftDrawer)
-                Container(
+                SizedBox(
                   width: leftDrawerWidth,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2B2D31),
-                    boxShadow: isWeb
-                        ? null
-                        : [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.5),
-                              blurRadius: 10,
-                              spreadRadius: 5,
-                            ),
-                          ],
-                  ),
-                  child: Column(
-                    children: [
-                      if (isWeb)
-                        Align(
-                          alignment: Alignment.topRight,
-                          child: IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white70),
-                            onPressed: viewModel.toggleLeftDrawer,
-                          ),
-                        ),
-                      Expanded(
-                        child: LeftDrawer(
-                          dms: viewModel.dmChannelNames,
-                          userAvatars: viewModel.userAvatars,
-                          userStatuses: viewModel.chatState.userStatuses,
-                          joinedChannels: viewModel.joinedPublicChannelNames,
-                          unjoinedChannels: viewModel.unjoinedPublicChannelNames,
-                          selectedConversationTarget:
-                              viewModel.selectedConversationTarget,
-                          onChannelSelected: viewModel.onChannelSelected,
-                          onChannelPart: viewModel.partChannel,
-                          onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
-                          onDmSelected: viewModel.onDmSelected,
-                          onRemoveDm: viewModel.removeDmChannel,
-                          onIrisTap: viewModel.selectMainView,
-                          loadingChannels: viewModel.loadingChannels,
-                          error: viewModel.channelError,
-                          wsStatus: viewModel.wsStatus,
-                          showDrawer: viewModel.showLeftDrawer,
-                          onCloseDrawer: viewModel.toggleLeftDrawer,
-                          unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
-                          onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
-                          hasUnreadMessages: viewModel.hasUnreadMessages,
-                          getLastMessage: viewModel.getLastMessage,
-                          currentUsername: viewModel.username,
-                        ),
-                      ),
-                    ],
+                  child: Drawer(
+                    elevation: 0,
+                    backgroundColor: Colors.transparent,
+                    child: LeftDrawer(
+                      dms: viewModel.dmChannelNames,
+                      userAvatars: viewModel.userAvatars,
+                      userStatuses: viewModel.chatState.userStatuses,
+                      joinedChannels: viewModel.joinedPublicChannelNames,
+                      unjoinedChannels: viewModel.unjoinedPublicChannelNames,
+                      selectedConversationTarget:
+                          viewModel.selectedConversationTarget,
+                      onChannelSelected: viewModel.onChannelSelected,
+                      onChannelPart: viewModel.partChannel,
+                      onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
+                      onDmSelected: viewModel.onDmSelected,
+                      onRemoveDm: viewModel.removeDmChannel,
+                      onIrisTap: viewModel.selectMainView,
+                      loadingChannels: viewModel.loadingChannels,
+                      error: viewModel.channelError,
+                      wsStatus: viewModel.wsStatus,
+                      showDrawer: viewModel.showLeftDrawer,
+                      onCloseDrawer: viewModel.toggleLeftDrawer,
+                      unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
+                      onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
+                      hasUnreadMessages: viewModel.hasUnreadMessages,
+                      getLastMessage: viewModel.getLastMessage,
+                      currentUsername: viewModel.username,
+                    ),
                   ),
                 ),
 
               // Main content area
               Expanded(
-                child: GestureDetector(
-                  onHorizontalDragUpdate: (details) {
-                    if (isWeb) return; // Disable swipe gestures in web mode
+                child: Stack(
+                  children: [
+                    GestureDetector(
+                      onHorizontalDragUpdate: (details) {
+                        if (isWeb) return; // Disable swipe gestures in web mode
 
-                    final width = MediaQuery.of(context).size.width;
-                    if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
-                      if (!viewModel.showLeftDrawer &&
-                          !viewModel.showRightDrawer) {
-                        viewModel.toggleLeftDrawer();
-                      }
-                    } else if (details.delta.dx < -5 &&
-                        details.globalPosition.dx > width - 50) {
-                      if (!viewModel.showLeftDrawer &&
-                          !viewModel.showRightDrawer) {
-                        viewModel.toggleRightDrawer();
-                      }
-                    } else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
-                      viewModel.toggleLeftDrawer();
-                    } else if (viewModel.showRightDrawer && details.delta.dx > 5) {
-                      viewModel.toggleRightDrawer();
-                    }
-                  },
-                  child: Stack(
-                    children: [
-                      SafeArea(
+                        final width = MediaQuery.of(context).size.width;
+                        if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
+                          if (!viewModel.showLeftDrawer &&
+                              !viewModel.showRightDrawer) {
+                            viewModel.toggleLeftDrawer();
+                          }
+                        } else if (details.delta.dx < -5 &&
+                            details.globalPosition.dx > width - 50) {
+                          if (!viewModel.showLeftDrawer &&
+                              !viewModel.showRightDrawer) {
+                            viewModel.toggleRightDrawer();
+                          }
+                        } else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
+                          viewModel.toggleLeftDrawer();
+                        } else if (viewModel.showRightDrawer && details.delta.dx > 5) {
+                          viewModel.toggleRightDrawer();
+                        }
+                      },
+                      child: SafeArea(
                         child: Column(
                           children: [
                             Container(
@@ -381,62 +358,40 @@ class MainChatScreen extends StatelessWidget {
                           ],
                         ),
                       ),
-                      // Overlay for mobile when drawers are open
-                      if (!isWeb &&
-                          (viewModel.showLeftDrawer ||
-                              viewModel.showRightDrawer))
-                        Positioned.fill(
-                          child: GestureDetector(
-                            onTap: () {
-                              if (viewModel.showLeftDrawer)
-                                viewModel.toggleLeftDrawer();
-                              if (viewModel.showRightDrawer)
-                                viewModel.toggleRightDrawer();
-                            },
-                            child: Container(
-                              color: Colors.black.withOpacity(0.5),
-                            ),
+                    ),
+                    // Overlay for mobile when drawers are open
+                    if (!isWeb &&
+                        (viewModel.showLeftDrawer ||
+                            viewModel.showRightDrawer))
+                      Positioned.fill(
+                        child: GestureDetector(
+                          onTap: () {
+                            if (viewModel.showLeftDrawer)
+                              viewModel.toggleLeftDrawer();
+                            if (viewModel.showRightDrawer)
+                              viewModel.toggleRightDrawer();
+                          },
+                          child: Container(
+                            color: Colors.black.withOpacity(0.5),
                           ),
                         ),
-                    ],
-                  ),
+                      ),
+                  ],
                 ),
               ),
 
               // Right drawer (web: always visible, mobile: overlay)
               if (isWeb || viewModel.showRightDrawer)
-                Container(
+                SizedBox(
                   width: rightDrawerWidth,
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF2B2D31),
-                    boxShadow: isWeb
-                        ? null
-                        : [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.5),
-                              blurRadius: 10,
-                              spreadRadius: 5,
-                            ),
-                          ],
-                  ),
-                  child: Column(
-                    children: [
-                      if (isWeb)
-                        Align(
-                          alignment: Alignment.topRight,
-                          child: IconButton(
-                            icon: const Icon(Icons.close, color: Colors.white70),
-                            onPressed: viewModel.toggleRightDrawer,
-                          ),
-                        ),
-                      Expanded(
-                        child: RightDrawer(
-                          members: viewModel.members,
-                          userAvatars: viewModel.userAvatars,
-                          onCloseDrawer: viewModel.toggleRightDrawer,
-                        ),
-                      ),
-                    ],
+                  child: Drawer(
+                    elevation: 0,
+                    backgroundColor: Colors.transparent,
+                    child: RightDrawer(
+                      members: viewModel.members,
+                      userAvatars: viewModel.userAvatars,
+                      onCloseDrawer: viewModel.toggleRightDrawer,
+                    ),
                   ),
                 ),
             ],

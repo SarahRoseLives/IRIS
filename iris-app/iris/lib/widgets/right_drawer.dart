@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart'; // Added for kIsWeb
+import 'package:flutter/foundation.dart'; // For kIsWeb
 import 'package:provider/provider.dart';
 import '../models/channel_member.dart';
 import '../models/user_status.dart';
@@ -87,8 +87,6 @@ class RightDrawer extends StatelessWidget {
     final onlineGroups = _groupByRole(onlineMembers);
     final awayGroups = _groupByRole(awayMembers);
 
-    final isWeb = kIsWeb;
-
     List<Widget> buildSection(Map<String, List<ChannelMember>> groups, {String? sectionLabel}) {
       final widgets = <Widget>[];
       for (final prefix in _roleOrder) {
@@ -152,7 +150,7 @@ class RightDrawer extends StatelessWidget {
       color: Colors.transparent,
       child: Row(
         children: [
-          // Handle on the left side of the right drawer
+          // Always show the close handle, both web and mobile!
           GestureDetector(
             onTap: onCloseDrawer,
             child: Container(
@@ -161,13 +159,12 @@ class RightDrawer extends StatelessWidget {
               color: const Color(0xFF232428),
               child: Center(
                 child: Icon(
-                  isWeb ? Icons.close : Icons.chevron_right,
+                  Icons.chevron_right,
                   color: Colors.white54,
                 ),
               ),
             ),
           ),
-          // Original Drawer Content
           Expanded(
             child: Container(
               color: const Color(0xFF2B2D31),

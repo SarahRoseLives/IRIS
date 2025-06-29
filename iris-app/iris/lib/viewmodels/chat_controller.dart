@@ -510,7 +510,7 @@ class ChatController {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove('auth_token');
     await prefs.remove('username');
-    AuthWrapper.forceLogout();
+    AuthManager.forceLogout();
   }
 
   void dispose() {

@@ -155,7 +155,7 @@ class WebSocketService {
 
     // Use a delay to ensure the WebSocket is fully disconnected before forcing logout
     Future.delayed(const Duration(milliseconds: 500), () {
-      AuthWrapper.forceLogout(showExpiredMessage: true);
+      AuthManager.forceLogout(showExpiredMessage: true);
     });
   }
 

@@ -121,8 +121,8 @@ class ChatState extends ChangeNotifier {
   }
 
   void setEncryptionStatus(String channelName, EncryptionStatus status) {
-      _encryptionStatuses[channelName.toLowerCase()] = status;
-      notifyListeners();
+    _encryptionStatuses[channelName.toLowerCase()] = status;
+    notifyListeners();
   }
 
   void _rebuildUserStatuses() {
@@ -368,7 +368,7 @@ class ChatState extends ChangeNotifier {
       final List<Map<String, dynamic>> channelsJson = _channels.map((c) => c.toJson()).toList();
       await prefs.setString(_channelsKey, json.encode(channelsJson));
     } catch (e) {
-        print('Error saving channels to prefs: $e. Make sure Channel.toJson() is implemented.');
+      print('Error saving channels to prefs: $e. Make sure Channel.toJson() is implemented.');
     }
   }
 
@@ -391,13 +391,13 @@ class ChatState extends ChangeNotifier {
 
     final savedChannels = prefs.getString(_channelsKey);
     if (savedChannels != null) {
-        try {
-            final channelsJson = json.decode(savedChannels) as List<dynamic>;
-            _channels = channelsJson.map((c) => Channel.fromJson(c as Map<String, dynamic>)).toList();
-            _rebuildUserStatuses();
-        } catch (e) {
-            print('Error loading persisted channels: $e');
-        }
+      try {
+        final channelsJson = json.decode(savedChannels) as List<dynamic>;
+        _channels = channelsJson.map((c) => Channel.fromJson(c as Map<String, dynamic>)).toList();
+        _rebuildUserStatuses();
+      } catch (e) {
+        print('Error loading persisted channels: $e');
+      }
     }
 
     _channelMessages.clear();
@@ -431,14 +431,14 @@ class ChatState extends ChangeNotifier {
     _lastSeenMessageIds.clear();
     final savedSeenIds = prefs.getString(_lastSeenKey);
     if (savedSeenIds != null) {
-        try {
-            final seenIdsMap = json.decode(savedSeenIds) as Map<String, dynamic>;
-            seenIdsMap.forEach((key, value) {
-                _lastSeenMessageIds[key] = value as String?;
-            });
-        } catch (e) {
-            print('Error loading last seen message IDs: $e');
-        }
+      try {
+        final seenIdsMap = json.decode(savedSeenIds) as Map<String, dynamic>;
+        seenIdsMap.forEach((key, value) {
+          _lastSeenMessageIds[key] = value as String?;
+        });
+      } catch (e) {
+        print('Error loading last seen message IDs: $e');
+      }
     }
 
     notifyListeners();

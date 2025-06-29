@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart'; // Added for kIsWeb
+import 'package:flutter/foundation.dart'; // For kIsWeb
 import '../models/channel.dart';
 import '../services/websocket_service.dart';
 import '../models/user_status.dart';
@@ -159,19 +159,16 @@ class LeftDrawer extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sortedDms = List<String>.from(dms)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
-    final isWeb = kIsWeb;
 
     return Material(
       color: Colors.transparent,
       child: Row(
         children: [
           Expanded(
-            child: Container(
-              color: const Color(0xFF2B2D31),
-              child: LayoutBuilder(
-                builder: (context, constraints) {
-                  if (constraints.maxWidth < 80) return Container();
-                  return Row(
+            child: Column(
+              children: [
+                Expanded(
+                  child: Row(
                     children: [
                       Container(
                         width: 80,
@@ -347,11 +344,12 @@ class LeftDrawer extends StatelessWidget {
                         ),
                       ),
                     ],
-                  );
-                },
-              ),
+                  ),
+                ),
+              ],
             ),
           ),
+          // Always show the close handle, both web and mobile!
           GestureDetector(
             onTap: onCloseDrawer,
             child: Container(
@@ -360,7 +358,7 @@ class LeftDrawer extends StatelessWidget {
               color: const Color(0xFF232428),
               child: Center(
                 child: Icon(
-                  isWeb ? Icons.close : Icons.chevron_left,
+                  Icons.chevron_left,
                   color: Colors.white54,
                 ),
               ),
