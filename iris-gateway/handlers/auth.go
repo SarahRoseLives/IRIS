@@ -41,10 +41,6 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	// --- VULNERABLE LOGIC REMOVED ---
-	// The premature check for an existing session has been removed.
-	// All login attempts will now proceed to full password validation.
-
 	body := map[string]string{
 		"accountName": req.Username,
 		"passphrase":  req.Password,
@@ -80,42 +76,43 @@ func LoginHandler(c *gin.Context) {
 	if resp.StatusCode != http.StatusOK || result["success"] != true {
 		msg, _ := result["message"].(string)
 		if msg == "" {
-			msg = "Invalid username or password" // Provide a clearer message
+			msg = "Invalid username or password"
 		}
 		log.Printf("Ergo authentication failed for user '%s': status %d, message: %s", req.Username, resp.StatusCode, msg)
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": msg})
 		return
 	}
 
-	// --- REVISED RE-AUTHENTICATION LOGIC ---
-	// After successful password validation, check if the user already has a running session.
+	// --- MODIFIED MULTI-DEVICE LOGIC ---
+	// If a session already exists, we create a new token for the new device
+	// and attach it to the existing session, without invalidating old tokens.
 	if existingToken, found := session.FindSessionTokenByUsername(req.Username); found {
-		log.Printf("User %s successfully re-authenticated. Reissuing token for existing session.", req.Username)
+		log.Printf("User %s successfully re-authenticated. Attaching new device to existing session.", req.Username)
 
-		// Get the existing session object.
+		// Get the single, shared session object.
 		existingSession, _ := session.GetSession(existingToken)
 
-		// Generate a new token for the re-authenticated client.
+		// Generate a new token for the new device.
 		newToken := uuid.New().String()
 
-		// Unmap the old token without destroying the underlying IRC connection.
-		session.UnmapToken(existingToken)
+		// *** CHANGE: THE UNMAP CALL IS REMOVED ***
+		// session.UnmapToken(existingToken) // DO NOT DO THIS. This is what logs out the other device.
 
-		// Map the existing session object to the new token.
+		// Map the existing session object to the new token. Now multiple tokens
+		// point to the same session.
 		session.AddSession(newToken, existingSession)
 
-		// Return the new token. The client will use this to open a new WebSocket,
+		// Return the new token. The new client will use this to open a WebSocket
 		// which will attach to the still-running IRC session.
 		c.JSON(http.StatusOK, LoginResponse{
 			Success: true,
-			Message: "Login successful, session resumed",
+			Message: "Login successful, new device attached to session",
 			Token:   newToken,
 		})
-		return // IMPORTANT: End the handler here to prevent creating a new IRC connection below.
+		return // End the handler here.
 	}
 
 	// --- ORIGINAL LOGIC FOR A COMPLETELY NEW SESSION ---
-	// This code will now only run if no existing session was found for the user.
 	log.Printf("No existing session found for %s. Creating new IRC connection and session.", req.Username)
 
 	clientIP, _, err := net.SplitHostPort(c.Request.RemoteAddr)
@@ -135,12 +132,6 @@ func LoginHandler(c *gin.Context) {
 	}
 
 	userSession.IRC = client
-
-	// Note: You might not need to force-join a default channel on every login.
-	// The client's session restore logic will likely handle rejoining channels.
-	// defaultChannel := "#welcome"
-	// client.Join(defaultChannel)
-
 	token := uuid.New().String()
 	session.AddSession(token, userSession)
 
@@ -166,19 +157,17 @@ func LoginHandler(c *gin.Context) {
 
 // ValidateSessionHandler checks if a session token is still valid.
 func ValidateSessionHandler(c *gin.Context) {
-	token, ok := getToken(c) // Use your existing helper to get the token
+	token, ok := getToken(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Missing token"})
 		return
 	}
 
-	// Check if the session exists in our map
 	_, found := session.GetSession(token)
 	if !found {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Invalid session"})
 		return
 	}
 
-	// If we get here, the session is valid
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Session is valid"})
 }

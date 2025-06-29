@@ -14,17 +14,14 @@ import (
 	"iris-gateway/session"
 )
 
-// Define the WebSocket upgrader
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Allow all origins for development
+		return true // Allow all origins
 	},
 }
 
-// WebSocketHandler handles the initial WebSocket connection upgrade and
-// manages the lifecycle of the connection, including sending/receiving messages.
 func WebSocketHandler(c *gin.Context) {
 	token := c.Param("token")
 	sess, ok := session.GetSession(token)
@@ -42,25 +39,19 @@ func WebSocketHandler(c *gin.Context) {
 	}
 
 	sess.AddWebSocket(conn)
-	log.Printf("[WS] WebSocket connected for user %s (token: %s)", sess.Username, token)
+	log.Printf("[WS] WebSocket connected for user %s (token: %s). Total devices: %d", sess.Username, token, len(sess.WebSockets))
 
-	// Immediately remove away status (send /BACK) when any WebSocket connects
 	if sess.IRC != nil && sess.IsAway {
 		sess.SetBack()
 		log.Printf("[IRC] User %s reconnected, sent BACK command.", sess.Username)
 	}
 
-	// --- MODIFIED: Send a single, comprehensive initial_state event ---
-	// This event contains everything the client needs to restore its UI.
 	sess.Mutex.RLock()
 	initialStatePayload := gin.H{
-		"channels": sess.Channels, // Now includes topics automatically since Topic is part of ChannelState
-		// You could add other initial state data here, like user settings etc.
+		"channels": sess.Channels,
 	}
 	sess.Mutex.RUnlock()
 
-	// FIX: Synchronize this write operation with the session's broadcast method
-	// to prevent concurrent write errors on the websocket connection.
 	sess.WsMutex.Lock()
 	err = conn.WriteJSON(events.WsEvent{
 		Type:    "initial_state",
@@ -70,27 +61,30 @@ func WebSocketHandler(c *gin.Context) {
 
 	if err != nil {
 		log.Printf("[WS] Error sending initial_state to %s: %v", sess.Username, err)
-		// Since we failed to send the initial state, we should close the connection.
 		sess.RemoveWebSocket(conn)
 		conn.Close()
 		return
 	}
 	log.Printf("[WS] Sent initial_state payload to %s.", sess.Username)
-	// --- END MODIFICATION ---
 
 	go func() {
 		defer func() {
-			// On disconnect, remove websocket and check if last one
+			// On disconnect, remove the websocket from the session
 			sess.RemoveWebSocket(conn)
+
+			// --- ADDED CHANGE: Clean up the token for this disconnected device ---
+			// This prevents the session map from growing with stale tokens.
+			session.UnmapToken(token)
+
 			conn.Close()
-			log.Printf("[WS] WebSocket disconnected for user %s (token: %s)\n", sess.Username, token)
+			log.Printf("[WS] WebSocket disconnected for user %s (token: %s). Remaining devices: %d\n", sess.Username, token, len(sess.WebSockets))
 
 			// Use a small delay to prevent rapid away/back toggling on reconnects
 			time.Sleep(2 * time.Second)
 
-			// If no more WebSockets are connected, set the user as away.
+			// If no more WebSockets are connected for this session, set the user as away.
 			if !sess.IsActive() && sess.IRC != nil {
-				sess.SetAway("IRSI") // Set a default away message
+				sess.SetAway("IRSI")
 				log.Printf("[IRC] Sent AWAY command for %s (no more clients connected)", sess.Username)
 			}
 		}()
@@ -99,7 +93,7 @@ func WebSocketHandler(c *gin.Context) {
 			messageType, p, err := conn.ReadMessage()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseGoingAway, websocket.CloseNormalClosure, 1006) {
-					log.Printf("[WS] Client %s disconnected gracefully or with abnormal closure: %v", sess.Username, err)
+					log.Printf("[WS] Client %s disconnected gracefully: %v", sess.Username, err)
 				} else {
 					log.Printf("[WS] Error reading message from client %s: %v", sess.Username, err)
 				}
@@ -114,7 +108,6 @@ func WebSocketHandler(c *gin.Context) {
 				continue
 			}
 
-			// START OF CHANGES
 			switch clientMsg.Type {
 			case "message":
 				if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
@@ -126,12 +119,10 @@ func WebSocketHandler(c *gin.Context) {
 						for _, line := range lines {
 							ircLine := line
 							if len(ircLine) == 0 {
-								// Sending an empty line might not be supported, send a space instead
 								ircLine = " "
 							}
 							log.Printf("[WS] Sending IRC line to channel %s from %s: '%s'", channelName, sess.Username, ircLine)
 							sess.IRC.Privmsg(channelName, ircLine)
-							// Add a small delay to prevent being kicked for flooding
 							time.Sleep(100 * time.Millisecond)
 						}
 					} else {
@@ -147,7 +138,6 @@ func WebSocketHandler(c *gin.Context) {
 					newTopic, topicOk := payload["topic"].(string)
 
 					if chanOk && topicOk {
-						// Send to IRC
 						if sess.IRC != nil {
 							log.Printf("[WS] User %s sending TOPIC command for channel %s", sess.Username, channel)
 							sess.IRC.SendRaw(fmt.Sprintf("TOPIC %s :%s", channel, newTopic))
@@ -162,7 +152,6 @@ func WebSocketHandler(c *gin.Context) {
 			default:
 				log.Printf("[WS] Received unhandled event type '%s' from %s", clientMsg.Type, sess.Username)
 			}
-			// END OF CHANGES
 		}
 	}()
 }
