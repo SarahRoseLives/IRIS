@@ -287,6 +287,8 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   String? _username;
   String? _token;
 
+  DateTime? _lastBackgroundTime;
+
   @override
   void initState() {
     super.initState();
@@ -305,10 +307,17 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed && _isLoggedIn) {
-      final isValid = await getIt<ApiService>().validateSession();
-      if (!isValid) {
-        AuthManager.forceLogout(showExpiredMessage: true);
+      // Only validate session if we've been in background for a while
+      if (_lastBackgroundTime != null &&
+          DateTime.now().difference(_lastBackgroundTime!) > Duration(minutes: 5)) {
+        final isValid = await getIt<ApiService>().validateSession();
+        if (!isValid) {
+          AuthManager.forceLogout(showExpiredMessage: true);
+        }
       }
+      _lastBackgroundTime = null;
+    } else if (state == AppLifecycleState.paused) {
+      _lastBackgroundTime = DateTime.now();
     }
   }
 

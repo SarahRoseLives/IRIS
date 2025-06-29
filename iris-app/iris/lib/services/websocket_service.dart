@@ -42,6 +42,8 @@ class WebSocketService {
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get eventStream => _eventController.stream;
 
+  DateTime? _lastConnectedTime;
+
   WebSocketService() {
     _statusController.stream.listen((status) {
       _currentWsStatus = status;
@@ -65,6 +67,7 @@ class WebSocketService {
       _ws = WebSocketChannel.connect(uri);
 
       _ws!.ready.then((_) {
+        _lastConnectedTime = DateTime.now();
         if (!_isDisposed) _statusController.add(WebSocketStatus.connected);
         print("[WebSocketService] Connected successfully to: $uri");
       }).catchError((e) {
@@ -170,6 +173,7 @@ class WebSocketService {
   void _handleWebSocketDone() {
     print("[WebSocketService] Connection closed.");
     if (_isDisposed) return;
+    // Only treat as unauthorized if we explicitly got an unauthorized message
     if (_currentWsStatus != WebSocketStatus.unauthorized) {
       _statusController.add(WebSocketStatus.disconnected);
       _scheduleReconnect();
@@ -192,9 +196,12 @@ class WebSocketService {
   }
 
   bool _isUnauthorized(String error) {
-    return error.contains('401') ||
+    // Only treat as unauthorized if we get a clear 401 response
+    return error.contains('401 Unauthorized') ||
+        error.contains('invalid token') ||
+        error.toString().contains('not upgraded to websocket: 401') ||
+        error.contains('401') ||
         error.contains('unauthorized') ||
-        error.contains('not upgraded to websocket') ||
         error.contains('invalid token');
   }
 
