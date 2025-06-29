@@ -32,6 +32,8 @@ type ChannelStateUpdater interface {
 	FinalizeChannelMembers(channelName string)
 }
 
+// --- REMOVED Disconnect method ---
+
 func AuthenticateWithNickServ(username, password, clientIP string, userSession *session.UserSession) (*IRCClient, error) {
 	ircServerAddr := config.Cfg.IRCServer
 	conn, err := net.DialTimeout("tcp", ircServerAddr, 10*time.Second)
@@ -362,8 +364,6 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		log.Printf("[IRC] Received AWAY notification for %s. IsAway: %t", awayUserNick, isNowAway)
 		session.UpdateAwayStatusForAllSessions(awayUserNick, isNowAway)
 	})
-
-
 
 	connClient.AddCallback("QUIT", func(e *ircevent.Event) {
 		quittingUser := e.Nick

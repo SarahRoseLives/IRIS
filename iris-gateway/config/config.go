@@ -22,18 +22,18 @@ type Config struct {
 var Cfg = Config{
     ErgoAPIURL:           "http://127.0.0.1:8089/v1/check_auth",
     BearerToken:          "SbtZYLpbLAsg6D3TzS_haShbLy3sqQSQb-Yk9I5JNqA",
-    ListenAddr:           "0.0.0.0:8080", // Keep port 8080 for HTTPS
+    ListenAddr:           "0.0.0.0:8080", // HTTPS port
     ImageBaseDir:         "./images",
     AvatarDir:            "./avatars",
     IRCServer:            "localhost:6667",
-    HistoryDuration:      "168h", // Default to 7 days (168 hours)
+    HistoryDuration:      "168h", // 7 days (168 hours)
     GatewayNick:          "IRSI-Gateway",
     GatewayPassword:      "gateway-secret-password",
-    ImageStorageDuration: "12h", // Default to 12 hours
-    UseTLS:               false, // Disabled by default
+    ImageStorageDuration: "12h", // 12 hours
+    UseTLS:               true,           // Enable TLS in production
     TLSCertFile:          "/etc/letsencrypt/live/iris.transirc.chat/fullchain.pem",
     TLSKeyFile:           "/etc/letsencrypt/live/iris.transirc.chat/privkey.pem",
     TLSDomain:            "iris.transirc.chat", // Your domain
-    HTTPRedirect:         false, // Disable HTTP->HTTPS redirect by default
-    HTTPPort:             "",    // Empty to disable HTTP server
+    HTTPRedirect:         true,           // Enable HTTP->HTTPS redirect
+    HTTPPort:             "",        // HTTP redirect port
 }

@@ -57,6 +57,21 @@ func main() {
 		}
 	}()
 
+	// --- PATCH: HTTP->HTTPS redirect logic before router initialization ---
+	if config.Cfg.HTTPRedirect && config.Cfg.HTTPPort != "" {
+		go func() {
+			redirect := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				target := "https://" + config.Cfg.TLSDomain + r.URL.RequestURI()
+				http.Redirect(w, r, target, http.StatusMovedPermanently)
+			})
+			log.Printf("Starting HTTP redirect on %s", config.Cfg.HTTPPort)
+			if err := http.ListenAndServe(config.Cfg.HTTPPort, redirect); err != nil {
+				log.Printf("HTTP redirect failed: %v", err)
+			}
+		}()
+	}
+	// --- END PATCH ---
+
 	router := gin.Default()
 
 	// CORS Middleware
@@ -116,19 +131,6 @@ func main() {
 				tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
 				tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 			},
-		}
-
-		// Optionally start HTTP->HTTPS redirect server if enabled
-		if config.Cfg.HTTPRedirect && config.Cfg.HTTPPort != "" {
-			go func() {
-				log.Printf("Starting HTTP redirect server on %s", config.Cfg.HTTPPort)
-				if err := http.ListenAndServe(config.Cfg.HTTPPort, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					target := "https://" + config.Cfg.TLSDomain + r.URL.RequestURI()
-					http.Redirect(w, r, target, http.StatusMovedPermanently)
-				})); err != nil {
-					log.Printf("HTTP redirect server failed: %v", err)
-				}
-			}()
 		}
 
 		// Start HTTPS server on configured port (usually 8080)

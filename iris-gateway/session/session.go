@@ -193,21 +193,45 @@ func GetSession(token string) (*UserSession, bool) {
 	return sessionMap[token], sessionMap[token] != nil
 }
 
+// Revised RemoveSession for proper cleanup of websockets and IRC connections
 func RemoveSession(token string) {
 	mutex.Lock()
 	defer mutex.Unlock()
 	if sess, ok := sessionMap[token]; ok {
 		sess.Mutex.Lock()
+		// Close all WebSocket connections gracefully
 		for _, conn := range sess.WebSockets {
 			conn.Close()
 		}
 		sess.WebSockets = nil
+
+		// Properly disconnect IRC
 		if sess.IRC != nil {
-			sess.IRC.Quit()
+			sess.IRC.Quit()        // Send QUIT command to IRC server
+			// If IRCClient wrapper with Disconnect exists, call Disconnect
+			if disconnecter, ok := interface{}(sess.IRC).(interface{ Disconnect() }); ok {
+				disconnecter.Disconnect()
+			} else if connField := getIRCConn(sess.IRC); connField != nil {
+				connField.Close() // fallback: close IRC TCP connection if accessible
+			}
+			sess.IRC = nil
 		}
 		sess.Mutex.Unlock()
 	}
 	delete(sessionMap, token)
+}
+
+// Helper: attempt to get the Conn field from ircevent.Connection
+func getIRCConn(irc *ircevent.Connection) (connCloser interface{ Close() error }) {
+	// This is a hacky fallback for legacy ircevent.Connection, not needed if you use IRCClient with Disconnect
+	type connField struct {
+		Conn interface{ Close() error }
+	}
+	cf, ok := any(irc).(*connField)
+	if ok {
+		return cf.Conn
+	}
+	return nil
 }
 
 func (s *UserSession) AddWebSocket(conn *websocket.Conn) {
