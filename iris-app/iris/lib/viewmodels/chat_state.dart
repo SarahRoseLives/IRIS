@@ -12,6 +12,9 @@ class ChatState extends ChangeNotifier {
   static const String _lastSeenKey = 'last_seen_message_ids';
   static const String _channelsKey = 'persisted_channels'; // Key for saving channels
   static const String _messagesKey = 'cached_messages';   // Key for saving messages
+  // START OF CHANGE
+  static const String _joinedChannelsKey = 'joined_channels_list'; // Key for saving joined channel names
+  // END OF CHANGE
 
   List<Channel> _channels = [];
   int _selectedChannelIndex = 0;
@@ -362,11 +365,34 @@ class ChatState extends ChangeNotifier {
     }
   }
 
+  // START OF CHANGE
+  Future<void> _persistJoinedChannels() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final List<String> joinedNames = _channels
+          .where((c) => c.name.startsWith('@') || (c.name.startsWith('#') && c.members.isNotEmpty))
+          .map((c) => c.name)
+          .toList();
+      await prefs.setStringList(_joinedChannelsKey, joinedNames);
+    } catch (e) {
+      print('Error persisting joined channels: $e');
+    }
+  }
+
+  Future<List<String>> loadPersistedJoinedChannels() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getStringList(_joinedChannelsKey) ?? [];
+  }
+  // END OF CHANGE
+
   Future<void> _saveChannels() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final List<Map<String, dynamic>> channelsJson = _channels.map((c) => c.toJson()).toList();
       await prefs.setString(_channelsKey, json.encode(channelsJson));
+      // START OF CHANGE
+      await _persistJoinedChannels();
+      // END OF CHANGE
     } catch (e) {
       print('Error saving channels to prefs: $e. Make sure Channel.toJson() is implemented.');
     }

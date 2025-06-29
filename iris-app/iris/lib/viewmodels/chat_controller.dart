@@ -116,6 +116,37 @@ class ChatController {
     });
   }
 
+  // START OF CHANGE
+  /// Checks for locally persisted channels and rejoins them if the user
+  /// is not currently in any channels according to the server.
+  Future<void> restoreLastKnownChannelState() async {
+    final lastKnownChannels = await chatState.loadPersistedJoinedChannels();
+
+    if (lastKnownChannels.isNotEmpty) {
+      print('[ChatController] No channels joined on server. Restoring from local state: $lastKnownChannels');
+      for (final channelName in lastKnownChannels) {
+        // Only attempt to re-join public channels. DMs are handled implicitly.
+        if (channelName.startsWith('#')) {
+          try {
+            await apiService.joinChannel(channelName);
+            // The websocket 'members_update' will handle adding it to the joined list.
+          } catch (e) {
+            print('[ChatController] Failed to auto-re-join channel $channelName: $e');
+          }
+        }
+      }
+    } else {
+      // No channels joined and no local list. Join the default.
+      print('[ChatController] No channels joined and no local state found. Joining #welcome.');
+      try {
+        await joinChannel('#welcome');
+      } catch (e) {
+        print('[ChatController] Failed to join #welcome: $e');
+        chatState.addSystemMessage(chatState.selectedConversationTarget, 'Failed to join #welcome channel.');
+      }
+    }
+  }
+
   void _listenToInitialState() {
     _initialStateSub = _webSocketService.initialStateStream.listen((payload) async {
       final channelsPayload = payload['channels'] as Map<String, dynamic>?;
@@ -131,11 +162,21 @@ class ChatController {
         });
       }
       chatState.mergeChannels(websocketChannels);
+
+      // After processing the server's state, check if we are in any public channels.
+      final bool isJoinedToAnyPublicChannel = chatState.channels.any((c) =>
+          c.name.startsWith('#') && c.members.isNotEmpty);
+
+      if (!isJoinedToAnyPublicChannel) {
+        await restoreLastKnownChannelState();
+      }
+
       _errorController.add(null);
     })..onError((e) {
       _errorController.add("Error receiving initial state: $e");
     });
   }
+  // END OF CHANGE
 
   void _listenToWebSocketMessages() {
     _messageSub = _webSocketService.messageStream.listen((message) async {
@@ -371,7 +412,7 @@ class ChatController {
       await apiService.joinChannel(channelName);
       chatState.selectConversation(channelName);
       chatState.moveChannelToJoined(channelName, username);
-      await loadChannelHistory(channelName, limit: 100);
+      await loadChannelHistory(channelName, limit: 5000);
     } catch (e) {
       chatState.addSystemMessage(chatState.selectedConversationTarget, 'Failed to join channel: $channelName. Error: $e');
     }
@@ -390,7 +431,7 @@ class ChatController {
     }
   }
 
-  Future<void> loadChannelHistory(String channelName, {int limit = 100}) async {
+  Future<void> loadChannelHistory(String channelName, {int limit = 5000}) async {
     if (channelName.isEmpty) return;
     try {
       final response = await apiService.fetchChannelMessages(channelName, limit: limit);

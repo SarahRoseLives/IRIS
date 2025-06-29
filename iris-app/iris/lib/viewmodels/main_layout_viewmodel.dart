@@ -242,7 +242,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       if (messages.isEmpty) {
         try {
           final response = await _chatController.apiService
-              .fetchChannelMessages(channel.name, limit: 100);
+              .fetchChannelMessages(channel.name, limit: 5000);
           final newMessages = response
               .map((item) => Message.fromJson({
                     ...item,
@@ -276,7 +276,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       if (messages.isEmpty) {
         try {
           final response =
-              await _chatController.apiService.fetchChannelMessages(dm, limit: 100);
+              await _chatController.apiService.fetchChannelMessages(dm, limit: 5000);
           if (response.isNotEmpty) {
             if (!chatState.channels.any((c) => c.name == dm)) {
               chatState.addOrUpdateChannel(Channel(
