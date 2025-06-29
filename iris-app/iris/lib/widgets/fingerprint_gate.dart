@@ -1,8 +1,7 @@
-// lib/widgets/fingerprint_gate.dart
-
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import '../services/fingerprint_service.dart'; // Use the service from the correct location
+import '../services/fingerprint_service.dart';
 
 /// A widget that acts as a gate, requiring fingerprint authentication
 /// if it's enabled for the app before showing its [child].
@@ -29,8 +28,18 @@ class _FingerprintGateState extends State<FingerprintGate> {
 
   /// Checks if fingerprint security is enabled and triggers authentication if needed.
   Future<void> _checkAndAuthenticate() async {
-    // Ensure the widget is still mounted before updating state.
+    // Only check fingerprint on Android; skip and treat as authenticated elsewhere
     if (!mounted) return;
+
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      if (mounted) {
+        setState(() {
+          _isAuthenticated = true;
+          _isChecking = false;
+        });
+      }
+      return;
+    }
 
     final isEnabled = await _fingerprintService.isFingerprintEnabled();
 

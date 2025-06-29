@@ -41,15 +41,9 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	existingToken, found := session.FindSessionTokenByUsername(req.Username)
-	if found {
-		c.JSON(http.StatusOK, LoginResponse{
-			Success: true,
-			Message: "Already logged in",
-			Token:   existingToken,
-		})
-		return
-	}
+	// --- VULNERABLE LOGIC REMOVED ---
+	// The premature check for an existing session has been removed.
+	// All login attempts will now proceed to full password validation.
 
 	body := map[string]string{
 		"accountName": req.Username,
@@ -86,11 +80,18 @@ func LoginHandler(c *gin.Context) {
 	if resp.StatusCode != http.StatusOK || result["success"] != true {
 		msg, _ := result["message"].(string)
 		if msg == "" {
-			msg = "Login failed"
+			msg = "Invalid username or password" // Provide a clearer message
 		}
-		log.Printf("Ergo authentication failed: status %d, message: %s", resp.StatusCode, msg)
+		log.Printf("Ergo authentication failed for user '%s': status %d, message: %s", req.Username, resp.StatusCode, msg)
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": msg})
 		return
+	}
+
+	// --- ADDED SECURITY STEP ---
+	// After a successful password validation, invalidate any old session for this user.
+	if existingToken, found := session.FindSessionTokenByUsername(req.Username); found {
+		log.Printf("User %s successfully re-authenticated. Invalidating old session.", req.Username)
+		session.RemoveSession(existingToken)
 	}
 
 	clientIP, _, err := net.SplitHostPort(c.Request.RemoteAddr)
@@ -111,8 +112,10 @@ func LoginHandler(c *gin.Context) {
 
 	userSession.IRC = client
 
-	defaultChannel := "#welcome"
-	client.Join(defaultChannel)
+	// Note: You might not need to force-join a default channel on every login.
+	// The client's session restore logic will likely handle rejoining channels.
+	// defaultChannel := "#welcome"
+	// client.Join(defaultChannel)
 
 	token := uuid.New().String()
 	session.AddSession(token, userSession)
@@ -135,4 +138,23 @@ func LoginHandler(c *gin.Context) {
 		Message: "Login successful",
 		Token:   token,
 	})
+}
+
+// ValidateSessionHandler checks if a session token is still valid.
+func ValidateSessionHandler(c *gin.Context) {
+	token, ok := getToken(c) // Use your existing helper to get the token
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Missing token"})
+		return
+	}
+
+	// Check if the session exists in our map
+	_, found := session.GetSession(token)
+	if !found {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Invalid session"})
+		return
+	}
+
+	// If we get here, the session is valid
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Session is valid"})
 }

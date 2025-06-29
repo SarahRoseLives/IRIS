@@ -9,7 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../services/api_service.dart';
 import '../services/websocket_service.dart';
-import '../services/notification_service.dart';
+import '../services/notification_service_platform.dart';
 import '../services/encryption_service.dart';
 import 'chat_state.dart';
 import '../models/channel.dart';
@@ -21,12 +21,21 @@ class ChatController {
   final String username;
   final String token;
   final ChatState chatState;
+  final bool Function() isAppInBackground;
   final ApiService apiService;
   final WebSocketService _webSocketService;
   final NotificationService _notificationService;
   final EncryptionService _encryptionService;
 
   WebSocketStatus _currentWsStatus = WebSocketStatus.disconnected;
+
+  // --- FIX: Store all StreamSubscriptions for proper cleanup ---
+  StreamSubscription? _wsStatusSub;
+  StreamSubscription? _initialStateSub;
+  StreamSubscription? _messageSub;
+  StreamSubscription? _membersUpdateSub;
+  StreamSubscription? _errorSub;
+  StreamSubscription? _eventSub;
 
   final StreamController<WebSocketStatus> _wsStatusController = StreamController.broadcast();
   Stream<WebSocketStatus> get wsStatusStream => _wsStatusController.stream;
@@ -38,6 +47,7 @@ class ChatController {
     required this.username,
     required this.token,
     required this.chatState,
+    required this.isAppInBackground,
   })  : apiService = ApiService(token),
         _webSocketService = GetIt.instance<WebSocketService>(),
         _notificationService = GetIt.instance<NotificationService>(),
@@ -48,7 +58,6 @@ class ChatController {
     chatState.setAvatarPlaceholder(username);
     await loadAvatarForUser(username);
 
-    // --- NEW: Load any pending DM messages from when the app was closed ---
     final prefs = await SharedPreferences.getInstance();
     final pendingMessages = prefs.getStringList('pending_dm_messages') ?? [];
     for (final messageJson in pendingMessages) {
@@ -71,7 +80,6 @@ class ChatController {
       }
     }
     await prefs.remove('pending_dm_messages');
-    // ------------------------------------------------------------
 
     _listenToWebSocketStatus();
     _listenToInitialState();
@@ -99,7 +107,7 @@ class ChatController {
   }
 
   void _listenToWebSocketStatus() {
-    _webSocketService.statusStream.listen((status) {
+    _wsStatusSub = _webSocketService.statusStream.listen((status) {
       _currentWsStatus = status;
       _wsStatusController.add(status);
       if (status == WebSocketStatus.unauthorized) {
@@ -109,7 +117,7 @@ class ChatController {
   }
 
   void _listenToInitialState() {
-    _webSocketService.initialStateStream.listen((payload) async {
+    _initialStateSub = _webSocketService.initialStateStream.listen((payload) async {
       final channelsPayload = payload['channels'] as Map<String, dynamic>?;
       final List<Channel> websocketChannels = [];
 
@@ -124,13 +132,32 @@ class ChatController {
       }
       chatState.mergeChannels(websocketChannels);
       _errorController.add(null);
-    }).onError((e) {
+    })..onError((e) {
       _errorController.add("Error receiving initial state: $e");
     });
   }
 
   void _listenToWebSocketMessages() {
-    _webSocketService.messageStream.listen((message) async {
+    _messageSub = _webSocketService.messageStream.listen((message) async {
+      if (isAppInBackground() && message['type'] == 'message') {
+        final payload = message['payload'] as Map<String, dynamic>? ?? {};
+        final String sender = payload['sender'] ?? 'Unknown';
+
+        if (sender.toLowerCase() != username.toLowerCase()) {
+          final String text = payload['text'] ?? '';
+          final String channelName = payload['channel_name'] ?? '';
+          _notificationService.showSimpleNotification(
+            title: sender,
+            body: text,
+            payload: {
+              'sender': sender,
+              'channel_name': channelName,
+              'type': channelName.startsWith('@') ? 'private_message' : 'channel_message'
+            }
+          );
+        }
+      }
+
       final String sender = message['sender'] ?? 'Unknown';
       String text = message['text'] ?? '';
 
@@ -153,11 +180,11 @@ class ChatController {
 
       final encStatus = _encryptionService.getSessionStatus('@$sender');
       if (encStatus == EncryptionStatus.active) {
-         chatState.addSystemMessage(
-            '@$sender', '⚠️ WARNING: Received an unencrypted message during a secure session. The session has been terminated for your safety. Please re-initiate encryption.');
-         _encryptionService.endEncryption('@$sender');
-         chatState.setEncryptionStatus('@$sender', EncryptionStatus.error);
-         return;
+        chatState.addSystemMessage(
+          '@$sender', '⚠️ WARNING: Received an unencrypted message during a secure session. The session has been terminated for your safety. Please re-initiate encryption.');
+        _encryptionService.endEncryption('@$sender');
+        chatState.setEncryptionStatus('@$sender', EncryptionStatus.error);
+        return;
       }
 
       String channelName = (message['channel_name'] ?? '').toLowerCase();
@@ -165,12 +192,9 @@ class ChatController {
 
       String conversationTarget;
       if (isPrivateMessage) {
-        // --- FIX: Always use @<recipient/target> for private messages ---
-        // For DMs, the channel name is @<recipient>, regardless of sender
-        // If the channelName is already in @ format, use it directly, otherwise, prefix with @
         conversationTarget = channelName.startsWith('@') ? channelName : '@$channelName';
         if (chatState.channels.indexWhere((c) => c.name.toLowerCase() == conversationTarget.toLowerCase()) == -1) {
-            chatState.addOrUpdateChannel(Channel(name: conversationTarget, members: []));
+          chatState.addOrUpdateChannel(Channel(name: conversationTarget, members: []));
         }
       } else {
         conversationTarget = channelName;
@@ -187,8 +211,7 @@ class ChatController {
       loadAvatarForUser(sender);
     });
 
-    // ----------- CHANNEL TOPIC SUPPORT -----------
-    _webSocketService.eventStream.listen((event) {
+    _eventSub = _webSocketService.eventStream.listen((event) {
       final String eventType = event['type'] ?? '';
       final payload = event['payload'] ?? {};
 
@@ -210,11 +233,10 @@ class ChatController {
         }
       }
     });
-    // ----------- END CHANNEL TOPIC SUPPORT -----------
   }
 
   void _listenToMembersUpdate() {
-    _webSocketService.membersUpdateStream.listen((update) {
+    _membersUpdateSub = _webSocketService.membersUpdateStream.listen((update) {
       final String channelName = update['channel_name'];
       final List<dynamic> membersRaw = update['members'];
       final List<ChannelMember> newMembers = membersRaw
@@ -229,21 +251,14 @@ class ChatController {
   }
 
   void _listenToWebSocketErrors() {
-    _webSocketService.errorStream.listen((error) {
+    _errorSub = _webSocketService.errorStream.listen((error) {
       _errorController.add(error);
     });
   }
 
-  // START OF CHANGE
-  /// Sends a raw structured message to the WebSocket.
-  /// This is used for commands that are not standard chat messages, like 'topic_change'.
   void sendRawWebSocketMessage(Map<String, dynamic> message) {
-    // Note: This assumes your WebSocketService has a generic `send` method
-    // for sending any JSON object to the server, as the existing `sendMessage`
-    // is specific to sending chat messages (PRIVMSG).
     _webSocketService.send(message);
   }
-  // END OF CHANGE
 
   Future<void> handleSendMessage(String text) async {
     if (text.trim().isEmpty) return;
@@ -268,13 +283,13 @@ class ChatController {
     chatState.addMessage(currentConversation, sentMessage);
 
     if (isDm && _encryptionService.getSessionStatus(currentConversation) == EncryptionStatus.active) {
-        final encryptedText = await _encryptionService.encryptMessage(currentConversation, text);
-        if (encryptedText != null) {
-            _webSocketService.sendMessage(target, encryptedText);
-        } else {
-            chatState.addSystemMessage(currentConversation, 'Could not encrypt message. Session may be invalid.');
-        }
-        return;
+      final encryptedText = await _encryptionService.encryptMessage(currentConversation, text);
+      if (encryptedText != null) {
+        _webSocketService.sendMessage(target, encryptedText);
+      } else {
+        chatState.addSystemMessage(currentConversation, 'Could not encrypt message. Session may be invalid.');
+      }
+      return;
     }
 
     _webSocketService.sendMessage(target, text);
@@ -291,65 +306,64 @@ class ChatController {
       _webSocketService.sendMessage(target.substring(1), endMessage);
       chatState.setEncryptionStatus(target, EncryptionStatus.none);
       chatState.addSystemMessage(target, 'Encryption has been terminated.');
-
     } else if (status == EncryptionStatus.none || status == EncryptionStatus.pending) {
-       final requestMessage = await _encryptionService.initiateEncryption(target);
-       if(requestMessage != null) {
-          _webSocketService.sendMessage(target.substring(1), requestMessage);
-          chatState.setEncryptionStatus(target, EncryptionStatus.pending);
-          chatState.addSystemMessage(target, 'Attempting to start an encrypted session...');
-       }
+      final requestMessage = await _encryptionService.initiateEncryption(target);
+      if (requestMessage != null) {
+        _webSocketService.sendMessage(target.substring(1), requestMessage);
+        chatState.setEncryptionStatus(target, EncryptionStatus.pending);
+        chatState.addSystemMessage(target, 'Attempting to start an encrypted session...');
+      }
     }
   }
 
   Future<void> _handleEncryptionRequest(String from, String text) async {
-      final payload = text.substring('[ENCRYPTION-REQUEST] '.length);
-      final response = await _encryptionService.handleEncryptionRequest('@$from', payload);
-      if (response != null) {
-          _webSocketService.sendMessage(from, response);
-          chatState.setEncryptionStatus('@$from', EncryptionStatus.active);
-          chatState.addSystemMessage('@$from', 'Accepted encryption request. Session is now active.');
-      } else {
-          chatState.setEncryptionStatus('@$from', EncryptionStatus.error);
-          chatState.addSystemMessage('@$from', 'Failed to process encryption request.');
-      }
+    final payload = text.substring('[ENCRYPTION-REQUEST] '.length);
+    final response = await _encryptionService.handleEncryptionRequest('@$from', payload);
+    if (response != null) {
+      _webSocketService.sendMessage(from, response);
+      chatState.setEncryptionStatus('@$from', EncryptionStatus.active);
+      chatState.addSystemMessage('@$from', 'Accepted encryption request. Session is now active.');
+    } else {
+      chatState.setEncryptionStatus('@$from', EncryptionStatus.error);
+      chatState.addSystemMessage('@$from', 'Failed to process encryption request.');
+    }
   }
 
   Future<void> _handleEncryptionAccept(String from, String text) async {
-      final payload = text.substring('[ENCRYPTION-ACCEPT] '.length);
-      await _encryptionService.handleEncryptionAcceptance('@$from', payload);
-      chatState.setEncryptionStatus('@$from', EncryptionStatus.active);
-      chatState.addSystemMessage('@$from', 'Encryption request accepted. Session is now active.');
+    final payload = text.substring('[ENCRYPTION-ACCEPT] '.length);
+    await _encryptionService.handleEncryptionAcceptance('@$from', payload);
+    chatState.setEncryptionStatus('@$from', EncryptionStatus.active);
+    chatState.addSystemMessage('@$from', 'Encryption request accepted. Session is now active.');
   }
 
   Future<void> _handleEncryptedMessage(String from, String text) async {
-      final payload = text.substring('[ENC]'.length);
-      final decrypted = await _encryptionService.decryptMessage('@$from', payload);
+    final payload = text.substring('[ENC]'.length);
+    final decrypted = await _encryptionService.decryptMessage('@$from', payload);
 
-      if(decrypted != null) {
-          final msg = Message(
-            from: from,
-            content: decrypted,
-            time: DateTime.now(),
-            id: DateTime.now().millisecondsSinceEpoch.toString(),
-            isEncrypted: true
-          );
-          chatState.addMessage('@$from', msg);
-      } else {
-          chatState.addSystemMessage('@$from', '⚠️ Could not decrypt a message. The secure session may have been compromised and has been ended.');
-          chatState.setEncryptionStatus('@$from', EncryptionStatus.error);
-      }
+    if (decrypted != null) {
+      final msg = Message(
+        from: from,
+        content: decrypted,
+        time: DateTime.now(),
+        id: DateTime.now().millisecondsSinceEpoch.toString(),
+        isEncrypted: true,
+      );
+      chatState.addMessage('@$from', msg);
+    } else {
+      chatState.addSystemMessage('@$from', '⚠️ Could not decrypt a message. The secure session may have been compromised and has been ended.');
+      chatState.setEncryptionStatus('@$from', EncryptionStatus.error);
+    }
   }
 
   void _handleEncryptionEnd(String from) {
-     _encryptionService.endEncryption('@$from');
-     chatState.setEncryptionStatus('@$from', EncryptionStatus.none);
-     chatState.addSystemMessage('@$from', 'The other user has ended the encrypted session.');
+    _encryptionService.endEncryption('@$from');
+    chatState.setEncryptionStatus('@$from', EncryptionStatus.none);
+    chatState.addSystemMessage('@$from', 'The other user has ended the encrypted session.');
   }
 
   Future<String?> getSafetyNumberForTarget() {
-      final target = chatState.selectedConversationTarget;
-      return _encryptionService.getSafetyNumber(target);
+    final target = chatState.selectedConversationTarget;
+    return _encryptionService.getSafetyNumber(target);
   }
 
   Future<void> joinChannel(String channelName) async {
@@ -401,13 +415,11 @@ class ChatController {
     }
   }
 
-  // UPDATED: uploadAttachmentAndGetUrl to expect a full URL from ApiService, no longer prepends baseSecureUrl
   Future<String?> uploadAttachmentAndGetUrl(String filePath) async {
     try {
       final file = File(filePath);
       final fullUrl = await apiService.uploadAttachmentAndGetUrl(file);
       if (fullUrl != null) {
-        // The API service should return the full URL now, so we don't need to prepend baseSecureUrl
         return fullUrl;
       }
       return null;
@@ -417,13 +429,11 @@ class ChatController {
     }
   }
 
-  // REPLACED: loadAvatarForUser to use baseSecureUrl
   Future<void> loadAvatarForUser(String nick) async {
     if (nick.isEmpty || chatState.hasAvatar(nick)) return;
     chatState.setAvatarPlaceholder(nick);
     final exts = ['.png', '.jpg', '.jpeg', '.gif'];
     for (final ext in exts) {
-      // Use HTTPS for avatar URLs via baseSecureUrl
       final url = '$baseSecureUrl/avatars/$nick$ext'; // USE baseSecureUrl
       try {
         final response = await http.head(Uri.parse(url));
@@ -514,6 +524,12 @@ class ChatController {
   }
 
   void dispose() {
+    _wsStatusSub?.cancel();
+    _initialStateSub?.cancel();
+    _messageSub?.cancel();
+    _membersUpdateSub?.cancel();
+    _errorSub?.cancel();
+    _eventSub?.cancel();
     _wsStatusController.close();
     _errorController.close();
   }

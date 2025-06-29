@@ -70,6 +70,7 @@ func main() {
 
 	// API routes
 	router.POST("/api/login", handlers.LoginHandler)
+	router.GET("/api/validate-session", handlers.ValidateSessionHandler) // <-- ADD THIS ROUTE
 	router.POST("/api/channels/join", handlers.JoinChannelHandler)
 	router.POST("/api/channels/part", handlers.PartChannelHandler)
 	router.GET("/api/channels", handlers.ListChannelsHandler)

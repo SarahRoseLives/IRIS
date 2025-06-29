@@ -1,21 +1,19 @@
 import 'package:flutter/material.dart';
 import 'dart:async';
 import 'package:get_it/get_it.dart';
-import 'package:flutter/foundation.dart'; // <-- Needed for kIsWeb
+import 'package:flutter/foundation.dart'; // Needed for kIsWeb
 
-// --- CHANGE 1: Add necessary imports for the new error handling ---
 import '../main.dart'; // Provides AuthManager
 import '../services/api_service.dart'; // Provides SessionExpiredException
 
 import '../services/websocket_service.dart';
-import '../services/notification_service.dart';
+import '../services/notification_service_platform.dart';
 import 'chat_state.dart';
 import 'chat_controller.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
 import '../models/encryption_session.dart';
 import '../services/fingerprint_service.dart';
-
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
@@ -37,6 +35,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   final ScrollController _scrollController = ScrollController();
   StreamSubscription? _wsStatusSub;
   StreamSubscription? _errorSub;
+
+  AppLifecycleState _appLifecycleState = AppLifecycleState.resumed;
 
   bool _shouldShowSafetyNumberDialog = false;
 
@@ -84,11 +84,14 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
     chatState = getIt<ChatState>();
 
+    // --- START FINAL FIX: Provide the required 'isAppInBackground' callback ---
     _chatController = ChatController(
       username: username,
       token: token!,
       chatState: chatState,
+      isAppInBackground: () => _appLifecycleState != AppLifecycleState.resumed,
     );
+    // --- END FINAL FIX ---
 
     NotificationService.getCurrentDMChannel = () {
       final target = chatState.selectedConversationTarget;
@@ -101,6 +104,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   // --- GETTERS ---
+  AppLifecycleState get appLifecycleState => _appLifecycleState;
   bool get showLeftDrawer => _showLeftDrawer;
   bool get showRightDrawer => _showRightDrawer;
   bool get loadingChannels => _loadingChannels;
@@ -127,6 +131,21 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   Message? getLastMessage(String channelName) =>
       chatState.getLastMessage(channelName);
 
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    print("[ViewModel] AppLifecycleState changed to: $state");
+    _appLifecycleState = state;
+
+    // Trigger your existing resume/pause logic from this central handler
+    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      handleAppPaused();
+    } else if (state == AppLifecycleState.resumed) {
+      handleAppResumed();
+    }
+    notifyListeners();
+  }
+
   void _initialize() async {
     WidgetsBinding.instance.addObserver(this);
     chatState.addListener(_onChatStateChanged);
@@ -139,7 +158,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final serverChannels = await _chatController.apiService.fetchChannels();
       chatState.mergeChannels(serverChannels);
       _chatController.connectWebSocket();
-    // --- CHANGE 2: Catch the specific SessionExpiredException ---
     } on SessionExpiredException {
       AuthManager.forceLogout(showExpiredMessage: true);
     } catch (e) {
@@ -232,7 +250,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
                   }))
               .toList();
           chatState.addMessageBatch(channel.name, newMessages);
-        // --- CHANGE 3: Handle session expiration for each API call ---
         } on SessionExpiredException {
           AuthManager.forceLogout(showExpiredMessage: true);
           return; // Stop fetching more history
@@ -245,7 +262,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           final newMessages = await _chatController.apiService
               .fetchMessagesSince(channel.name, lastTime);
           chatState.addMessageBatch(channel.name, newMessages);
-        // --- CHANGE 3: Handle session expiration for each API call ---
         } on SessionExpiredException {
           AuthManager.forceLogout(showExpiredMessage: true);
           return; // Stop fetching more history
@@ -277,7 +293,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
                   }))
               .toList();
           chatState.addMessageBatch(dm, newMessages);
-        // --- CHANGE 3: Handle session expiration for each API call ---
         } on SessionExpiredException {
           AuthManager.forceLogout(showExpiredMessage: true);
           return; // Stop fetching more history
@@ -290,7 +305,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           final newMessages =
               await _chatController.apiService.fetchMessagesSince(dm, lastTime);
           chatState.addMessageBatch(dm, newMessages);
-        // --- CHANGE 3: Handle session expiration for each API call ---
         } on SessionExpiredException {
           AuthManager.forceLogout(showExpiredMessage: true);
           return; // Stop fetching more history
@@ -301,38 +315,36 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) async {
-    super.didChangeAppLifecycleState(state);
+  // --- NEW: App lifecycle handlers for State object to call ---
+  void handleAppPaused() {
+    _chatController.disconnectWebSocket();
+  }
 
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
-      _chatController.disconnectWebSocket();
-    } else if (state == AppLifecycleState.resumed) {
-      if (_isAuthenticating) return;
+  void handleAppResumed() async {
+    if (_isAuthenticating) return;
 
-      if (_lastAuthAttempt != null &&
-          DateTime.now().difference(_lastAuthAttempt!).inSeconds < 2) {
+    if (_lastAuthAttempt != null &&
+        DateTime.now().difference(_lastAuthAttempt!).inSeconds < 2) {
+      return;
+    }
+
+    final fingerprintEnabled =
+        await _fingerprintService.isFingerprintEnabled();
+    if (fingerprintEnabled) {
+      _lastAuthAttempt = DateTime.now();
+      _isAuthenticating = true;
+
+      final authenticated = await _fingerprintService.authenticate();
+
+      _isAuthenticating = false;
+
+      if (!authenticated) {
         return;
       }
-
-      final fingerprintEnabled =
-          await _fingerprintService.isFingerprintEnabled();
-      if (fingerprintEnabled) {
-        _lastAuthAttempt = DateTime.now();
-        _isAuthenticating = true;
-
-        final authenticated = await _fingerprintService.authenticate();
-
-        _isAuthenticating = false;
-
-        if (!authenticated) {
-          return;
-        }
-      }
-
-      _chatController.connectWebSocket();
-      _fetchLatestHistoryForAllChannels();
     }
+
+    _chatController.connectWebSocket();
+    _fetchLatestHistoryForAllChannels();
   }
 
   void toggleEncryption() {
@@ -446,8 +458,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   void removeDmMessage(Message message) {
     chatState.removeDmMessage(message);
   }
-
-
 
   void removeDmChannel(String dmChannelName) {
     if (selectedConversationTarget == dmChannelName) {

@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart'; // For kIsWeb
+import 'package:flutter/foundation.dart'; // For kIsWeb and defaultTargetPlatform
 import 'package:provider/provider.dart';
 
 import '../viewmodels/main_layout_viewmodel.dart';
@@ -196,14 +196,20 @@ class MainChatScreen extends StatelessWidget {
           }
         });
 
-        final isWeb = kIsWeb;
+        // --- START OF CHANGE ---
+        // Create a single flag for desktop-like layouts (Web and Linux).
+        final isDesktopLayout = kIsWeb || defaultTargetPlatform == TargetPlatform.linux;
+        // --- END OF CHANGE ---
 
         return Scaffold(
           backgroundColor: const Color(0xFF313338),
           body: Row(
             children: [
-              // Left drawer (web: always visible, mobile: overlay)
-              if (isWeb || viewModel.showLeftDrawer)
+              // --- START OF CHANGE ---
+              // Left drawer (desktop: always visible, mobile: overlay)
+              // Use the new `isDesktopLayout` flag here.
+              if (isDesktopLayout || viewModel.showLeftDrawer)
+              // --- END OF CHANGE ---
                 SizedBox(
                   width: leftDrawerWidth,
                   child: Drawer(
@@ -243,7 +249,10 @@ class MainChatScreen extends StatelessWidget {
                   children: [
                     GestureDetector(
                       onHorizontalDragUpdate: (details) {
-                        if (isWeb) return; // Disable swipe gestures in web mode
+                        // --- START OF CHANGE ---
+                        // Disable swipe gestures on desktop layouts.
+                        if (isDesktopLayout) return;
+                        // --- END OF CHANGE ---
 
                         final width = MediaQuery.of(context).size.width;
                         if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
@@ -271,7 +280,10 @@ class MainChatScreen extends StatelessWidget {
                               height: 56,
                               child: Row(
                                 children: [
-                                  if (!isWeb)
+                                  // --- START OF CHANGE ---
+                                  // Hide the menu button on desktop layouts.
+                                  if (!isDesktopLayout)
+                                  // --- END OF CHANGE ---
                                     IconButton(
                                       icon: const Icon(Icons.menu,
                                           color: Colors.white54),
@@ -298,7 +310,10 @@ class MainChatScreen extends StatelessWidget {
                                           viewModel,
                                           encryptionStatus),
                                     ),
-                                  if (!isWeb)
+                                  // --- START OF CHANGE ---
+                                  // Hide the members button on desktop layouts.
+                                  if (!isDesktopLayout)
+                                  // --- END OF CHANGE ---
                                     IconButton(
                                       icon: const Icon(Icons.people,
                                           color: Colors.white70),
@@ -360,7 +375,10 @@ class MainChatScreen extends StatelessWidget {
                       ),
                     ),
                     // Overlay for mobile when drawers are open
-                    if (!isWeb &&
+                    // --- START OF CHANGE ---
+                    // Use the new `isDesktopLayout` flag here.
+                    if (!isDesktopLayout &&
+                    // --- END OF CHANGE ---
                         (viewModel.showLeftDrawer ||
                             viewModel.showRightDrawer))
                       Positioned.fill(
@@ -380,8 +398,11 @@ class MainChatScreen extends StatelessWidget {
                 ),
               ),
 
-              // Right drawer (web: always visible, mobile: overlay)
-              if (isWeb || viewModel.showRightDrawer)
+              // --- START OF CHANGE ---
+              // Right drawer (desktop: always visible, mobile: overlay)
+              // Use the new `isDesktopLayout` flag here.
+              if (isDesktopLayout || viewModel.showRightDrawer)
+              // --- END OF CHANGE ---
                 SizedBox(
                   width: rightDrawerWidth,
                   child: Drawer(

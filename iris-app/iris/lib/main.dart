@@ -1,27 +1,31 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
-import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:get_it/get_it.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'package:iris/firebase_options.dart';
 import 'package:iris/main_layout.dart';
 import 'package:iris/screens/login_screen.dart';
-import 'package:iris/services/api_service.dart'; // Import ApiService for the exception
+import 'package:iris/services/api_service.dart';
 import 'package:iris/services/encryption_service.dart';
-import 'package:iris/services/notification_service.dart';
 import 'package:iris/services/update_service.dart';
 import 'package:iris/services/websocket_service.dart';
-import 'package:iris/utils/web_check.dart'; // ✅ Platform-safe import
+import 'package:iris/utils/web_check.dart';
 import 'package:iris/viewmodels/chat_state.dart';
 import 'package:iris/widgets/fingerprint_gate.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
-// --- CHANGE 1: Define navigatorKey and GetIt instance at the top level ---
+import 'package:flutter_local_notifications/flutter_local_notifications.dart';
+import 'package:iris/services/notification_service_platform.dart'
+    show NotificationService;
+
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
+
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 final getIt = GetIt.instance;
-
 
 class PendingNotification {
   static String? channelToNavigateTo;
@@ -29,13 +33,16 @@ class PendingNotification {
 }
 
 void setupLocator() {
-  if (!getIt.isRegistered<FlutterLocalNotificationsPlugin>()) {
+  if ((kIsWeb || defaultTargetPlatform == TargetPlatform.android) &&
+      !getIt.isRegistered<FlutterLocalNotificationsPlugin>()) {
     getIt.registerSingleton<FlutterLocalNotificationsPlugin>(
         FlutterLocalNotificationsPlugin());
   }
+
   if (!getIt.isRegistered<NotificationService>()) {
     getIt.registerSingleton<NotificationService>(NotificationService());
   }
+
   if (!getIt.isRegistered<WebSocketService>()) {
     getIt.registerSingleton<WebSocketService>(WebSocketService());
   }
@@ -45,19 +52,15 @@ void setupLocator() {
   if (!getIt.isRegistered<ChatState>()) {
     getIt.registerSingleton<ChatState>(ChatState());
   }
-  // Register ApiService if not already registered
   if (!getIt.isRegistered<ApiService>()) {
     getIt.registerSingleton<ApiService>(ApiService());
   }
 }
 
-// --- CHANGE 2: Create a dedicated AuthManager class for logout logic ---
 class AuthManager {
   static Future<void> forceLogout({bool showExpiredMessage = false}) async {
     print('[AuthManager] Beginning force logout process...');
-
     try {
-      // Disconnect services
       if (getIt.isRegistered<WebSocketService>()) {
         getIt<WebSocketService>().disconnect();
       }
@@ -67,19 +70,16 @@ class AuthManager {
       if (getIt.isRegistered<ChatState>()) {
         getIt<ChatState>().reset();
       }
-
-      // Clear all persisted data for a clean logout
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
-
-      // Use the global navigatorKey to navigate to the LoginScreen
       final navigator = navigatorKey.currentState;
       if (navigator != null) {
         print('[AuthManager] Navigating to LoginScreen...');
         navigator.pushAndRemoveUntil(
           MaterialPageRoute(
-              builder: (_) => LoginScreen(showExpiredMessage: showExpiredMessage)),
-          (route) => false, // This predicate removes all routes from the stack
+              builder: (_) =>
+                  LoginScreen(showExpiredMessage: showExpiredMessage)),
+          (route) => false,
         );
       }
     } catch (e) {
@@ -88,14 +88,55 @@ class AuthManager {
   }
 }
 
-
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  // ... (no changes needed here)
+  if (!(kIsWeb || defaultTargetPlatform == TargetPlatform.android)) return;
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-  setupLocator();
-  final notificationService = getIt<NotificationService>();
-  await notificationService.setupLocalNotifications();
+
+  final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+
+  // Android initialization
+  const AndroidInitializationSettings initializationSettingsAndroid =
+      AndroidInitializationSettings('@mipmap/ic_launcher');
+  const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
+  const InitializationSettings initializationSettings = InitializationSettings(
+    android: initializationSettingsAndroid,
+    iOS: initializationSettingsIOS,
+  );
+
+  await flutterLocalNotificationsPlugin.initialize(
+    initializationSettings,
+  );
+
+  // Create the notification channel conditionally
+  AndroidNotificationChannel channel;
+  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    channel = AndroidNotificationChannel(
+      'iris_channel_id',
+      'IRIS Messages',
+      description: 'Notifications for new IRIS chat messages',
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+      vibrationPattern: Int64List.fromList([0, 250, 250, 250]),
+      showBadge: true,
+    );
+  } else {
+    channel = AndroidNotificationChannel(
+      'iris_channel_id',
+      'IRIS Messages',
+      description: 'Notifications for new IRIS chat messages',
+      importance: Importance.high,
+      playSound: true,
+      enableVibration: true,
+      showBadge: true,
+    );
+  }
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+
   print("Handling a background message: ${message.messageId}");
 
   if (message.data['type'] == 'private_message') {
@@ -104,45 +145,107 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     pendingMessages.add(json.encode(message.data));
     await prefs.setStringList('pending_dm_messages', pendingMessages);
   }
-  notificationService.showFlutterNotification(message);
+
+  // Compose a title/body (try notification first, fallback to data)
+  final notification = message.notification;
+  final data = message.data;
+  final String? title = notification?.title ?? data['title'];
+  final String? body = notification?.body ?? data['body'];
+
+  if (title != null && body != null) {
+    AndroidNotificationDetails androidPlatformChannelSpecifics;
+    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+      androidPlatformChannelSpecifics = AndroidNotificationDetails(
+        'iris_channel_id',
+        'IRIS Messages',
+        channelDescription: 'Notifications for new IRIS chat messages',
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+        vibrationPattern: Int64List.fromList([0, 250, 250, 250]),
+        icon: '@mipmap/ic_launcher',
+        largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+        styleInformation: BigTextStyleInformation(body),
+      );
+    } else {
+      androidPlatformChannelSpecifics = AndroidNotificationDetails(
+        'iris_channel_id',
+        'IRIS Messages',
+        channelDescription: 'Notifications for new IRIS chat messages',
+        importance: Importance.high,
+        priority: Priority.high,
+        playSound: true,
+        enableVibration: true,
+        icon: '@mipmap/ic_launcher',
+        largeIcon: const DrawableResourceAndroidBitmap('@mipmap/ic_launcher'),
+        styleInformation: BigTextStyleInformation(body),
+      );
+    }
+
+    await flutterLocalNotificationsPlugin.show(
+      DateTime.now().millisecondsSinceEpoch.remainder(100000),
+      title,
+      body,
+      NotificationDetails(
+        android: androidPlatformChannelSpecifics,
+        iOS: const DarwinNotificationDetails(
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+        ),
+      ),
+      payload: jsonEncode(data),
+    );
+  }
 }
 
 @pragma('vm:entry-point')
-void onDidReceiveNotificationResponse(
-    NotificationResponse notificationResponse) async {
-  // ... (no changes needed here)
+void onDidReceiveNotificationResponse(NotificationResponse notificationResponse) async {
+  WidgetsFlutterBinding.ensureInitialized();
+  if (kIsWeb || defaultTargetPlatform == TargetPlatform.android) {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
+  }
+  setupLocator();
+
   final String? payload = notificationResponse.payload;
   if (payload != null) {
     try {
       final Map<String, dynamic> data = jsonDecode(payload);
-      NotificationService().handleNotificationTap(data);
+      getIt<NotificationService>().handleNotificationTap(data);
     } catch (e) {
       print("Error in onDidReceiveNotificationResponse: $e");
     }
   }
 }
 
-Future<void> main() async {
-  // ... (no changes needed here)
-  WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
-
-  if (isFirebaseMessagingSupported()) {
-    FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+/// Only use fingerprint gate on Android.
+Widget _maybeFingerprintGate({required Widget child}) {
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    return FingerprintGate(child: child);
   } else {
-    print('[Firebase Messaging] Skipped: unsupported web environment');
+    return child;
+  }
+}
+
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  if (kIsWeb || defaultTargetPlatform == TargetPlatform.android) {
+    await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   }
 
   setupLocator();
 
   await getIt<EncryptionService>().initialize();
-  await getIt<NotificationService>().init();
 
-  if (isFirebaseMessagingSupported()) {
+  if (kIsWeb || defaultTargetPlatform == TargetPlatform.android) {
+    await getIt<NotificationService>().init();
     try {
       await FirebaseMessaging.instance.requestPermission();
       final token = await FirebaseMessaging.instance.getToken();
       print('[Firebase Messaging] Token: $token');
+      FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
     } catch (e) {
       print('[Firebase Messaging] Error: $e');
     }
@@ -158,7 +261,6 @@ class IRISApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return MaterialApp(
       title: 'IRIS',
-      // --- CHANGE 3: Use the top-level navigatorKey ---
       navigatorKey: navigatorKey,
       theme: ThemeData.dark().copyWith(
         colorScheme: const ColorScheme.dark(
@@ -166,7 +268,7 @@ class IRISApp extends StatelessWidget {
           secondary: Color(0xFF5865F2),
         ),
       ),
-      home: FingerprintGate(
+      home: _maybeFingerprintGate(
         child: AuthWrapper(),
       ),
       debugShowCheckedModeBanner: false,
@@ -174,8 +276,6 @@ class IRISApp extends StatelessWidget {
   }
 }
 
-
-// --- CHANGE 4: AuthWrapper is now a simpler stateful widget ---
 class AuthWrapper extends StatefulWidget {
   @override
   State<AuthWrapper> createState() => _AuthWrapperState();
@@ -205,10 +305,8 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed && _isLoggedIn) {
-      // When app resumes, validate the session with the server
       final isValid = await getIt<ApiService>().validateSession();
       if (!isValid) {
-        // Use the new global logout manager
         AuthManager.forceLogout(showExpiredMessage: true);
       }
     }
@@ -254,8 +352,6 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
       );
     }
 
-    // This build method is now declarative. It builds the UI based on state
-    // without performing navigation as a side-effect.
     if (_isLoggedIn && _username != null && _token != null) {
       return IrisLayout(username: _username!, token: _token!);
     } else {
