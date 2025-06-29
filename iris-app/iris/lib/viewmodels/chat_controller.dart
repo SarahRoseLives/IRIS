@@ -116,7 +116,6 @@ class ChatController {
     });
   }
 
-  // START OF CHANGE
   /// Checks for locally persisted channels and rejoins them if the user
   /// is not currently in any channels according to the server.
   Future<void> restoreLastKnownChannelState() async {
@@ -153,8 +152,16 @@ class ChatController {
       final List<Channel> websocketChannels = [];
 
       if (channelsPayload != null) {
+        // START OF CHANGE
         channelsPayload.forEach((channelName, channelData) {
-          final channel = Channel.fromJson(channelData as Map<String, dynamic>);
+          final data = channelData as Map<String, dynamic>;
+          // Ensure the 'name' field is present in the data map.
+          // The key of the map is the source of truth for the name.
+          if (!data.containsKey('name') || data['name'] == null || (data['name'] as String).isEmpty) {
+            data['name'] = channelName;
+          }
+          final channel = Channel.fromJson(data);
+          // END OF CHANGE
           websocketChannels.add(channel);
           for (var member in channel.members) {
             loadAvatarForUser(member.nick);
@@ -176,7 +183,6 @@ class ChatController {
       _errorController.add("Error receiving initial state: $e");
     });
   }
-  // END OF CHANGE
 
   void _listenToWebSocketMessages() {
     _messageSub = _webSocketService.messageStream.listen((message) async {
