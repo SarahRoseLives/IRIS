@@ -186,12 +186,13 @@ class LeftDrawer extends StatelessWidget {
                                     backgroundColor: !selectedConversationTarget.startsWith('@')
                                         ? Colors.white
                                         : const Color(0xFF5865F2),
-                                    child: const Text(
-                                      "IRIS",
-                                      style: TextStyle(
-                                          color: Colors.black,
-                                          fontWeight: FontWeight.bold,
-                                          fontSize: 18),
+                                    child: ClipOval(
+                                      child: Image.asset(
+                                        'assets/images/icon.png', // <-- Replace with your PNG asset path
+                                        width: 56,
+                                        height: 56,
+                                        fit: BoxFit.cover,
+                                      ),
                                     ),
                                   ),
                                 ),

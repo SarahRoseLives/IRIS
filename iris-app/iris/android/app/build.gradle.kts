@@ -63,4 +63,9 @@ flutter {
 
 dependencies {
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.1.4")
+
+    // --- START: Google Play Services dependencies for modern TLS provider ---
+    implementation("com.google.android.gms:play-services-safetynet:18.0.1")
+    implementation("com.google.android.gms:play-services-base:18.1.0")
+    // --- END: Google Play Services dependencies ---
 }

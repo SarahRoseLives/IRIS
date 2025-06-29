@@ -221,6 +221,15 @@ func RemoveSession(token string) {
 	delete(sessionMap, token)
 }
 
+// --- ADDED: UnmapToken ---
+// UnmapToken only removes the token from the session map, it does not close connections.
+// This is used when re-issuing a token for an existing session.
+func UnmapToken(token string) {
+	mutex.Lock()
+	defer mutex.Unlock()
+	delete(sessionMap, token)
+}
+
 // Helper: attempt to get the Conn field from ircevent.Connection
 func getIRCConn(irc *ircevent.Connection) (connCloser interface{ Close() error }) {
 	// This is a hacky fallback for legacy ircevent.Connection, not needed if you use IRCClient with Disconnect

@@ -87,12 +87,36 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	// --- ADDED SECURITY STEP ---
-	// After a successful password validation, invalidate any old session for this user.
+	// --- REVISED RE-AUTHENTICATION LOGIC ---
+	// After successful password validation, check if the user already has a running session.
 	if existingToken, found := session.FindSessionTokenByUsername(req.Username); found {
-		log.Printf("User %s successfully re-authenticated. Invalidating old session.", req.Username)
-		session.RemoveSession(existingToken)
+		log.Printf("User %s successfully re-authenticated. Reissuing token for existing session.", req.Username)
+
+		// Get the existing session object.
+		existingSession, _ := session.GetSession(existingToken)
+
+		// Generate a new token for the re-authenticated client.
+		newToken := uuid.New().String()
+
+		// Unmap the old token without destroying the underlying IRC connection.
+		session.UnmapToken(existingToken)
+
+		// Map the existing session object to the new token.
+		session.AddSession(newToken, existingSession)
+
+		// Return the new token. The client will use this to open a new WebSocket,
+		// which will attach to the still-running IRC session.
+		c.JSON(http.StatusOK, LoginResponse{
+			Success: true,
+			Message: "Login successful, session resumed",
+			Token:   newToken,
+		})
+		return // IMPORTANT: End the handler here to prevent creating a new IRC connection below.
 	}
+
+	// --- ORIGINAL LOGIC FOR A COMPLETELY NEW SESSION ---
+	// This code will now only run if no existing session was found for the user.
+	log.Printf("No existing session found for %s. Creating new IRC connection and session.", req.Username)
 
 	clientIP, _, err := net.SplitHostPort(c.Request.RemoteAddr)
 	if err != nil {
