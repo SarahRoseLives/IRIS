@@ -13,7 +13,8 @@ import 'chat_controller.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
 import '../models/encryption_session.dart';
-import '../services/fingerprint_service.dart';
+// The FingerprintService is no longer needed in this viewmodel.
+// import '../services/fingerprint_service.dart';
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
@@ -68,11 +69,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  final FingerprintService _fingerprintService = FingerprintService();
-
-  bool _isAuthenticating = false;
-
-  DateTime? _lastAuthAttempt;
+  // Fingerprint-related variables are no longer needed here as the
+  // app-wide lock on resume is removed.
+  // final FingerprintService _fingerprintService = FingerprintService();
+  // bool _isAuthenticating = false;
+  // DateTime? _lastAuthAttempt;
 
   MainLayoutViewModel({required this.username, this.token}) {
     if (token == null) {
@@ -315,34 +316,14 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // --- NEW: App lifecycle handlers for State object to call ---
+  // --- App lifecycle handlers for State object to call ---
   void handleAppPaused() {
     _chatController.disconnectWebSocket();
   }
 
-  void handleAppResumed() async {
-    if (_isAuthenticating) return;
-
-    if (_lastAuthAttempt != null &&
-        DateTime.now().difference(_lastAuthAttempt!).inSeconds < 2) {
-      return;
-    }
-
-    final fingerprintEnabled =
-        await _fingerprintService.isFingerprintEnabled();
-    if (fingerprintEnabled) {
-      _lastAuthAttempt = DateTime.now();
-      _isAuthenticating = true;
-
-      final authenticated = await _fingerprintService.authenticate();
-
-      _isAuthenticating = false;
-
-      if (!authenticated) {
-        return;
-      }
-    }
-
+  void handleAppResumed() {
+    // The fingerprint check on resume has been removed.
+    // Now, we simply reconnect to the services.
     _chatController.connectWebSocket();
     _fetchLatestHistoryForAllChannels();
   }

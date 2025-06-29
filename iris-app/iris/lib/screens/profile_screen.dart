@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart'
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
-import 'package:iris/main.dart'; // Import main.dart to access AuthWrapper
+import 'package:iris/main.dart'; // Import main.dart to access AuthManager
 import 'package:iris/services/update_service.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -88,6 +88,101 @@ class _ProfileScreenState extends State<ProfileScreen> {
         _fingerprintEnabled = enabled;
       });
     }
+  }
+
+  /// Securely handles the process of enabling or disabling fingerprint login.
+  void _handleFingerprintSwitch(bool value) async {
+    if (!mounted) return;
+
+    if (value) {
+      // --- Logic for ENABLING fingerprint login ---
+      final canAuth = await _fingerprintService.canAuthenticate();
+      if (!canAuth) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Fingerprint authentication is not available on this device.'),
+          backgroundColor: Colors.orangeAccent,
+        ));
+        return;
+      }
+
+      // 1. Prompt for password
+      final password = await _promptForPassword();
+      if (password == null || password.isEmpty) return; // User cancelled
+
+      // 2. Verify credentials with the API
+      final verifyResponse = await _apiService.login(_username!, password);
+      if (!verifyResponse.success) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Incorrect password. Fingerprint login not enabled.'),
+          backgroundColor: Colors.redAccent,
+        ));
+        return;
+      }
+
+      // 3. Authenticate with fingerprint to confirm the action
+      final authenticated = await _fingerprintService.authenticate(
+          localizedReason: 'Confirm to enable fingerprint login');
+
+      if (authenticated) {
+        // 4. Save credentials and enable the feature
+        await _fingerprintService.saveCredentials(_username!, password);
+        await _fingerprintService.setFingerprintEnabled(true);
+        if (mounted) {
+          setState(() => _fingerprintEnabled = true);
+          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Fingerprint login enabled.'),
+            backgroundColor: Colors.green,
+          ));
+        }
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Authentication failed. Setting was not changed.'),
+          backgroundColor: Colors.redAccent,
+        ));
+      }
+    } else {
+      // --- Logic for DISABLING fingerprint login ---
+      await _fingerprintService.setFingerprintEnabled(false);
+      if (mounted) {
+        setState(() => _fingerprintEnabled = false);
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Fingerprint login disabled.')));
+      }
+    }
+  }
+
+  /// Shows a dialog to securely ask for the user's password.
+  Future<String?> _promptForPassword() {
+    final passwordController = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF2B2D31),
+        title: const Text('Confirm Your Password'),
+        content: TextField(
+          controller: passwordController,
+          obscureText: true,
+          decoration: const InputDecoration(labelText: 'Password'),
+          autofocus: true,
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF5865F2)),
+            onPressed: () {
+              Navigator.pop(context, passwordController.text);
+            },
+            child:
+                const Text('Confirm', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> _pickImage() async {
@@ -287,63 +382,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
         // Conditionally show Fingerprint options only on Android
         if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ...[
           SwitchListTile(
-            title: const Text('Enable Fingerprint Security',
+            title: const Text('Enable Fingerprint Login',
                 style: TextStyle(color: Colors.white)),
-            subtitle: const Text('Require fingerprint to open the app',
+            subtitle: const Text('Use your fingerprint for quick logins',
                 style: TextStyle(color: Colors.white70)),
             value: _fingerprintEnabled,
-            onChanged: (value) async {
-              if (!mounted) return;
-              if (value) {
-                final canAuth = await _fingerprintService.canAuthenticate();
-                if (!canAuth) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text(
-                          'Fingerprint authentication is not available on this device.'),
-                      backgroundColor: Colors.orangeAccent,
-                    ),
-                  );
-                  return;
-                }
-                final authenticated =
-                    await _fingerprintService.authenticate();
-                if (authenticated) {
-                  await _fingerprintService.setFingerprintEnabled(true);
-                  if (mounted) {
-                    setState(() => _fingerprintEnabled = true);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content:
-                            Text('Fingerprint security has been enabled.'),
-                        backgroundColor: Colors.green,
-                      ),
-                    );
-                  }
-                } else {
-                  await _fingerprintService.setFingerprintEnabled(false);
-                  if (mounted) {
-                    setState(() => _fingerprintEnabled = false);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text(
-                            'Authentication failed. Setting was not changed.'),
-                        backgroundColor: Colors.redAccent,
-                      ),
-                    );
-                  }
-                }
-              } else {
-                await _fingerprintService.setFingerprintEnabled(false);
-                if (mounted) {
-                  setState(() => _fingerprintEnabled = false);
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                        content: Text('Fingerprint security disabled.')),
-                  );
-                }
-              }
-            },
+            onChanged: _handleFingerprintSwitch,
             activeColor: const Color(0xFF5865F2),
           ),
           const SizedBox(height: 12),
@@ -435,3 +479,4 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 }
+

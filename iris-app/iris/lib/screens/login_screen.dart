@@ -3,7 +3,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../models/login_response.dart';
 import '../main_layout.dart';
-import '../utils/motd.dart'; // <-- Add this import
+import '../services/fingerprint_service.dart'; // Import the service
+import '../utils/motd.dart';
 
 class LoginScreen extends StatefulWidget {
   final bool showExpiredMessage;
@@ -20,13 +21,17 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _loading = false;
   String? _message;
   final ApiService _apiService = ApiService();
+  final FingerprintService _fingerprintService = FingerprintService();
+  bool _fingerprintLoginAvailable = false;
 
   late final String _motd;
 
   @override
   void initState() {
     super.initState();
-    _motd = Motd.random(); // Set once per screen instantiation
+    _motd = Motd.random();
+    _checkFingerprintAvailability();
+
     if (widget.showExpiredMessage) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) {
@@ -38,11 +43,57 @@ class _LoginScreenState extends State<LoginScreen> {
     }
   }
 
+  Future<void> _checkFingerprintAvailability() async {
+    final isEnabled = await _fingerprintService.isFingerprintEnabled();
+    if (mounted) {
+      setState(() {
+        _fingerprintLoginAvailable = isEnabled;
+      });
+    }
+  }
+
   @override
   void dispose() {
     _usernameController.dispose();
     _passwordController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loginWithFingerprint() async {
+    if (mounted) {
+      setState(() {
+        _loading = true;
+        _message = "Authenticating...";
+      });
+    }
+
+    final authenticated = await _fingerprintService.authenticate(
+        localizedReason: 'Authenticate to log in to IRIS');
+
+    if (!authenticated) {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _message = 'Authentication failed.';
+        });
+      }
+      return;
+    }
+
+    final credentials = await _fingerprintService.getCredentials();
+    if (credentials != null) {
+      // Use the stored credentials to log in
+      _usernameController.text = credentials['username']!;
+      _passwordController.text = credentials['password']!;
+      await _login();
+    } else {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _message = 'Saved credentials not found. Please log in manually.';
+        });
+      }
+    }
   }
 
   Future<void> _login() async {
@@ -138,7 +189,6 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 8),
-                  // --- MOTD under IRIS title ---
                   Text(
                     _motd,
                     textAlign: TextAlign.center,
@@ -155,12 +205,15 @@ class _LoginScreenState extends State<LoginScreen> {
                       filled: true,
                       fillColor: const Color(0xFF232428),
                       labelText: 'Username',
-                      prefixIcon: const Icon(Icons.person, color: Color(0xFF5865F2)),
+                      prefixIcon:
+                          const Icon(Icons.person, color: Color(0xFF5865F2)),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
                     ),
-                    validator: (value) => value == null || value.trim().isEmpty ? 'Enter username' : null,
+                    validator: (value) => value == null || value.trim().isEmpty
+                        ? 'Enter username'
+                        : null,
                     enabled: !_loading,
                     style: const TextStyle(color: Colors.white),
                   ),
@@ -171,12 +224,14 @@ class _LoginScreenState extends State<LoginScreen> {
                       filled: true,
                       fillColor: const Color(0xFF232428),
                       labelText: 'Password',
-                      prefixIcon: const Icon(Icons.lock, color: Color(0xFF5865F2)),
+                      prefixIcon:
+                          const Icon(Icons.lock, color: Color(0xFF5865F2)),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(10),
                       ),
                     ),
-                    validator: (value) => value == null || value.isEmpty ? 'Enter password' : null,
+                    validator: (value) =>
+                        value == null || value.isEmpty ? 'Enter password' : null,
                     obscureText: true,
                     enabled: !_loading,
                     style: const TextStyle(color: Colors.white),
@@ -191,16 +246,19 @@ class _LoginScreenState extends State<LoginScreen> {
                           borderRadius: BorderRadius.circular(10),
                         ),
                         padding: const EdgeInsets.symmetric(vertical: 16),
-                        textStyle: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        textStyle: const TextStyle(
+                            fontSize: 16, fontWeight: FontWeight.bold),
                       ),
                       icon: const Icon(Icons.login, color: Colors.white),
-                      label: _loading
+                      label: _loading && _message == null
                           ? const SizedBox(
                               width: 22,
                               height: 22,
-                              child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2),
+                              child: CircularProgressIndicator(
+                                  color: Colors.white, strokeWidth: 2),
                             )
-                          : const Text('Login', style: TextStyle(color: Colors.white)),
+                          : const Text('Login',
+                              style: TextStyle(color: Colors.white)),
                       onPressed: _loading
                           ? null
                           : () {
@@ -210,6 +268,20 @@ class _LoginScreenState extends State<LoginScreen> {
                             },
                     ),
                   ),
+                  if (_fingerprintLoginAvailable) ...[
+                    const SizedBox(height: 12),
+                    const Text('or', style: TextStyle(color: Colors.white54)),
+                    const SizedBox(height: 12),
+                    IconButton(
+                      icon: const Icon(Icons.fingerprint,
+                          color: Colors.white, size: 52),
+                      onPressed: _loading ? null : _loginWithFingerprint,
+                      tooltip: 'Login with Fingerprint',
+                      style: IconButton.styleFrom(
+                        side: const BorderSide(color: Colors.white24, width: 1),
+                      ),
+                    ),
+                  ],
                   if (_message != null) ...[
                     const SizedBox(height: 20),
                     Text(
@@ -218,7 +290,11 @@ class _LoginScreenState extends State<LoginScreen> {
                       style: TextStyle(
                         color: _message!.startsWith('Your session')
                             ? Colors.orangeAccent
-                            : (_message!.toLowerCase().contains("success") ? Colors.green : Colors.redAccent),
+                            : (_message!
+                                    .toLowerCase()
+                                    .contains("authenticating")
+                                ? Colors.blueAccent
+                                : Colors.redAccent),
                         fontWeight: FontWeight.bold,
                       ),
                     ),

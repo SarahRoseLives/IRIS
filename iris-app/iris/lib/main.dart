@@ -2,7 +2,8 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart' show kIsWeb, defaultTargetPlatform, TargetPlatform;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:get_it/get_it.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -15,7 +16,7 @@ import 'package:iris/services/update_service.dart';
 import 'package:iris/services/websocket_service.dart';
 import 'package:iris/utils/web_check.dart';
 import 'package:iris/viewmodels/chat_state.dart';
-import 'package:iris/widgets/fingerprint_gate.dart';
+// FingerprintGate import removed
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:iris/services/notification_service_platform.dart'
@@ -98,7 +99,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   // Android initialization
   const AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
-  const DarwinInitializationSettings initializationSettingsIOS = DarwinInitializationSettings();
+  const DarwinInitializationSettings initializationSettingsIOS =
+      DarwinInitializationSettings();
   const InitializationSettings initializationSettings = InitializationSettings(
     android: initializationSettingsAndroid,
     iOS: initializationSettingsIOS,
@@ -134,7 +136,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 
   await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
       ?.createNotificationChannel(channel);
 
   print("Handling a background message: ${message.messageId}");
@@ -146,7 +149,6 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     await prefs.setStringList('pending_dm_messages', pendingMessages);
   }
 
-  // Compose a title/body (try notification first, fallback to data)
   final notification = message.notification;
   final data = message.data;
   final String? title = notification?.title ?? data['title'];
@@ -201,7 +203,8 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 }
 
 @pragma('vm:entry-point')
-void onDidReceiveNotificationResponse(NotificationResponse notificationResponse) async {
+void onDidReceiveNotificationResponse(
+    NotificationResponse notificationResponse) async {
   WidgetsFlutterBinding.ensureInitialized();
   if (kIsWeb || defaultTargetPlatform == TargetPlatform.android) {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
@@ -219,14 +222,7 @@ void onDidReceiveNotificationResponse(NotificationResponse notificationResponse)
   }
 }
 
-/// Only use fingerprint gate on Android.
-Widget _maybeFingerprintGate({required Widget child}) {
-  if (defaultTargetPlatform == TargetPlatform.android) {
-    return FingerprintGate(child: child);
-  } else {
-    return child;
-  }
-}
+// _maybeFingerprintGate function removed
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -268,9 +264,8 @@ class IRISApp extends StatelessWidget {
           secondary: Color(0xFF5865F2),
         ),
       ),
-      home: _maybeFingerprintGate(
-        child: AuthWrapper(),
-      ),
+      // The FingerprintGate is removed from here.
+      home: AuthWrapper(),
       debugShowCheckedModeBanner: false,
     );
   }
@@ -307,9 +302,9 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
     if (state == AppLifecycleState.resumed && _isLoggedIn) {
-      // Only validate session if we've been in background for a while
       if (_lastBackgroundTime != null &&
-          DateTime.now().difference(_lastBackgroundTime!) > Duration(minutes: 5)) {
+          DateTime.now().difference(_lastBackgroundTime!) >
+              Duration(minutes: 5)) {
         final isValid = await getIt<ApiService>().validateSession();
         if (!isValid) {
           AuthManager.forceLogout(showExpiredMessage: true);
