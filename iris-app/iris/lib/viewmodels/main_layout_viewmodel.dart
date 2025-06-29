@@ -132,6 +132,23 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   Message? getLastMessage(String channelName) =>
       chatState.getLastMessage(channelName);
 
+  // START OF CHANGE
+  bool get hasUnreadDms {
+    // Iterate through all DM channels.
+    for (final dmName in dmChannelNames) {
+      // Check if the channel has unread messages.
+      if (hasUnreadMessages(dmName)) {
+        // Check if the last message was from someone else.
+        final lastMessage = getLastMessage(dmName);
+        if (lastMessage != null && lastMessage.from != username) {
+          return true; // Found an unread DM from another user.
+        }
+      }
+    }
+    return false; // No unread DMs found.
+  }
+  // END OF CHANGE
+
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     super.didChangeAppLifecycleState(state);

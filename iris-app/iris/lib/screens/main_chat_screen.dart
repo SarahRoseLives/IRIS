@@ -196,20 +196,16 @@ class MainChatScreen extends StatelessWidget {
           }
         });
 
-        // --- START OF CHANGE ---
         // Create a single flag for desktop-like layouts (Web and Linux).
-        final isDesktopLayout = kIsWeb || defaultTargetPlatform == TargetPlatform.linux;
-        // --- END OF CHANGE ---
+        final isDesktopLayout =
+            kIsWeb || defaultTargetPlatform == TargetPlatform.linux;
 
         return Scaffold(
           backgroundColor: const Color(0xFF313338),
           body: Row(
             children: [
-              // --- START OF CHANGE ---
               // Left drawer (desktop: always visible, mobile: overlay)
-              // Use the new `isDesktopLayout` flag here.
               if (isDesktopLayout || viewModel.showLeftDrawer)
-              // --- END OF CHANGE ---
                 SizedBox(
                   width: leftDrawerWidth,
                   child: Drawer(
@@ -235,7 +231,8 @@ class MainChatScreen extends StatelessWidget {
                       showDrawer: viewModel.showLeftDrawer,
                       onCloseDrawer: viewModel.toggleLeftDrawer,
                       unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
-                      onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
+                      onToggleUnjoined:
+                          viewModel.toggleUnjoinedChannelsExpanded,
                       hasUnreadMessages: viewModel.hasUnreadMessages,
                       getLastMessage: viewModel.getLastMessage,
                       currentUsername: viewModel.username,
@@ -249,13 +246,12 @@ class MainChatScreen extends StatelessWidget {
                   children: [
                     GestureDetector(
                       onHorizontalDragUpdate: (details) {
-                        // --- START OF CHANGE ---
                         // Disable swipe gestures on desktop layouts.
                         if (isDesktopLayout) return;
-                        // --- END OF CHANGE ---
 
                         final width = MediaQuery.of(context).size.width;
-                        if (details.delta.dx > 5 && details.globalPosition.dx < 50) {
+                        if (details.delta.dx > 5 &&
+                            details.globalPosition.dx < 50) {
                           if (!viewModel.showLeftDrawer &&
                               !viewModel.showRightDrawer) {
                             viewModel.toggleLeftDrawer();
@@ -266,9 +262,11 @@ class MainChatScreen extends StatelessWidget {
                               !viewModel.showRightDrawer) {
                             viewModel.toggleRightDrawer();
                           }
-                        } else if (viewModel.showLeftDrawer && details.delta.dx < -5) {
+                        } else if (viewModel.showLeftDrawer &&
+                            details.delta.dx < -5) {
                           viewModel.toggleLeftDrawer();
-                        } else if (viewModel.showRightDrawer && details.delta.dx > 5) {
+                        } else if (viewModel.showRightDrawer &&
+                            details.delta.dx > 5) {
                           viewModel.toggleRightDrawer();
                         }
                       },
@@ -283,13 +281,36 @@ class MainChatScreen extends StatelessWidget {
                                   // --- START OF CHANGE ---
                                   // Hide the menu button on desktop layouts.
                                   if (!isDesktopLayout)
-                                  // --- END OF CHANGE ---
-                                    IconButton(
-                                      icon: const Icon(Icons.menu,
-                                          color: Colors.white54),
-                                      tooltip: "Open Channels Drawer",
-                                      onPressed: viewModel.toggleLeftDrawer,
+                                    Stack(
+                                      clipBehavior: Clip.none,
+                                      children: [
+                                        IconButton(
+                                          icon: const Icon(Icons.menu,
+                                              color: Colors.white54),
+                                          tooltip: "Open Channels Drawer",
+                                          onPressed: viewModel.toggleLeftDrawer,
+                                        ),
+                                        if (viewModel.hasUnreadDms)
+                                          Positioned(
+                                            bottom: 12,
+                                            right: 12,
+                                            child: Container(
+                                              width: 10,
+                                              height: 10,
+                                              decoration: BoxDecoration(
+                                                color: Colors.redAccent,
+                                                shape: BoxShape.circle,
+                                                border: Border.all(
+                                                  color:
+                                                      const Color(0xFF232428),
+                                                  width: 1.5,
+                                                ),
+                                              ),
+                                            ),
+                                          ),
+                                      ],
                                     ),
+                                  // --- END OF CHANGE ---
                                   Padding(
                                     padding: const EdgeInsets.symmetric(
                                         horizontal: 8),
@@ -310,10 +331,8 @@ class MainChatScreen extends StatelessWidget {
                                           viewModel,
                                           encryptionStatus),
                                     ),
-                                  // --- START OF CHANGE ---
                                   // Hide the members button on desktop layouts.
                                   if (!isDesktopLayout)
-                                  // --- END OF CHANGE ---
                                     IconButton(
                                       icon: const Icon(Icons.people,
                                           color: Colors.white70),
@@ -368,6 +387,8 @@ class MainChatScreen extends StatelessWidget {
                                         offset: cursor + hyperlink.length + 1),
                                   );
                                 }
+                                // Return null as the function signature expects a String?
+                                return null;
                               },
                             ),
                           ],
@@ -375,19 +396,18 @@ class MainChatScreen extends StatelessWidget {
                       ),
                     ),
                     // Overlay for mobile when drawers are open
-                    // --- START OF CHANGE ---
-                    // Use the new `isDesktopLayout` flag here.
                     if (!isDesktopLayout &&
-                    // --- END OF CHANGE ---
                         (viewModel.showLeftDrawer ||
                             viewModel.showRightDrawer))
                       Positioned.fill(
                         child: GestureDetector(
                           onTap: () {
-                            if (viewModel.showLeftDrawer)
+                            if (viewModel.showLeftDrawer) {
                               viewModel.toggleLeftDrawer();
-                            if (viewModel.showRightDrawer)
+                            }
+                            if (viewModel.showRightDrawer) {
                               viewModel.toggleRightDrawer();
+                            }
                           },
                           child: Container(
                             color: Colors.black.withOpacity(0.5),
@@ -398,11 +418,8 @@ class MainChatScreen extends StatelessWidget {
                 ),
               ),
 
-              // --- START OF CHANGE ---
               // Right drawer (desktop: always visible, mobile: overlay)
-              // Use the new `isDesktopLayout` flag here.
               if (isDesktopLayout || viewModel.showRightDrawer)
-              // --- END OF CHANGE ---
                 SizedBox(
                   width: rightDrawerWidth,
                   child: Drawer(
