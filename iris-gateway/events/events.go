@@ -18,4 +18,5 @@ const (
 	EventTypeUserAway       = "user_away"
 	EventTypeUserBack       = "user_back"
 	EventTypeTopicChange    = "topic_change" // New event type for topic changes
+	EventTypeNotice         = "notice"         // New event type for IRC notices
 )

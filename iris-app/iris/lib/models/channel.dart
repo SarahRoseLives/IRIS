@@ -7,8 +7,9 @@ class Message {
   final DateTime time;
   final String id;
   final bool isHistorical;
-  final bool isEncrypted; // NEW
-  final bool isSystemInfo; // NEW
+  final bool isEncrypted;
+  final bool isSystemInfo;
+  final bool isNotice; // NEW: Flag for IRC notices
 
   Message({
     required this.from,
@@ -16,8 +17,9 @@ class Message {
     required this.time,
     required this.id,
     this.isHistorical = false,
-    this.isEncrypted = false, // NEW
-    this.isSystemInfo = false, // NEW
+    this.isEncrypted = false,
+    this.isSystemInfo = false,
+    this.isNotice = false, // NEW: Default to false
   });
 
   /// Creates a Message object from a JSON map.
@@ -40,8 +42,9 @@ class Message {
               ? 'hist-$channel-$seconds-$from'
               : 'real-$channel-$seconds-$from'),
       isHistorical: isHist,
-      isEncrypted: json['isEncrypted'] ?? false, // NEW
-      isSystemInfo: json['isSystemInfo'] ?? false, // NEW
+      isEncrypted: json['isEncrypted'] ?? false,
+      isSystemInfo: json['isSystemInfo'] ?? false,
+      isNotice: json['isNotice'] ?? false, // NEW: Parse from JSON
     );
   }
 
@@ -52,8 +55,9 @@ class Message {
       'time': time.toIso8601String(),
       'id': id,
       'isHistorical': isHistorical,
-      'isEncrypted': isEncrypted, // NEW
-      'isSystemInfo': isSystemInfo, // NEW
+      'isEncrypted': isEncrypted,
+      'isSystemInfo': isSystemInfo,
+      'isNotice': isNotice, // NEW: Add to map for persistence
     };
   }
 }
@@ -72,7 +76,8 @@ class Channel {
 
   factory Channel.fromJson(Map<String, dynamic> json) {
     var memberList = json['members'] as List? ?? [];
-    List<ChannelMember> members = memberList.map((i) => ChannelMember.fromJson(i)).toList();
+    List<ChannelMember> members =
+        memberList.map((i) => ChannelMember.fromJson(i)).toList();
 
     return Channel(
       name: json['name'] ?? '',
@@ -81,15 +86,12 @@ class Channel {
     );
   }
 
-  // START OF CHANGE
   /// Converts a Channel instance to a JSON map for persistence.
   Map<String, dynamic> toJson() {
     return {
       'name': name,
       'topic': topic,
-      // This requires the ChannelMember class to also have a toJson() method.
       'members': members.map((m) => m.toJson()).toList(),
     };
   }
-  // END OF CHANGE
 }

@@ -10,11 +10,10 @@ import '../models/encryption_session.dart';
 class ChatState extends ChangeNotifier {
   static const String _lastChannelKey = 'last_channel';
   static const String _lastSeenKey = 'last_seen_message_ids';
-  static const String _channelsKey = 'persisted_channels'; // Key for saving channels
-  static const String _messagesKey = 'cached_messages';   // Key for saving messages
-  // START OF CHANGE
-  static const String _joinedChannelsKey = 'joined_channels_list'; // Key for saving joined channel names
-  // END OF CHANGE
+  static const String _channelsKey = 'persisted_channels';
+  static const String _messagesKey = 'cached_messages';
+  static const String _joinedChannelsKey = 'joined_channels_list';
+  static const String _pronounsKey = 'user_pronouns'; // NEW
 
   List<Channel> _channels = [];
   int _selectedChannelIndex = 0;
@@ -23,6 +22,7 @@ class ChatState extends ChangeNotifier {
   final Map<String, String> _userAvatars = {};
   final Map<String, UserStatus> _userStatuses = {};
   final Map<String, EncryptionStatus> _encryptionStatuses = {};
+  final Map<String, String> _userPronouns = {}; // NEW
 
   final Map<String, Set<String>> _channelDedupKeys = {};
 
@@ -35,20 +35,27 @@ class ChatState extends ChangeNotifier {
     _userAvatars.clear();
     _userStatuses.clear();
     _encryptionStatuses.clear();
+    _userPronouns.clear(); // NEW
     _channelDedupKeys.clear();
     print('[ChatState] State has been reset.');
-    notifyListeners(); // Notify listeners that the state is cleared
+    notifyListeners();
   }
 
   // --- GETTERS ---
   List<Channel> get channels => _channels;
   Map<String, String> get userAvatars => _userAvatars;
   Map<String, UserStatus> get userStatuses => _userStatuses;
+  Map<String, String> get userPronouns => _userPronouns; // NEW
+
+  String? getPronounsForUser(String username) {
+    return _userPronouns[username.toLowerCase()];
+  }
 
   Message? getLastMessage(String channelName) {
     final key = channelName.toLowerCase();
     if (_channelMessages.containsKey(key) && _channelMessages[key]!.isNotEmpty) {
-      return _channelMessages[key]!.lastWhere((m) => !m.isSystemInfo, orElse: () => _channelMessages[key]!.last);
+      return _channelMessages[key]!
+          .lastWhere((m) => !m.isSystemInfo, orElse: () => _channelMessages[key]!.last);
     }
     return null;
   }
@@ -63,7 +70,8 @@ class ChatState extends ChangeNotifier {
   }
 
   EncryptionStatus getEncryptionStatus(String channelName) {
-    return _encryptionStatuses[channelName.toLowerCase()] ?? EncryptionStatus.none;
+    return _encryptionStatuses[channelName.toLowerCase()] ??
+        EncryptionStatus.none;
   }
 
   List<String> get joinedPublicChannelNames => _channels
@@ -82,14 +90,18 @@ class ChatState extends ChangeNotifier {
       _channels.where((c) => c.name.startsWith('@')).map((c) => c.name).toList();
 
   String get selectedConversationTarget {
-    if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length && _selectedChannelIndex >= 0) {
+    if (_channels.isNotEmpty &&
+        _selectedChannelIndex < _channels.length &&
+        _selectedChannelIndex >= 0) {
       return _channels[_selectedChannelIndex].name;
     }
     return "No channels";
   }
 
   List<ChannelMember> get membersForSelectedChannel {
-    if (_channels.isNotEmpty && _selectedChannelIndex < _channels.length && _selectedChannelIndex >= 0) {
+    if (_channels.isNotEmpty &&
+        _selectedChannelIndex < _channels.length &&
+        _selectedChannelIndex >= 0) {
       return _channels[_selectedChannelIndex].members;
     }
     return [];
@@ -109,6 +121,12 @@ class ChatState extends ChangeNotifier {
       _userAvatars.containsKey(username) && _userAvatars[username]!.isNotEmpty;
 
   // --- MUTATORS ---
+
+  Future<void> setUserPronouns(String username, String pronouns) async {
+    _userPronouns[username.toLowerCase()] = pronouns;
+    await _persistPronouns();
+    notifyListeners();
+  }
 
   Future<void> updateLastSeenMessage(String channelName) async {
     final key = channelName.toLowerCase();
@@ -151,7 +169,8 @@ class ChatState extends ChangeNotifier {
     }
 
     _channels = channelMap.values.toList();
-    _channels.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    _channels
+        .sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
 
     _rebuildUserStatuses();
     _saveChannels();
@@ -160,7 +179,8 @@ class ChatState extends ChangeNotifier {
 
   Future<void> setChannels(List<Channel> newChannels) async {
     _channels = newChannels;
-    _channels.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    _channels
+        .sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
     _rebuildUserStatuses();
 
     final prefs = await SharedPreferences.getInstance();
@@ -169,9 +189,11 @@ class ChatState extends ChangeNotifier {
     int targetIndex = -1;
 
     if (lastChannelName != null) {
-      final lastChannelIndex = _channels.indexWhere((c) => c.name.toLowerCase() == lastChannelName.toLowerCase());
+      final lastChannelIndex = _channels
+          .indexWhere((c) => c.name.toLowerCase() == lastChannelName.toLowerCase());
       if (lastChannelIndex != -1) {
-        final isJoined = _channels[lastChannelIndex].name.startsWith('@') || _channels[lastChannelIndex].members.isNotEmpty;
+        final isJoined = _channels[lastChannelIndex].name.startsWith('@') ||
+            _channels[lastChannelIndex].members.isNotEmpty;
         if (isJoined) {
           targetIndex = lastChannelIndex;
         }
@@ -179,7 +201,8 @@ class ChatState extends ChangeNotifier {
     }
 
     if (targetIndex == -1) {
-      targetIndex = _channels.indexWhere((c) => c.name.startsWith('#') && c.members.isNotEmpty);
+      targetIndex = _channels
+          .indexWhere((c) => c.name.startsWith('#') && c.members.isNotEmpty);
     }
     if (targetIndex == -1) {
       targetIndex = _channels.indexWhere((c) => c.name.startsWith('@'));
@@ -274,7 +297,8 @@ class ChatState extends ChangeNotifier {
     _channelMessages.putIfAbsent(key, () => []);
 
     final dedupKey = _getMessageDedupKey(message);
-    if ((_channelDedupKeys[key] ?? {}).contains(dedupKey) && !message.isSystemInfo) {
+    if ((_channelDedupKeys[key] ?? {}).contains(dedupKey) &&
+        !message.isSystemInfo) {
       return;
     }
 
@@ -312,7 +336,8 @@ class ChatState extends ChangeNotifier {
 
     for (var msg in messages) {
       final dedupKey = _getMessageDedupKey(msg);
-      if (!existingDedupKeys.contains(dedupKey) && !newDedupKeys.contains(dedupKey)) {
+      if (!existingDedupKeys.contains(dedupKey) &&
+          !newDedupKeys.contains(dedupKey)) {
         newMessages.add(msg);
         newDedupKeys.add(dedupKey);
       }
@@ -365,12 +390,13 @@ class ChatState extends ChangeNotifier {
     }
   }
 
-  // START OF CHANGE
   Future<void> _persistJoinedChannels() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       final List<String> joinedNames = _channels
-          .where((c) => c.name.startsWith('@') || (c.name.startsWith('#') && c.members.isNotEmpty))
+          .where((c) =>
+              c.name.startsWith('@') ||
+              (c.name.startsWith('#') && c.members.isNotEmpty))
           .map((c) => c.name)
           .toList();
       await prefs.setStringList(_joinedChannelsKey, joinedNames);
@@ -383,18 +409,17 @@ class ChatState extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getStringList(_joinedChannelsKey) ?? [];
   }
-  // END OF CHANGE
 
   Future<void> _saveChannels() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final List<Map<String, dynamic>> channelsJson = _channels.map((c) => c.toJson()).toList();
+      final List<Map<String, dynamic>> channelsJson =
+          _channels.map((c) => c.toJson()).toList();
       await prefs.setString(_channelsKey, json.encode(channelsJson));
-      // START OF CHANGE
       await _persistJoinedChannels();
-      // END OF CHANGE
     } catch (e) {
-      print('Error saving channels to prefs: $e. Make sure Channel.toJson() is implemented.');
+      print(
+          'Error saving channels to prefs: $e. Make sure Channel.toJson() is implemented.');
     }
   }
 
@@ -412,6 +437,11 @@ class ChatState extends ChangeNotifier {
     await prefs.setString(_messagesKey, json.encode(messagesToSave));
   }
 
+  Future<void> _persistPronouns() async { // NEW
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_pronounsKey, json.encode(_userPronouns));
+  }
+
   Future<void> loadPersistedMessages() async {
     final prefs = await SharedPreferences.getInstance();
 
@@ -419,7 +449,9 @@ class ChatState extends ChangeNotifier {
     if (savedChannels != null) {
       try {
         final channelsJson = json.decode(savedChannels) as List<dynamic>;
-        _channels = channelsJson.map((c) => Channel.fromJson(c as Map<String, dynamic>)).toList();
+        _channels = channelsJson
+            .map((c) => Channel.fromJson(c as Map<String, dynamic>))
+            .toList();
         _rebuildUserStatuses();
       } catch (e) {
         print('Error loading persisted channels: $e');
@@ -467,6 +499,20 @@ class ChatState extends ChangeNotifier {
       }
     }
 
+    // NEW: Load persisted pronouns
+    _userPronouns.clear();
+    final savedPronouns = prefs.getString(_pronounsKey);
+    if (savedPronouns != null) {
+      try {
+        final pronounsMap = json.decode(savedPronouns) as Map<String, dynamic>;
+        pronounsMap.forEach((key, value) {
+          _userPronouns[key] = value as String;
+        });
+      } catch (e) {
+        print('Error loading persisted pronouns: $e');
+      }
+    }
+
     notifyListeners();
   }
 
@@ -496,7 +542,8 @@ class ChatState extends ChangeNotifier {
   }
 
   void updateChannelTopic(String channelName, String newTopic) {
-    final index = _channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
+    final index = _channels
+        .indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase());
     if (index != -1) {
       _channels[index] = Channel(
         name: _channels[index].name,

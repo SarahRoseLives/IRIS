@@ -36,7 +36,8 @@ class ChatController {
   StreamSubscription? _errorSub;
   StreamSubscription? _eventSub;
 
-  final StreamController<WebSocketStatus> _wsStatusController = StreamController.broadcast();
+  final StreamController<WebSocketStatus> _wsStatusController =
+      StreamController.broadcast();
   Stream<WebSocketStatus> get wsStatusStream => _wsStatusController.stream;
 
   final StreamController<String?> _errorController = StreamController.broadcast();
@@ -65,12 +66,16 @@ class ChatController {
         final sender = messageData['sender'];
         if (sender != null) {
           final channelName = '@$sender';
-          final content = messageData['message'] ?? messageData['body'] ?? messageData['content'] ?? '';
+          final content = messageData['message'] ??
+              messageData['body'] ??
+              messageData['content'] ??
+              '';
           final newMessage = Message.fromJson({
             'from': sender,
             'content': content,
             'time': messageData['time'] ?? DateTime.now().toIso8601String(),
-            'id': messageData['id'] ?? 'pending-${DateTime.now().millisecondsSinceEpoch}',
+            'id': messageData['id'] ??
+                'pending-${DateTime.now().millisecondsSinceEpoch}',
           });
           chatState.addMessage(channelName, newMessage);
         }
@@ -119,36 +124,43 @@ class ChatController {
     final lastKnownChannels = await chatState.loadPersistedJoinedChannels();
 
     if (lastKnownChannels.isNotEmpty) {
-      print('[ChatController] No channels joined on server. Restoring from local state: $lastKnownChannels');
+      print(
+          '[ChatController] No channels joined on server. Restoring from local state: $lastKnownChannels');
       for (final channelName in lastKnownChannels) {
         if (channelName.startsWith('#')) {
           try {
             await apiService.joinChannel(channelName);
           } catch (e) {
-            print('[ChatController] Failed to auto-re-join channel $channelName: $e');
+            print(
+                '[ChatController] Failed to auto-re-join channel $channelName: $e');
           }
         }
       }
     } else {
-      print('[ChatController] No channels joined and no local state found. Joining #welcome.');
+      print(
+          '[ChatController] No channels joined and no local state found. Joining #welcome.');
       try {
         await joinChannel('#welcome');
       } catch (e) {
         print('[ChatController] Failed to join #welcome: $e');
-        chatState.addSystemMessage(chatState.selectedConversationTarget, 'Failed to join #welcome channel.');
+        chatState.addSystemMessage(chatState.selectedConversationTarget,
+            'Failed to join #welcome channel.');
       }
     }
   }
 
   void _listenToInitialState() {
-    _initialStateSub = _webSocketService.initialStateStream.listen((payload) async {
+    _initialStateSub =
+        _webSocketService.initialStateStream.listen((payload) async {
       final channelsPayload = payload['channels'] as Map<String, dynamic>?;
       final List<Channel> websocketChannels = [];
 
       if (channelsPayload != null) {
         channelsPayload.forEach((channelName, channelData) {
           final data = channelData as Map<String, dynamic>;
-          if (!data.containsKey('name') || data['name'] == null || (data['name'] as String).isEmpty) {
+          if (!data.containsKey('name') ||
+              data['name'] == null ||
+              (data['name'] as String).isEmpty) {
             data['name'] = channelName;
           }
           final channel = Channel.fromJson(data);
@@ -160,8 +172,8 @@ class ChatController {
       }
       chatState.mergeChannels(websocketChannels);
 
-      final bool isJoinedToAnyPublicChannel = chatState.channels.any((c) =>
-          c.name.startsWith('#') && c.members.isNotEmpty);
+      final bool isJoinedToAnyPublicChannel = chatState.channels
+          .any((c) => c.name.startsWith('#') && c.members.isNotEmpty);
 
       if (!isJoinedToAnyPublicChannel) {
         await restoreLastKnownChannelState();
@@ -183,14 +195,15 @@ class ChatController {
           final String text = payload['text'] ?? '';
           final String channelName = payload['channel_name'] ?? '';
           _notificationService.showSimpleNotification(
-            title: sender,
-            body: text,
-            payload: {
-              'sender': sender,
-              'channel_name': channelName,
-              'type': channelName.startsWith('@') ? 'private_message' : 'channel_message'
-            }
-          );
+              title: sender,
+              body: text,
+              payload: {
+                'sender': sender,
+                'channel_name': channelName,
+                'type': channelName.startsWith('@')
+                    ? 'private_message'
+                    : 'channel_message'
+              });
         }
       }
 
@@ -216,8 +229,8 @@ class ChatController {
 
       final encStatus = _encryptionService.getSessionStatus('@$sender');
       if (encStatus == EncryptionStatus.active) {
-        chatState.addSystemMessage(
-          '@$sender', '⚠️ WARNING: Received an unencrypted message during a secure session. The session has been terminated for your safety. Please re-initiate encryption.');
+        chatState.addSystemMessage('@$sender',
+            '⚠️ WARNING: Received an unencrypted message during a secure session. The session has been terminated for your safety. Please re-initiate encryption.');
         _encryptionService.endEncryption('@$sender');
         chatState.setEncryptionStatus('@$sender', EncryptionStatus.error);
         return;
@@ -228,9 +241,13 @@ class ChatController {
 
       String conversationTarget;
       if (isPrivateMessage) {
-        conversationTarget = channelName.startsWith('@') ? channelName : '@$channelName';
-        if (chatState.channels.indexWhere((c) => c.name.toLowerCase() == conversationTarget.toLowerCase()) == -1) {
-          chatState.addOrUpdateChannel(Channel(name: conversationTarget, members: []));
+        conversationTarget =
+            channelName.startsWith('@') ? channelName : '@$channelName';
+        if (chatState.channels.indexWhere(
+                (c) => c.name.toLowerCase() == conversationTarget.toLowerCase()) ==
+            -1) {
+          chatState.addOrUpdateChannel(
+              Channel(name: conversationTarget, members: []));
         }
       } else {
         conversationTarget = channelName;
@@ -240,28 +257,62 @@ class ChatController {
         'from': sender,
         'content': text,
         'time': message['time'] ?? DateTime.now().toIso8601String(),
-        'id': message['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+        'id':
+            message['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
       });
 
       chatState.addMessage(conversationTarget, newMessage);
       loadAvatarForUser(sender);
     });
 
-    // --- THIS IS THE FIX ---
     _eventSub = _webSocketService.eventStream.listen((event) {
       final String eventType = event['type'] ?? '';
       final payload = event['payload'] ?? {};
+      final String? channelName =
+          payload['channel_name'] as String? ?? payload['channel'] as String?;
+      final String? sender = payload['sender'] as String?;
+      final String? text = payload['text'] as String?;
+      final String? topic = payload['topic'] as String?;
+      final String? time = payload['time'] as String?;
 
-      if (eventType == 'topic_change') {
-        final channelName = payload['channel'] as String?;
-        final topic = payload['topic'] as String?;
-        if (channelName != null && topic != null) {
-          // **CHANGED**: Instead of manually rebuilding the list,
-          // we now call the dedicated method in ChatState.
-          chatState.updateChannelTopic(channelName, topic);
-        }
+      if (channelName == null) return;
+
+      switch (eventType) {
+        case 'topic_change':
+          if (topic != null) {
+            chatState.updateChannelTopic(channelName, topic);
+          }
+          break;
+        case 'notice':
+          if (sender != null && text != null) {
+            // Check if it's a pronoun notice from the gateway and suppress/handle it.
+            if (sender.toLowerCase() == gatewayNick.toLowerCase() &&
+                text.toLowerCase().contains('pronouns')) {
+              final RegExp pronounRegex = RegExp(r"(.+)'s pronouns are (.+)");
+              final match = pronounRegex.firstMatch(text);
+              if (match != null) {
+                final parsedUser = match.group(1);
+                final parsedPronouns = match.group(2);
+                if (parsedUser != null && parsedPronouns != null) {
+                  print(
+                      "[ChatController] Parsed pronouns for $parsedUser: $parsedPronouns");
+                  chatState.setUserPronouns(parsedUser, parsedPronouns);
+                  return; // Suppress the notice from appearing in chat
+                }
+              }
+            }
+
+            // If it's not a pronoun notice, show it normally.
+            final noticeMessage = Message.fromJson({
+              'from': sender,
+              'content': text,
+              'time': time ?? DateTime.now().toIso8601String(),
+              'isNotice': true,
+            });
+            chatState.addMessage(channelName, noticeMessage);
+          }
+          break;
       }
-      // You can handle other generic events here like 'user_away', 'user_back', etc.
     });
   }
 
@@ -300,28 +351,46 @@ class ChatController {
 
     final currentConversation = chatState.selectedConversationTarget;
     final isDm = currentConversation.startsWith('@');
-    String target = isDm ? currentConversation.substring(1) : currentConversation;
+    String target =
+        isDm ? currentConversation.substring(1) : currentConversation;
 
     final sentMessage = Message(
       from: username,
       content: text,
       time: DateTime.now(),
       id: DateTime.now().millisecondsSinceEpoch.toString(),
-      isEncrypted: isDm && _encryptionService.getSessionStatus(currentConversation) == EncryptionStatus.active,
+      isEncrypted: isDm &&
+          _encryptionService.getSessionStatus(currentConversation) ==
+              EncryptionStatus.active,
     );
     chatState.addMessage(currentConversation, sentMessage);
 
-    if (isDm && _encryptionService.getSessionStatus(currentConversation) == EncryptionStatus.active) {
-      final encryptedText = await _encryptionService.encryptMessage(currentConversation, text);
+    if (isDm &&
+        _encryptionService.getSessionStatus(currentConversation) ==
+            EncryptionStatus.active) {
+      final encryptedText =
+          await _encryptionService.encryptMessage(currentConversation, text);
       if (encryptedText != null) {
         _webSocketService.sendMessage(target, encryptedText);
       } else {
-        chatState.addSystemMessage(currentConversation, 'Could not encrypt message. Session may be invalid.');
+        chatState.addSystemMessage(currentConversation,
+            'Could not encrypt message. Session may be invalid.');
       }
       return;
     }
 
     _webSocketService.sendMessage(target, text);
+  }
+
+  Future<void> setMyPronouns(String pronouns) async {
+    final command = '!$gatewayNick set pronouns $pronouns';
+    // Send the command as a private message to the gateway bot.
+    // The gateway bot listens for its own name in PMs to process commands.
+    _webSocketService.sendMessage(gatewayNick, command);
+    chatState.addSystemMessage(
+      chatState.selectedConversationTarget,
+      'Pronouns updated to "$pronouns".',
+    );
   }
 
   Future<void> initiateOrEndEncryption() async {
@@ -335,26 +404,32 @@ class ChatController {
       _webSocketService.sendMessage(target.substring(1), endMessage);
       chatState.setEncryptionStatus(target, EncryptionStatus.none);
       chatState.addSystemMessage(target, 'Encryption has been terminated.');
-    } else if (status == EncryptionStatus.none || status == EncryptionStatus.pending) {
-      final requestMessage = await _encryptionService.initiateEncryption(target);
+    } else if (status == EncryptionStatus.none ||
+        status == EncryptionStatus.pending) {
+      final requestMessage =
+          await _encryptionService.initiateEncryption(target);
       if (requestMessage != null) {
         _webSocketService.sendMessage(target.substring(1), requestMessage);
         chatState.setEncryptionStatus(target, EncryptionStatus.pending);
-        chatState.addSystemMessage(target, 'Attempting to start an encrypted session...');
+        chatState.addSystemMessage(
+            target, 'Attempting to start an encrypted session...');
       }
     }
   }
 
   Future<void> _handleEncryptionRequest(String from, String text) async {
     final payload = text.substring('[ENCRYPTION-REQUEST] '.length);
-    final response = await _encryptionService.handleEncryptionRequest('@$from', payload);
+    final response =
+        await _encryptionService.handleEncryptionRequest('@$from', payload);
     if (response != null) {
       _webSocketService.sendMessage(from, response);
       chatState.setEncryptionStatus('@$from', EncryptionStatus.active);
-      chatState.addSystemMessage('@$from', 'Accepted encryption request. Session is now active.');
+      chatState.addSystemMessage(
+          '@$from', 'Accepted encryption request. Session is now active.');
     } else {
       chatState.setEncryptionStatus('@$from', EncryptionStatus.error);
-      chatState.addSystemMessage('@$from', 'Failed to process encryption request.');
+      chatState.addSystemMessage(
+          '@$from', 'Failed to process encryption request.');
     }
   }
 
@@ -362,12 +437,14 @@ class ChatController {
     final payload = text.substring('[ENCRYPTION-ACCEPT] '.length);
     await _encryptionService.handleEncryptionAcceptance('@$from', payload);
     chatState.setEncryptionStatus('@$from', EncryptionStatus.active);
-    chatState.addSystemMessage('@$from', 'Encryption request accepted. Session is now active.');
+    chatState.addSystemMessage(
+        '@$from', 'Encryption request accepted. Session is now active.');
   }
 
   Future<void> _handleEncryptedMessage(String from, String text) async {
     final payload = text.substring('[ENC]'.length);
-    final decrypted = await _encryptionService.decryptMessage('@$from', payload);
+    final decrypted =
+        await _encryptionService.decryptMessage('@$from', payload);
 
     if (decrypted != null) {
       final msg = Message(
@@ -379,7 +456,8 @@ class ChatController {
       );
       chatState.addMessage('@$from', msg);
     } else {
-      chatState.addSystemMessage('@$from', '⚠️ Could not decrypt a message. The secure session may have been compromised and has been ended.');
+      chatState.addSystemMessage('@$from',
+          '⚠️ Could not decrypt a message. The secure session may have been compromised and has been ended.');
       chatState.setEncryptionStatus('@$from', EncryptionStatus.error);
     }
   }
@@ -387,7 +465,8 @@ class ChatController {
   void _handleEncryptionEnd(String from) {
     _encryptionService.endEncryption('@$from');
     chatState.setEncryptionStatus('@$from', EncryptionStatus.none);
-    chatState.addSystemMessage('@$from', 'The other user has ended the encrypted session.');
+    chatState.addSystemMessage(
+        '@$from', 'The other user has ended the encrypted session.');
   }
 
   Future<String?> getSafetyNumberForTarget() {
@@ -402,32 +481,39 @@ class ChatController {
       chatState.moveChannelToJoined(channelName, username);
       await loadChannelHistory(channelName, limit: 2500);
     } catch (e) {
-      chatState.addSystemMessage(chatState.selectedConversationTarget, 'Failed to join channel: $channelName. Error: $e');
+      chatState.addSystemMessage(chatState.selectedConversationTarget,
+          'Failed to join channel: $channelName. Error: $e');
     }
   }
 
   Future<void> partChannel(String channelName) async {
     if (!channelName.startsWith('#')) {
-      chatState.addSystemMessage(chatState.selectedConversationTarget, 'You can only part public channels.');
+      chatState.addSystemMessage(chatState.selectedConversationTarget,
+          'You can only part public channels.');
       return;
     }
     try {
       await apiService.partChannel(channelName);
       chatState.moveChannelToUnjoined(channelName);
     } catch (e) {
-      chatState.addSystemMessage(chatState.selectedConversationTarget, 'Failed to leave channel: ${e.toString()}');
+      chatState.addSystemMessage(chatState.selectedConversationTarget,
+          'Failed to leave channel: ${e.toString()}');
     }
   }
 
-  Future<void> loadChannelHistory(String channelName, {int limit = 2500}) async {
+  Future<void> loadChannelHistory(String channelName,
+      {int limit = 2500}) async {
     if (channelName.isEmpty) return;
     try {
-      final response = await apiService.fetchChannelMessages(channelName, limit: limit);
-      final messages = response.map((item) => Message.fromJson({
-        ...item,
-        'isHistorical': true,
-        'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
-      })).toList();
+      final response =
+          await apiService.fetchChannelMessages(channelName, limit: limit);
+      final messages = response
+          .map((item) => Message.fromJson({
+                ...item,
+                'isHistorical': true,
+                'id': item['id'] ?? 'hist-${item['time']}-${item['from']}',
+              }))
+          .toList();
 
       messages.sort((a, b) => a.time.compareTo(b.time));
 
@@ -440,7 +526,8 @@ class ChatController {
       }
     } catch (e) {
       print('Error loading channel history for $channelName: $e');
-      chatState.addSystemMessage(channelName, 'Failed to load history for $channelName.');
+      chatState.addSystemMessage(
+          channelName, 'Failed to load history for $channelName.');
     }
   }
 
@@ -470,7 +557,9 @@ class ChatController {
           chatState.setAvatar(nick, url);
           return;
         }
-      } catch (e) { /* Ignore */ }
+      } catch (e) {
+        /* Ignore */
+      }
     }
   }
 
@@ -484,19 +573,23 @@ class ChatController {
         if (args.isNotEmpty && args.startsWith('#')) {
           joinChannel(args);
         } else {
-          chatState.addSystemMessage(chatState.selectedConversationTarget, 'Usage: /join <#channel_name>');
+          chatState.addSystemMessage(chatState.selectedConversationTarget,
+              'Usage: /join <#channel_name>');
         }
         break;
       case 'part':
-        String channelToPart = args.isNotEmpty ? args : chatState.selectedConversationTarget;
+        String channelToPart =
+            args.isNotEmpty ? args : chatState.selectedConversationTarget;
         if (channelToPart.isNotEmpty && channelToPart.startsWith('#')) {
           partChannel(channelToPart);
         } else {
-          chatState.addSystemMessage(chatState.selectedConversationTarget, 'Usage: /part [#channel_name]');
+          chatState.addSystemMessage(chatState.selectedConversationTarget,
+              'Usage: /part [#channel_name]');
         }
         break;
       default:
-        chatState.addSystemMessage(chatState.selectedConversationTarget, 'Unknown command: /$command.');
+        chatState.addSystemMessage(
+            chatState.selectedConversationTarget, 'Unknown command: /$command.');
     }
   }
 
@@ -508,7 +601,10 @@ class ChatController {
   }
 
   void handleNotificationTap(String channelName) {
-    if (channelName.startsWith('@') && chatState.channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase()) == -1) {
+    if (channelName.startsWith('@') &&
+        chatState.channels.indexWhere(
+                (c) => c.name.toLowerCase() == channelName.toLowerCase()) ==
+            -1) {
       chatState.addOrUpdateChannel(Channel(name: channelName, members: []));
     }
     chatState.selectConversation(channelName);
@@ -519,17 +615,23 @@ class ChatController {
       final channelName = PendingNotification.channelToNavigateTo!;
       final messageData = PendingNotification.messageData;
 
-      if (chatState.channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase()) == -1) {
+      if (chatState.channels.indexWhere(
+              (c) => c.name.toLowerCase() == channelName.toLowerCase()) ==
+          -1) {
         chatState.addOrUpdateChannel(Channel(name: channelName, members: []));
       }
 
       if (messageData != null) {
-        final content = messageData['message'] ?? messageData['body'] ?? messageData['content'] ?? '';
+        final content = messageData['message'] ??
+            messageData['body'] ??
+            messageData['content'] ??
+            '';
         final newMessage = Message.fromJson({
           'from': messageData['sender'] ?? 'Unknown',
           'content': content,
           'time': messageData['time'] ?? DateTime.now().toIso8601String(),
-          'id': messageData['id'] ?? DateTime.now().millisecondsSinceEpoch.toString(),
+          'id': messageData['id'] ??
+              DateTime.now().millisecondsSinceEpoch.toString(),
         });
         chatState.addMessage(channelName, newMessage);
       }

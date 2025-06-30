@@ -3,10 +3,14 @@ import 'dart:io';
 import 'package:flutter/foundation.dart'
     show defaultTargetPlatform, kIsWeb, TargetPlatform;
 import 'package:flutter/material.dart';
+import 'package:get_it/get_it.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:iris/main.dart'; // Import main.dart to access AuthManager
 import 'package:iris/services/update_service.dart';
+import 'package:iris/viewmodels/chat_state.dart';
+import 'package:iris/viewmodels/main_layout_viewmodel.dart';
+import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
@@ -23,14 +27,15 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
-  File? _imageFile;
   final ApiService _apiService = ApiService();
+  File? _imageFile;
   bool _isUploading = false;
   String? _username;
   String? _avatarUrl;
-  String? _bio; // Optionally load bio in the future
 
-  // Fingerprint variables
+  // NEW: Controller for pronouns
+  final TextEditingController _pronounsController = TextEditingController();
+
   final FingerprintService _fingerprintService = FingerprintService();
   bool _fingerprintEnabled = false;
 
@@ -41,15 +46,49 @@ class _ProfileScreenState extends State<ProfileScreen> {
     _loadFingerprintSetting();
   }
 
+  @override
+  void dispose() {
+    _pronounsController.dispose(); // NEW: Dispose the controller
+    super.dispose();
+  }
+
   Future<void> _loadUserInfo() async {
     final prefs = await SharedPreferences.getInstance();
+    // NEW: Access ChatState via GetIt to load initial pronouns
+    final chatState = GetIt.instance<ChatState>();
+
     if (mounted) {
       setState(() {
         _username = prefs.getString('username');
-        _bio = prefs.getString('bio'); // If you want to add a bio field
+        // NEW: Load pronouns from ChatState
+        if (_username != null) {
+          _pronounsController.text = chatState.getPronounsForUser(_username!) ?? '';
+        }
       });
     }
     await _loadAvatarUrl();
+  }
+
+  // NEW: Method to set pronouns
+  Future<void> _setPronouns() async {
+    // Hide keyboard
+    FocusScope.of(context).unfocus();
+
+    final pronouns = _pronounsController.text.trim();
+    // Use context.read to call the method once without listening
+    final viewModel = context.read<MainLayoutViewModel>();
+
+    await viewModel.setMyPronouns(pronouns);
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(pronouns.isEmpty ? 'Pronouns cleared.' : 'Pronouns set to "$pronouns"'),
+          backgroundColor: Colors.green,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
   }
 
   Future<void> _loadAvatarUrl() async {
@@ -59,7 +98,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
       for (final ext in possibleExtensions) {
         final String potentialAvatarUrl =
-            '$baseSecureUrl/avatars/$_username$ext'; // USE baseSecureUrl
+            '$baseSecureUrl/avatars/$_username$ext';
         try {
           final response = await http.head(Uri.parse(potentialAvatarUrl));
           if (response.statusCode == 200) {
@@ -80,7 +119,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _loadFingerprintSetting() async {
-    // Only try to load settings on mobile
     if (kIsWeb) return;
     final enabled = await _fingerprintService.isFingerprintEnabled();
     if (mounted) {
@@ -90,12 +128,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  /// Securely handles the process of enabling or disabling fingerprint login.
   void _handleFingerprintSwitch(bool value) async {
     if (!mounted) return;
 
     if (value) {
-      // --- Logic for ENABLING fingerprint login ---
       final canAuth = await _fingerprintService.canAuthenticate();
       if (!canAuth) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -106,11 +142,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return;
       }
 
-      // 1. Prompt for password
       final password = await _promptForPassword();
-      if (password == null || password.isEmpty) return; // User cancelled
+      if (password == null || password.isEmpty) return;
 
-      // 2. Verify credentials with the API
       final verifyResponse = await _apiService.login(_username!, password);
       if (!verifyResponse.success) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -120,12 +154,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
         return;
       }
 
-      // 3. Authenticate with fingerprint to confirm the action
       final authenticated = await _fingerprintService.authenticate(
           localizedReason: 'Confirm to enable fingerprint login');
 
       if (authenticated) {
-        // 4. Save credentials and enable the feature
         await _fingerprintService.saveCredentials(_username!, password);
         await _fingerprintService.setFingerprintEnabled(true);
         if (mounted) {
@@ -142,7 +174,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
         ));
       }
     } else {
-      // --- Logic for DISABLING fingerprint login ---
       await _fingerprintService.setFingerprintEnabled(false);
       if (mounted) {
         setState(() => _fingerprintEnabled = false);
@@ -152,7 +183,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  /// Shows a dialog to securely ask for the user's password.
   Future<String?> _promptForPassword() {
     final passwordController = TextEditingController();
     return showDialog<String>(
@@ -227,7 +257,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           setState(() {
             _imageFile = null;
             _avatarUrl = response['avatarUrl'] != null
-                ? '$baseSecureUrl${response['avatarUrl']}' // USE baseSecureUrl
+                ? '$baseSecureUrl${response['avatarUrl']}'
                 : null;
           });
         }
@@ -273,63 +303,72 @@ class _ProfileScreenState extends State<ProfileScreen> {
         color: const Color(0xFF232428),
         borderRadius: BorderRadius.circular(20),
       ),
-      child: Row(
+      child: Column(
         children: [
-          // Avatar with edit overlay
-          Stack(
-            alignment: Alignment.bottomRight,
+          Row(
             children: [
-              CircleAvatar(
-                radius: 48,
-                backgroundColor: const Color(0xFF5865F2),
-                backgroundImage: _imageFile != null
-                    ? FileImage(_imageFile!) as ImageProvider
-                    : (_avatarUrl != null ? NetworkImage(_avatarUrl!) : null),
-                child: _imageFile == null && _avatarUrl == null
-                    ? const Icon(Icons.person, size: 48, color: Colors.white70)
-                    : null,
-              ),
-              Positioned(
-                bottom: 2,
-                right: 2,
-                child: Material(
-                  shape: const CircleBorder(),
-                  color: Colors.black54,
-                  child: IconButton(
-                    icon: const Icon(Icons.camera_alt,
-                        color: Colors.white, size: 20),
-                    onPressed: _pickImage,
-                    tooltip: "Change Avatar",
-                    padding: EdgeInsets.zero,
-                    constraints: const BoxConstraints(),
+              Stack(
+                alignment: Alignment.bottomRight,
+                children: [
+                  CircleAvatar(
+                    radius: 48,
+                    backgroundColor: const Color(0xFF5865F2),
+                    backgroundImage: _imageFile != null
+                        ? FileImage(_imageFile!) as ImageProvider
+                        : (_avatarUrl != null ? NetworkImage(_avatarUrl!) : null),
+                    child: _imageFile == null && _avatarUrl == null
+                        ? const Icon(Icons.person, size: 48, color: Colors.white70)
+                        : null,
                   ),
+                  Positioned(
+                    bottom: 2,
+                    right: 2,
+                    child: Material(
+                      shape: const CircleBorder(),
+                      color: Colors.black54,
+                      child: IconButton(
+                        icon: const Icon(Icons.camera_alt,
+                            color: Colors.white, size: 20),
+                        onPressed: _pickImage,
+                        tooltip: "Change Avatar",
+                        padding: EdgeInsets.zero,
+                        constraints: const BoxConstraints(),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(width: 20),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      _username ?? 'Not available',
+                      style: const TextStyle(
+                          fontSize: 24,
+                          fontWeight: FontWeight.bold,
+                          color: Colors.white),
+                    ),
+                    const SizedBox(height: 4),
+                    // This now listens to the controller for live updates
+                    ValueListenableBuilder<TextEditingValue>(
+                      valueListenable: _pronounsController,
+                      builder: (context, value, child) {
+                        return Text(
+                          value.text.isNotEmpty ? value.text : "No pronouns set.",
+                          style: TextStyle(color: Colors.grey[400], fontSize: 15, fontStyle: FontStyle.italic),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        );
+                      }
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-          const SizedBox(width: 20),
-          // Username and bio/info
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  _username ?? 'Not available',
-                  style: const TextStyle(
-                      fontSize: 24,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  _bio ?? "No bio set.",
-                  style: TextStyle(color: Colors.grey[400], fontSize: 15),
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ],
-            ),
-          ),
+          _buildAvatarActionButtons(),
         ],
       ),
     );
@@ -340,7 +379,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     return Padding(
       padding: const EdgeInsets.only(top: 12),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
           ElevatedButton.icon(
             onPressed: _uploadAvatar,
@@ -375,11 +414,54 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  Widget _buildPronounsSection() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Pronouns',
+          style: TextStyle(
+            color: Colors.grey[300],
+            fontSize: 16,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        const SizedBox(height: 12),
+        TextField(
+          controller: _pronounsController,
+          style: const TextStyle(color: Colors.white),
+          decoration: InputDecoration(
+            hintText: 'e.g., She/Her, They/Them, He/They',
+            hintStyle: const TextStyle(color: Colors.white54),
+            filled: true,
+            fillColor: const Color(0xFF232428),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: BorderSide.none,
+            ),
+             contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+          ),
+        ),
+        const SizedBox(height: 12),
+        ElevatedButton(
+          onPressed: _setPronouns,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF5865F2),
+            foregroundColor: Colors.white,
+            minimumSize: const Size.fromHeight(48),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12),
+            ),
+          ),
+          child: const Text('Save Pronouns'),
+        ),
+      ],
+    );
+  }
+
   Widget _buildActionButtons() {
     return Column(
       children: [
-        // --- START OF CHANGE ---
-        // Conditionally show Fingerprint options only on Android
         if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ...[
           SwitchListTile(
             title: const Text('Enable Fingerprint Login',
@@ -392,26 +474,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           ),
           const SizedBox(height: 12),
         ],
-        // --- END OF CHANGE ---
-
-        ElevatedButton.icon(
-          onPressed: _pickImage,
-          icon: const Icon(Icons.image),
-          label: const Text('Select Avatar Image'),
-          style: ElevatedButton.styleFrom(
-            foregroundColor: Colors.white,
-            backgroundColor: const Color(0xFF5865F2),
-            minimumSize: const Size.fromHeight(48),
-            textStyle: const TextStyle(fontSize: 16),
-            shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(12)),
-          ),
-        ),
-
-        // --- START OF CHANGE ---
-        // Conditionally show the "Check for Updates" button only on Android
         if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) ...[
-          const SizedBox(height: 12),
           ElevatedButton.icon(
             onPressed: () async {
               if (mounted) {
@@ -432,10 +495,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   borderRadius: BorderRadius.circular(12)),
             ),
           ),
+          const SizedBox(height: 12),
         ],
-        // --- END OF CHANGE ---
-
-        const SizedBox(height: 12),
         ElevatedButton.icon(
           onPressed: _logout,
           icon: const Icon(Icons.logout),
@@ -462,21 +523,26 @@ class _ProfileScreenState extends State<ProfileScreen> {
         elevation: 0.5,
       ),
       backgroundColor: const Color(0xFF313338),
-      body: SingleChildScrollView(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              _buildProfileHeader(),
-              _buildAvatarActionButtons(),
-              const SizedBox(height: 38),
-              _buildActionButtons(),
-            ],
+      body: GestureDetector( // To dismiss keyboard on tap
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: SingleChildScrollView(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 32),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                _buildProfileHeader(),
+                const SizedBox(height: 32),
+                _buildPronounsSection(), // NEW
+                const SizedBox(height: 24),
+                const Divider(color: Colors.white24),
+                const SizedBox(height: 24),
+                _buildActionButtons(),
+              ],
+            ),
           ),
         ),
       ),
     );
   }
 }
-

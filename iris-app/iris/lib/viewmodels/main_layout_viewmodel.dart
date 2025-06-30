@@ -13,8 +13,6 @@ import 'chat_controller.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
 import '../models/encryption_session.dart';
-// The FingerprintService is no longer needed in this viewmodel.
-// import '../services/fingerprint_service.dart';
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
@@ -44,7 +42,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   final Set<String> _blockedUsers = {};
   final Set<String> _hiddenMessageIds = {};
 
-  bool _userScrolledUp = false;
+  bool _userScrolledUp = false; // <-- FIX: This line was missing
 
   Set<String> get blockedUsers => _blockedUsers;
   Set<String> get hiddenMessageIds => _hiddenMessageIds;
@@ -69,12 +67,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  // Fingerprint-related variables are no longer needed here as the
-  // app-wide lock on resume is removed.
-  // final FingerprintService _fingerprintService = FingerprintService();
-  // bool _isAuthenticating = false;
-  // DateTime? _lastAuthAttempt;
-
   MainLayoutViewModel({required this.username, this.token}) {
     if (token == null) {
       print("[ViewModel] Error: Token is null. Cannot initialize.");
@@ -85,14 +77,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
 
     chatState = getIt<ChatState>();
 
-    // --- START FINAL FIX: Provide the required 'isAppInBackground' callback ---
     _chatController = ChatController(
       username: username,
       token: token!,
       chatState: chatState,
       isAppInBackground: () => _appLifecycleState != AppLifecycleState.resumed,
     );
-    // --- END FINAL FIX ---
 
     NotificationService.getCurrentDMChannel = () {
       final target = chatState.selectedConversationTarget;
@@ -119,6 +109,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   String get selectedConversationTarget => chatState.selectedConversationTarget;
   List<ChannelMember> get members => chatState.membersForSelectedChannel;
   Map<String, String> get userAvatars => chatState.userAvatars;
+  Map<String, String> get userPronouns => chatState.userPronouns;
   List<String> get joinedPublicChannelNames =>
       chatState.joinedPublicChannelNames;
   List<String> get unjoinedPublicChannelNames =>
@@ -132,22 +123,17 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   Message? getLastMessage(String channelName) =>
       chatState.getLastMessage(channelName);
 
-  // START OF CHANGE
   bool get hasUnreadDms {
-    // Iterate through all DM channels.
     for (final dmName in dmChannelNames) {
-      // Check if the channel has unread messages.
       if (hasUnreadMessages(dmName)) {
-        // Check if the last message was from someone else.
         final lastMessage = getLastMessage(dmName);
         if (lastMessage != null && lastMessage.from != username) {
-          return true; // Found an unread DM from another user.
+          return true;
         }
       }
     }
-    return false; // No unread DMs found.
+    return false;
   }
-  // END OF CHANGE
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
@@ -155,8 +141,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     print("[ViewModel] AppLifecycleState changed to: $state");
     _appLifecycleState = state;
 
-    // Trigger your existing resume/pause logic from this central handler
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
       handleAppPaused();
     } else if (state == AppLifecycleState.resumed) {
       handleAppResumed();
@@ -270,7 +256,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           chatState.addMessageBatch(channel.name, newMessages);
         } on SessionExpiredException {
           AuthManager.forceLogout(showExpiredMessage: true);
-          return; // Stop fetching more history
+          return;
         } catch (e) {
           print('Error fetching history for ${channel.name}: $e');
         }
@@ -282,7 +268,7 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           chatState.addMessageBatch(channel.name, newMessages);
         } on SessionExpiredException {
           AuthManager.forceLogout(showExpiredMessage: true);
-          return; // Stop fetching more history
+          return;
         } catch (e) {
           print('Error fetching missed messages for ${channel.name}: $e');
         }
@@ -292,8 +278,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final messages = chatState.getMessagesForChannel(dm);
       if (messages.isEmpty) {
         try {
-          final response =
-              await _chatController.apiService.fetchChannelMessages(dm, limit: 2500);
+          final response = await _chatController.apiService
+              .fetchChannelMessages(dm, limit: 2500);
           if (response.isNotEmpty) {
             if (!chatState.channels.any((c) => c.name == dm)) {
               chatState.addOrUpdateChannel(Channel(
@@ -313,19 +299,19 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
           chatState.addMessageBatch(dm, newMessages);
         } on SessionExpiredException {
           AuthManager.forceLogout(showExpiredMessage: true);
-          return; // Stop fetching more history
+          return;
         } catch (e) {
           print('Error fetching history for DM $dm: $e');
         }
       } else {
         final lastTime = messages.last.time;
         try {
-          final newMessages =
-              await _chatController.apiService.fetchMessagesSince(dm, lastTime);
+          final newMessages = await _chatController.apiService
+              .fetchMessagesSince(dm, lastTime);
           chatState.addMessageBatch(dm, newMessages);
         } on SessionExpiredException {
           AuthManager.forceLogout(showExpiredMessage: true);
-          return; // Stop fetching more history
+          return;
         } catch (e) {
           print('Error fetching missed messages for DM $dm: $e');
         }
@@ -333,14 +319,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  // --- App lifecycle handlers for State object to call ---
   void handleAppPaused() {
     _chatController.disconnectWebSocket();
   }
 
   void handleAppResumed() {
-    // The fingerprint check on resume has been removed.
-    // Now, we simply reconnect to the services.
     _chatController.connectWebSocket();
     _fetchLatestHistoryForAllChannels();
   }
@@ -409,6 +392,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _scrollToBottom();
   }
 
+  Future<void> setMyPronouns(String pronouns) async {
+    await _chatController.setMyPronouns(pronouns);
+  }
+
   void onChannelSelected(String channelName) {
     chatState.selectConversation(channelName);
     notifyListeners();
@@ -465,13 +452,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  // --- START OF CHANGE ---
-  // This method is now corrected to only send the command to the server.
   Future<void> updateChannelTopic(String newTopic) async {
     try {
       final channelName = selectedConversationTarget;
       if (channelName.startsWith('#')) {
-        // Send the request to the server.
         _chatController.sendRawWebSocketMessage({
           'type': 'topic_change',
           'payload': {
@@ -479,9 +463,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
             'topic': newTopic,
           },
         });
-        // The optimistic UI update has been removed. The UI will now wait for
-        // the server to send back a 'topic_change' event, which is handled
-        // by the ChatController and ChatState.
       }
     } catch (e) {
       chatState.addSystemMessage(
@@ -490,7 +471,6 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       );
     }
   }
-  // --- END OF CHANGE ---
 
   @override
   void dispose() {

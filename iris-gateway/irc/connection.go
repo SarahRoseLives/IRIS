@@ -305,6 +305,37 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		})
 	}
 
+	// Add a handler for NOTICE events for this user's session
+	connClient.AddCallback("NOTICE", func(e *ircevent.Event) {
+		target := e.Arguments[0]       // Who the notice is to (channel or our nick)
+		messageContent := e.Arguments[1] // The notice text
+		sender := e.Nick               // Who sent the notice (user or service)
+
+		// If the notice is from the server itself, e.Nick might be empty. Use e.Source (e.g., "irc.libera.chat").
+		if sender == "" {
+			sender = e.Source
+		}
+
+		// For a private notice, the target is our own username. The app should treat the sender as the "channel".
+		// For a channel notice, the target is the channel name.
+		var conversationTarget string
+		if strings.EqualFold(target, username) { // Private notice
+			conversationTarget = strings.ToLower(sender)
+		} else { // Channel notice
+			conversationTarget = strings.ToLower(target)
+		}
+
+		log.Printf("[IRC NOTICE] User: %s, To: %s, From: %s, Message: %s", username, target, sender, messageContent)
+
+		// Broadcast the notice event to the user's connected clients.
+		userSession.Broadcast("notice", map[string]interface{}{
+			"channel_name": conversationTarget, // The channel/user context for the notice
+			"sender":       sender,
+			"text":         messageContent,
+			"time":         time.Now().UTC().Format(time.RFC3339),
+		})
+	})
+
 	connClient.AddCallback("353", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 4 {
 			channelName := e.Arguments[len(e.Arguments)-2]

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:iris/viewmodels/chat_state.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../models/channel.dart';
 import '../models/encryption_session.dart';
@@ -6,7 +7,7 @@ import '../utils/irc_helpers.dart';
 import 'package:provider/provider.dart';
 import '../viewmodels/main_layout_viewmodel.dart';
 import '../models/channel_member.dart';
-import 'package:flutter/services.dart';  // For Clipboard
+import 'package:flutter/services.dart'; // For Clipboard
 
 bool isImageUrl(String url) {
   final lower = url.toLowerCase();
@@ -19,8 +20,7 @@ bool isImageUrl(String url) {
 
 final RegExp markdownLinkRegex =
     RegExp(r'\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)');
-final RegExp plainUrlRegex =
-    RegExp(r'(https?:\/\/[^\s)]+)');
+final RegExp plainUrlRegex = RegExp(r'(https?:\/\/[^\s)]+)');
 
 class MessageList extends StatelessWidget {
   final List<Message> messages;
@@ -45,37 +45,36 @@ class MessageList extends StatelessWidget {
       caseSensitive: false,
     );
 
-    final List<ChannelMember> members = context.select<MainLayoutViewModel, List<ChannelMember>>(
-      (vm) => vm.members,
-    );
-
-    final Map<String, ChannelMember> memberMap = {
-      for (final ChannelMember m in members) m.nick: m
-    };
-
     final viewModel = Provider.of<MainLayoutViewModel>(context);
+    final List<ChannelMember> members = viewModel.members;
+    final Map<String, ChannelMember> memberMap = {
+      for (final ChannelMember m in members) m.nick.toLowerCase(): m
+    };
     final isDm = viewModel.selectedConversationTarget.startsWith('@');
-
-    // For hiding logic
-    final Set<String> blockedUsers = viewModel.blockedUsers; // You need to have this in your viewmodel
-    final Set<String> hiddenMessageIds = viewModel.hiddenMessageIds; // You need to track hidden message IDs
+    final Set<String> blockedUsers = viewModel.blockedUsers;
+    final Set<String> hiddenMessageIds = viewModel.hiddenMessageIds;
 
     return ListView.builder(
       controller: scrollController,
-      physics: const ClampingScrollPhysics(), // <-- Added to prevent bounce
+      physics: const ClampingScrollPhysics(),
       itemCount: messages.length,
       itemBuilder: (context, index) {
         final message = messages[index];
 
-        // System info
+        if (message.isNotice) {
+          return _buildNoticeWidget(context, message);
+        }
+
         if (message.isSystemInfo) {
           return Center(
             child: Padding(
-              padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
+              padding:
+                  const EdgeInsets.symmetric(vertical: 8.0, horizontal: 16.0),
               child: Text(
                 message.content,
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.grey[400], fontStyle: FontStyle.italic),
+                style: TextStyle(
+                    color: Colors.grey[400], fontStyle: FontStyle.italic),
               ),
             ),
           );
@@ -86,11 +85,13 @@ class MessageList extends StatelessWidget {
 
         if (isBlockedUser || isMessageHidden) {
           return GestureDetector(
-            key: ValueKey(message.id), // <-- ADD KEY FOR PERFORMANCE
-            onLongPress: () => _showHiddenOptions(context, message, isBlockedUser, viewModel),
+            key: ValueKey(message.id),
+            onLongPress: () =>
+                _showHiddenOptions(context, message, isBlockedUser, viewModel),
             child: Container(
               margin: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
-              padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+              padding:
+                  const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
               decoration: BoxDecoration(
                 color: Colors.grey[900]?.withOpacity(0.85),
                 borderRadius: BorderRadius.circular(10),
@@ -120,16 +121,19 @@ class MessageList extends StatelessWidget {
 
         final contentWidgets = _parseMessageContent(context, message.content);
         final isMention = mentionPattern.hasMatch(message.content);
-        ChannelMember? member = memberMap[message.from];
+        ChannelMember? member = memberMap[message.from.toLowerCase()];
         String prefix = member?.prefix ?? '';
         final roleColor = getColorForPrefix(prefix);
         final roleIcon = getIconForPrefix(prefix);
+        final messageColor =
+            message.isEncrypted ? const Color(0xFFC8E6C9) : Colors.white;
 
-        final messageColor = message.isEncrypted ? const Color(0xFFC8E6C9) : Colors.white;
+        final pronouns = viewModel.userPronouns[message.from.toLowerCase()];
 
         return GestureDetector(
-          key: ValueKey(message.id), // <-- ADD KEY FOR PERFORMANCE
-          onLongPress: () => _showMessageOptions(context, message, isDm, viewModel),
+          key: ValueKey(message.id),
+          onLongPress: () =>
+              _showMessageOptions(context, message, isDm, viewModel),
           child: Container(
             decoration: BoxDecoration(
               color: isMention
@@ -148,26 +152,42 @@ class MessageList extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Row(
+                      Wrap(
+                        crossAxisAlignment: WrapCrossAlignment.center,
+                        spacing: 8.0,
                         children: [
                           if (roleIcon != null)
                             Padding(
                               padding: const EdgeInsets.only(right: 2),
-                              child: Icon(roleIcon, size: 16, color: roleColor),
+                              child:
+                                  Icon(roleIcon, size: 16, color: roleColor),
                             ),
                           if (message.isEncrypted)
                             Padding(
                               padding: const EdgeInsets.only(right: 4.0),
-                              child: Icon(Icons.lock, size: 12, color: Colors.greenAccent.withOpacity(0.8)),
+                              child: Icon(Icons.lock,
+                                  size: 12,
+                                  color: Colors.greenAccent.withOpacity(0.8)),
                             ),
                           Text(
                             message.from,
                             style: TextStyle(
                               color: roleColor,
-                              fontWeight: prefix.isNotEmpty ? FontWeight.bold : FontWeight.normal,
+                              fontWeight: prefix.isNotEmpty
+                                  ? FontWeight.bold
+                                  : FontWeight.normal,
                               fontSize: 14,
                             ),
                           ),
+                          if (pronouns != null && pronouns.isNotEmpty)
+                            Text(
+                              pronouns,
+                              style: TextStyle(
+                                color: Colors.white.withOpacity(0.7),
+                                fontStyle: FontStyle.italic,
+                                fontSize: 13,
+                              ),
+                            )
                         ],
                       ),
                       const SizedBox(height: 2),
@@ -189,7 +209,51 @@ class MessageList extends StatelessWidget {
     );
   }
 
-  void _showMessageOptions(BuildContext context, Message message, bool isDm, MainLayoutViewModel viewModel) {
+  Widget _buildNoticeWidget(BuildContext context, Message message) {
+    return Container(
+      key: ValueKey(message.id),
+      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+      margin: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: const Color(0xFF232428),
+        border: Border(
+          left: BorderSide(color: Colors.amber.shade600, width: 4),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.info_outline, color: Colors.amber.shade600, size: 20),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                RichText(
+                  text: TextSpan(
+                    style: const TextStyle(
+                        color: Colors.white70,
+                        fontStyle: FontStyle.italic,
+                        fontSize: 14),
+                    children: [
+                      TextSpan(text: message.content),
+                      TextSpan(
+                        text: ' — ${message.from}',
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showMessageOptions(BuildContext context, Message message, bool isDm,
+      MainLayoutViewModel viewModel) {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF313338),
@@ -208,19 +272,22 @@ class MessageList extends StatelessWidget {
             children: [
               ListTile(
                 leading: const Icon(Icons.copy, color: Colors.white),
-                title: const Text('Copy Text', style: TextStyle(color: Colors.white)),
+                title: const Text('Copy Text',
+                    style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
                   Clipboard.setData(ClipboardData(text: message.content));
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Message copied to clipboard')),
+                    const SnackBar(
+                        content: Text('Message copied to clipboard')),
                   );
                 },
               ),
               if (!isDm)
                 ListTile(
                   leading: const Icon(Icons.message, color: Colors.white),
-                  title: const Text('DM User', style: TextStyle(color: Colors.white)),
+                  title: const Text('DM User',
+                      style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     viewModel.startNewDM(message.from);
@@ -228,8 +295,10 @@ class MessageList extends StatelessWidget {
                 ),
               if (!alreadyHidden)
                 ListTile(
-                  leading: const Icon(Icons.visibility_off, color: Colors.white),
-                  title: const Text('Hide Message on App', style: TextStyle(color: Colors.white)),
+                  leading:
+                      const Icon(Icons.visibility_off, color: Colors.white),
+                  title: const Text('Hide Message on App',
+                      style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     viewModel.hideMessage(message.id);
@@ -238,7 +307,8 @@ class MessageList extends StatelessWidget {
               if (!alreadyBlocked)
                 ListTile(
                   leading: const Icon(Icons.block, color: Colors.white),
-                  title: const Text('Hide User on App', style: TextStyle(color: Colors.white)),
+                  title: const Text('Hide User on App',
+                      style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     viewModel.blockUser(message.from);
@@ -247,7 +317,8 @@ class MessageList extends StatelessWidget {
               if (isDm)
                 ListTile(
                   leading: const Icon(Icons.delete, color: Colors.red),
-                  title: const Text('Remove Message', style: TextStyle(color: Colors.red)),
+                  title: const Text('Remove Message',
+                      style: TextStyle(color: Colors.red)),
                   onTap: () {
                     Navigator.pop(context);
                     _removeDmMessage(context, viewModel, message);
@@ -260,8 +331,8 @@ class MessageList extends StatelessWidget {
     );
   }
 
-  // This is the new bottom sheet for hidden/blocked messages
-  void _showHiddenOptions(BuildContext context, Message message, bool isBlockedUser, MainLayoutViewModel viewModel) {
+  void _showHiddenOptions(BuildContext context, Message message,
+      bool isBlockedUser, MainLayoutViewModel viewModel) {
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF313338),
@@ -275,8 +346,10 @@ class MessageList extends StatelessWidget {
             children: [
               if (isBlockedUser)
                 ListTile(
-                  leading: const Icon(Icons.block_flipped, color: Colors.white),
-                  title: const Text('Unblock User', style: TextStyle(color: Colors.white)),
+                  leading:
+                      const Icon(Icons.block_flipped, color: Colors.white),
+                  title: const Text('Unblock User',
+                      style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     viewModel.unblockUser(message.from);
@@ -285,7 +358,8 @@ class MessageList extends StatelessWidget {
               if (!isBlockedUser)
                 ListTile(
                   leading: const Icon(Icons.visibility, color: Colors.white),
-                  title: const Text('Show Message', style: TextStyle(color: Colors.white)),
+                  title: const Text('Show Message',
+                      style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
                     viewModel.unhideMessage(message.id);
@@ -298,13 +372,15 @@ class MessageList extends StatelessWidget {
     );
   }
 
-  void _removeDmMessage(BuildContext context, MainLayoutViewModel viewModel, Message message) {
+  void _removeDmMessage(
+      BuildContext context, MainLayoutViewModel viewModel, Message message) {
     showDialog(
       context: context,
       builder: (context) {
         return AlertDialog(
           title: const Text('Remove Message'),
-          content: const Text('This will remove this message from your DM history. Continue?'),
+          content: const Text(
+              'This will remove this message from your DM history. Continue?'),
           actions: [
             TextButton(
               child: const Text('Cancel'),
@@ -346,7 +422,8 @@ class MessageList extends StatelessWidget {
     );
   }
 
-  List<Widget> _parseMessageContent(BuildContext context, String text) {
+  List<Widget> _parseMessageContent(
+      BuildContext context, String text) {
     final widgets = <Widget>[];
     String remaining = text;
     final shownImages = <String>{};
@@ -357,7 +434,8 @@ class MessageList extends StatelessWidget {
       if (match == null) break;
       final before = remaining.substring(0, match.start);
       if (before.isNotEmpty) {
-        widgets.addAll(_parsePlainTextWithUrls(context, before, shownImages, shownLinks));
+        widgets.addAll(
+            _parsePlainTextWithUrls(context, before, shownImages, shownLinks));
       }
       final label = match.group(1) ?? '';
       final url = match.group(2) ?? '';
@@ -372,17 +450,22 @@ class MessageList extends StatelessWidget {
     }
 
     if (remaining.isNotEmpty) {
-      widgets.addAll(_parsePlainTextWithUrls(context, remaining, shownImages, shownLinks));
+      widgets.addAll(
+          _parsePlainTextWithUrls(context, remaining, shownImages, shownLinks));
     }
 
     if (widgets.isEmpty) {
-       widgets.add(const SizedBox(height: 1, width: 0,));
+      widgets.add(const SizedBox(
+        height: 1,
+        width: 0,
+      ));
     }
 
     return widgets;
   }
 
-  List<Widget> _parsePlainTextWithUrls(BuildContext context, String text, Set<String> shownImages, Set<String> shownLinks) {
+  List<Widget> _parsePlainTextWithUrls(BuildContext context, String text,
+      Set<String> shownImages, Set<String> shownLinks) {
     final widgets = <Widget>[];
     int lastEnd = 0;
     for (final match in plainUrlRegex.allMatches(text)) {
@@ -418,7 +501,8 @@ class MessageList extends StatelessWidget {
           _showImagePreview(context, url);
         } else {
           if (await canLaunchUrl(Uri.parse(url))) {
-            await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+            await launchUrl(Uri.parse(url),
+                mode: LaunchMode.externalApplication);
           }
         }
       },
@@ -462,8 +546,8 @@ class MessageList extends StatelessWidget {
                   child: Image.network(
                     url,
                     fit: BoxFit.contain,
-                    errorBuilder: (_, __, ___) =>
-                        const Icon(Icons.broken_image, color: Colors.white, size: 64),
+                    errorBuilder: (_, __, ___) => const Icon(Icons.broken_image,
+                        color: Colors.white, size: 64),
                   ),
                 ),
               ),

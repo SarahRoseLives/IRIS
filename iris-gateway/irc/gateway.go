@@ -155,6 +155,17 @@ func InitGatewayBot() error {
 		sender := e.Nick
 		messageContent := e.Arguments[1]
 
+		// --- Pronoun set command handler ---
+		botNick := config.Cfg.GatewayNick
+		if strings.HasPrefix(messageContent, "!"+botNick+" set pronouns ") {
+			pronounStr := strings.TrimSpace(strings.TrimPrefix(messageContent, "!"+botNick+" set pronouns "))
+			if pronounStr != "" {
+				SetPronouns(sender, pronounStr)
+				gatewayConn.Privmsg(channel, sender+"'s pronouns are "+pronounStr)
+			}
+			return
+		}
+
 		log.Printf("[Gateway] Logging message in %s from %s: %s", channel, sender, messageContent)
 
 		message := Message{
@@ -255,6 +266,17 @@ func InitGatewayBot() error {
 				}
 			}
 		})
+	})
+
+	// --- Pronouns Channel Notice on Join ---
+	ircConn.AddCallback("JOIN", func(e *ircevent.Event) {
+		joinedNick := e.Nick
+		channel := e.Arguments[0]
+		pro := GetPronouns(joinedNick)
+		if pro != "" {
+			notice := joinedNick + " pronouns are " + pro
+			gatewayConn.Notice(channel, notice)
+		}
 	})
 
 	// --- START OF CHANGE ---

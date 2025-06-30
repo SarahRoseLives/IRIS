@@ -5,6 +5,11 @@
 // '10.0.2.2' is a special alias for your host machine's localhost from within an Android emulator.
 const bool isAndroidEmulator = false; // <--- Set to true for Android Emulator/Device, false for Linux/Web/iOS Simulator
 
+// The nickname of the gateway bot.
+// This should match the GatewayNick value used on the gateway server.
+const String gatewayNick = "IRIS-Gateway";
+
+
 // Define your API host and port
 const String _apiHostAddress = "iris.transirc.chat"; // Update with your server IP or domain if needed
 const String _apiHostEmulator = "10.0.2.2"; // Android emulator's loopback to host
