@@ -41,6 +41,7 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
+	// --- Step 1: Authenticate the user's credentials with Ergo ---
 	body := map[string]string{
 		"accountName": req.Username,
 		"passphrase":  req.Password,
@@ -83,36 +84,34 @@ func LoginHandler(c *gin.Context) {
 		return
 	}
 
-	// --- MODIFIED MULTI-DEVICE LOGIC ---
-	// If a session already exists, we create a new token for the new device
-	// and attach it to the existing session, without invalidating old tokens.
+	// --- Step 2: Handle Multi-Device Login ---
+	// After successful password validation, check if the user already has a running session.
 	if existingToken, found := session.FindSessionTokenByUsername(req.Username); found {
 		log.Printf("User %s successfully re-authenticated. Attaching new device to existing session.", req.Username)
 
 		// Get the single, shared session object.
 		existingSession, _ := session.GetSession(existingToken)
 
-		// Generate a new token for the new device.
+		// Generate a new, unique token for this new device.
 		newToken := uuid.New().String()
 
-		// *** CHANGE: THE UNMAP CALL IS REMOVED ***
-		// session.UnmapToken(existingToken) // DO NOT DO THIS. This is what logs out the other device.
-
-		// Map the existing session object to the new token. Now multiple tokens
-		// point to the same session.
+		// ** THIS IS THE FIX **
+		// We simply add the new token and point it to the existing session.
+		// We DO NOT unmap the old token, allowing multiple devices to be active.
 		session.AddSession(newToken, existingSession)
 
-		// Return the new token. The new client will use this to open a WebSocket
-		// which will attach to the still-running IRC session.
+		// Return the new token to the new device. It will use this to open its WebSocket
+		// connection, which will be added to the shared UserSession.
 		c.JSON(http.StatusOK, LoginResponse{
 			Success: true,
 			Message: "Login successful, new device attached to session",
 			Token:   newToken,
 		})
-		return // End the handler here.
+		return // IMPORTANT: End the handler here.
 	}
 
-	// --- ORIGINAL LOGIC FOR A COMPLETELY NEW SESSION ---
+	// --- Step 3: Handle First-Time Login ---
+	// This code will only run if no existing session was found for the user.
 	log.Printf("No existing session found for %s. Creating new IRC connection and session.", req.Username)
 
 	clientIP, _, err := net.SplitHostPort(c.Request.RemoteAddr)
@@ -121,6 +120,7 @@ func LoginHandler(c *gin.Context) {
 		log.Printf("Could not split host port for RemoteAddr '%s', using full address as IP: %v", c.Request.RemoteAddr, err)
 	}
 
+	// Create the core session object and the IRC connection.
 	userSession := session.NewUserSession(req.Username)
 	userSession.Password = req.Password
 
@@ -132,9 +132,12 @@ func LoginHandler(c *gin.Context) {
 	}
 
 	userSession.IRC = client
+
+	// Generate the first token for the first device.
 	token := uuid.New().String()
 	session.AddSession(token, userSession)
 
+	// Fetch any offline messages.
 	go func(username string, userSession *session.UserSession) {
 		time.Sleep(2 * time.Second)
 		messages := irc.GetAndClearOfflineMessages(username)
@@ -157,17 +160,19 @@ func LoginHandler(c *gin.Context) {
 
 // ValidateSessionHandler checks if a session token is still valid.
 func ValidateSessionHandler(c *gin.Context) {
-	token, ok := getToken(c)
+	token, ok := getToken(c) // Use your existing helper to get the token
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Missing token"})
 		return
 	}
 
+	// Check if the session exists in our map
 	_, found := session.GetSession(token)
 	if !found {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "Invalid session"})
 		return
 	}
 
+	// If we get here, the session is valid
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Session is valid"})
 }

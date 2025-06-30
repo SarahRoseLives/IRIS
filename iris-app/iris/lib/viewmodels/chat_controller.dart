@@ -29,7 +29,6 @@ class ChatController {
 
   WebSocketStatus _currentWsStatus = WebSocketStatus.disconnected;
 
-  // --- FIX: Store all StreamSubscriptions for proper cleanup ---
   StreamSubscription? _wsStatusSub;
   StreamSubscription? _initialStateSub;
   StreamSubscription? _messageSub;
@@ -116,26 +115,21 @@ class ChatController {
     });
   }
 
-  /// Checks for locally persisted channels and rejoins them if the user
-  /// is not currently in any channels according to the server.
   Future<void> restoreLastKnownChannelState() async {
     final lastKnownChannels = await chatState.loadPersistedJoinedChannels();
 
     if (lastKnownChannels.isNotEmpty) {
       print('[ChatController] No channels joined on server. Restoring from local state: $lastKnownChannels');
       for (final channelName in lastKnownChannels) {
-        // Only attempt to re-join public channels. DMs are handled implicitly.
         if (channelName.startsWith('#')) {
           try {
             await apiService.joinChannel(channelName);
-            // The websocket 'members_update' will handle adding it to the joined list.
           } catch (e) {
             print('[ChatController] Failed to auto-re-join channel $channelName: $e');
           }
         }
       }
     } else {
-      // No channels joined and no local list. Join the default.
       print('[ChatController] No channels joined and no local state found. Joining #welcome.');
       try {
         await joinChannel('#welcome');
@@ -152,16 +146,12 @@ class ChatController {
       final List<Channel> websocketChannels = [];
 
       if (channelsPayload != null) {
-        // START OF CHANGE
         channelsPayload.forEach((channelName, channelData) {
           final data = channelData as Map<String, dynamic>;
-          // Ensure the 'name' field is present in the data map.
-          // The key of the map is the source of truth for the name.
           if (!data.containsKey('name') || data['name'] == null || (data['name'] as String).isEmpty) {
             data['name'] = channelName;
           }
           final channel = Channel.fromJson(data);
-          // END OF CHANGE
           websocketChannels.add(channel);
           for (var member in channel.members) {
             loadAvatarForUser(member.nick);
@@ -170,7 +160,6 @@ class ChatController {
       }
       chatState.mergeChannels(websocketChannels);
 
-      // After processing the server's state, check if we are in any public channels.
       final bool isJoinedToAnyPublicChannel = chatState.channels.any((c) =>
           c.name.startsWith('#') && c.members.isNotEmpty);
 
@@ -258,6 +247,7 @@ class ChatController {
       loadAvatarForUser(sender);
     });
 
+    // --- THIS IS THE FIX ---
     _eventSub = _webSocketService.eventStream.listen((event) {
       final String eventType = event['type'] ?? '';
       final payload = event['payload'] ?? {};
@@ -266,19 +256,12 @@ class ChatController {
         final channelName = payload['channel'] as String?;
         final topic = payload['topic'] as String?;
         if (channelName != null && topic != null) {
-          final updatedChannels = chatState.channels.map((c) {
-            if (c.name.toLowerCase() == channelName.toLowerCase()) {
-              return Channel(
-                name: c.name,
-                topic: topic,
-                members: c.members,
-              );
-            }
-            return c;
-          }).toList();
-          chatState.setChannels(updatedChannels);
+          // **CHANGED**: Instead of manually rebuilding the list,
+          // we now call the dedicated method in ChatState.
+          chatState.updateChannelTopic(channelName, topic);
         }
       }
+      // You can handle other generic events here like 'user_away', 'user_back', etc.
     });
   }
 
@@ -319,7 +302,6 @@ class ChatController {
     final isDm = currentConversation.startsWith('@');
     String target = isDm ? currentConversation.substring(1) : currentConversation;
 
-    // Always add own message to chatState for DMs
     final sentMessage = Message(
       from: username,
       content: text,
@@ -418,7 +400,7 @@ class ChatController {
       await apiService.joinChannel(channelName);
       chatState.selectConversation(channelName);
       chatState.moveChannelToJoined(channelName, username);
-      await loadChannelHistory(channelName, limit: 5000);
+      await loadChannelHistory(channelName, limit: 2500);
     } catch (e) {
       chatState.addSystemMessage(chatState.selectedConversationTarget, 'Failed to join channel: $channelName. Error: $e');
     }
@@ -437,7 +419,7 @@ class ChatController {
     }
   }
 
-  Future<void> loadChannelHistory(String channelName, {int limit = 5000}) async {
+  Future<void> loadChannelHistory(String channelName, {int limit = 2500}) async {
     if (channelName.isEmpty) return;
     try {
       final response = await apiService.fetchChannelMessages(channelName, limit: limit);
@@ -481,7 +463,7 @@ class ChatController {
     chatState.setAvatarPlaceholder(nick);
     final exts = ['.png', '.jpg', '.jpeg', '.gif'];
     for (final ext in exts) {
-      final url = '$baseSecureUrl/avatars/$nick$ext'; // USE baseSecureUrl
+      final url = '$baseSecureUrl/avatars/$nick$ext';
       try {
         final response = await http.head(Uri.parse(url));
         if (response.statusCode == 200) {
@@ -537,7 +519,6 @@ class ChatController {
       final channelName = PendingNotification.channelToNavigateTo!;
       final messageData = PendingNotification.messageData;
 
-      // Ensure the DM channel exists and add the message if present
       if (chatState.channels.indexWhere((c) => c.name.toLowerCase() == channelName.toLowerCase()) == -1) {
         chatState.addOrUpdateChannel(Channel(name: channelName, members: []));
       }
@@ -553,10 +534,8 @@ class ChatController {
         chatState.addMessage(channelName, newMessage);
       }
 
-      // Navigate to the channel
       handleNotificationTap(channelName);
 
-      // Clear the pending notification
       PendingNotification.channelToNavigateTo = null;
       PendingNotification.messageData = null;
     }

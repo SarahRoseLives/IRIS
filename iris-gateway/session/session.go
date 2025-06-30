@@ -1,10 +1,10 @@
 package session
 
 import (
+	"encoding/json"
 	"strings"
 	"sync"
 	"time"
-	"encoding/json"
 
 	"github.com/gorilla/websocket"
 	ircevent "github.com/thoj/go-ircevent"
@@ -69,6 +69,22 @@ func (s *UserSession) AddChannelToSession(channelName string) {
 		}
 	}
 }
+
+// --- START OF CHANGE ---
+// SetChannelTopic safely updates the topic for a single channel within the user's session.
+// This will be called by the gateway bot to ensure all users' states are updated.
+func (s *UserSession) SetChannelTopic(channelName, topic string) {
+	s.Mutex.RLock()
+	defer s.Mutex.RUnlock()
+	channelKey := strings.ToLower(channelName)
+	if channelState, exists := s.Channels[channelKey]; exists {
+		channelState.Mutex.Lock()
+		channelState.Topic = topic
+		channelState.LastUpdate = time.Now()
+		channelState.Mutex.Unlock()
+	}
+}
+// --- END OF CHANGE ---
 
 func (s *UserSession) RemoveChannelFromSession(channelName string) {
 	normalizedChannelName := strings.ToLower(channelName)
@@ -207,7 +223,7 @@ func RemoveSession(token string) {
 
 		// Properly disconnect IRC
 		if sess.IRC != nil {
-			sess.IRC.Quit()        // Send QUIT command to IRC server
+			sess.IRC.Quit() // Send QUIT command to IRC server
 			// If IRCClient wrapper with Disconnect exists, call Disconnect
 			if disconnecter, ok := interface{}(sess.IRC).(interface{ Disconnect() }); ok {
 				disconnecter.Disconnect()

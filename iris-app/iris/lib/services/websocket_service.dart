@@ -19,7 +19,6 @@ class WebSocketService {
   Timer? _reconnectTimer;
 
   WebSocketStatus _currentWsStatus = WebSocketStatus.disconnected;
-  List<String> _currentChannels = [];
 
   bool _isDisposed = false;
 
@@ -30,19 +29,19 @@ class WebSocketService {
   Stream<Map<String, dynamic>> get messageStream => _messageController.stream;
 
   final _membersUpdateController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get membersUpdateStream => _membersUpdateController.stream;
+  Stream<Map<String, dynamic>> get membersUpdateStream =>
+      _membersUpdateController.stream;
 
-  final _initialStateController = StreamController<Map<String, dynamic>>.broadcast();
-  Stream<Map<String, dynamic>> get initialStateStream => _initialStateController.stream;
+  final _initialStateController =
+      StreamController<Map<String, dynamic>>.broadcast();
+  Stream<Map<String, dynamic>> get initialStateStream =>
+      _initialStateController.stream;
 
   final _errorController = StreamController<String>.broadcast();
   Stream<String> get errorStream => _errorController.stream;
 
-  // --- NEW: Event stream for server events like topic changes ---
   final _eventController = StreamController<Map<String, dynamic>>.broadcast();
   Stream<Map<String, dynamic>> get eventStream => _eventController.stream;
-
-  DateTime? _lastConnectedTime;
 
   WebSocketService() {
     _statusController.stream.listen((status) {
@@ -52,8 +51,10 @@ class WebSocketService {
 
   void connect(String token) {
     if (_isDisposed) return;
-    if (_currentWsStatus == WebSocketStatus.connected || _currentWsStatus == WebSocketStatus.connecting) {
-      print("[WebSocketService] Already connected or connecting. Skipping new connection attempt.");
+    if (_currentWsStatus == WebSocketStatus.connected ||
+        _currentWsStatus == WebSocketStatus.connecting) {
+      print(
+          "[WebSocketService] Already connected or connecting. Skipping new connection attempt.");
       return;
     }
 
@@ -67,7 +68,6 @@ class WebSocketService {
       _ws = WebSocketChannel.connect(uri);
 
       _ws!.ready.then((_) {
-        _lastConnectedTime = DateTime.now();
         if (!_isDisposed) _statusController.add(WebSocketStatus.connected);
         print("[WebSocketService] Connected successfully to: $uri");
       }).catchError((e) {
@@ -80,14 +80,17 @@ class WebSocketService {
       });
 
       _ws!.stream.listen((message) {
+        if (_isDisposed) return;
         print("[WebSocketService] Raw message received: $message");
 
         Map<String, dynamic> event;
         try {
           event = jsonDecode(message);
         } catch (e) {
-          print("[WebSocketService] Error decoding JSON: $e, Raw message: $message");
-          if (!_isDisposed) _errorController.add("WebSocket JSON parsing error: $e");
+          print(
+              "[WebSocketService] Error decoding JSON: $e, Raw message: $message");
+          if (!_isDisposed)
+            _errorController.add("WebSocket JSON parsing error: $e");
           return;
         }
 
@@ -95,9 +98,12 @@ class WebSocketService {
         switch (event['type']) {
           case 'initial_state':
             if (payload is Map<String, dynamic>) {
-              final channels = payload['channels'] as Map<String, dynamic>? ?? {};
-              if (!_isDisposed) _initialStateController.add({'channels': channels});
-              print("[WebSocketService] Forwarded initial state payload with ${channels.keys.length} channels.");
+              final channels =
+                  payload['channels'] as Map<String, dynamic>? ?? {};
+              if (!_isDisposed)
+                _initialStateController.add({'channels': channels});
+              print(
+                  "[WebSocketService] Forwarded initial state payload with ${channels.keys.length} channels.");
             }
             break;
           case 'message':
@@ -106,34 +112,37 @@ class WebSocketService {
 
             String conversationTarget;
             if (isPrivateMessage) {
-              conversationTarget = channelName.startsWith('@')
-                  ? channelName
-                  : '@$channelName';
+              conversationTarget =
+                  channelName.startsWith('@') ? channelName : '@$channelName';
             } else {
               conversationTarget = channelName;
             }
 
-            if (!_isDisposed) _messageController.add({
-              'channel_name': conversationTarget,
-              'sender': payload['sender'],
-              'text': payload['text'],
-              'time': payload['time'] ?? DateTime.now().toIso8601String(),
-            });
+            if (!_isDisposed)
+              _messageController.add({
+                'channel_name': conversationTarget,
+                'sender': payload['sender'],
+                'text': payload['text'],
+                'time': payload['time'] ?? DateTime.now().toIso8601String(),
+              });
             break;
           case 'members_update':
             final String channelName = payload['channel_name'];
             final List<dynamic> membersData = payload['members'] ?? [];
-            final List<ChannelMember> members = membersData.map((m) => ChannelMember.fromJson(m)).toList();
-            if (!_isDisposed) _membersUpdateController.add({'channel_name': channelName, 'members': members});
+            final List<ChannelMember> members =
+                membersData.map((m) => ChannelMember.fromJson(m)).toList();
+            if (!_isDisposed)
+              _membersUpdateController
+                  .add({'channel_name': channelName, 'members': members});
             break;
           case 'unauthorized':
             _handleUnauthorized();
             break;
-          // --- NEW: handle topic_change and other server events ---
           default:
             if (!_isDisposed && event['type'] != null && payload != null) {
               _eventController.add({'type': event['type'], 'payload': payload});
-              print("[WebSocketService] Event forwarded to eventStream: type=${event['type']} payload=${jsonEncode(payload)}");
+              print(
+                  "[WebSocketService] Event forwarded to eventStream: type=${event['type']} payload=${jsonEncode(payload)}");
             }
             break;
         }
@@ -156,7 +165,6 @@ class WebSocketService {
     if (!_isDisposed) _statusController.add(WebSocketStatus.unauthorized);
     disconnect();
 
-    // Use a delay to ensure the WebSocket is fully disconnected before forcing logout
     Future.delayed(const Duration(milliseconds: 500), () {
       AuthManager.forceLogout(showExpiredMessage: true);
     });
@@ -173,7 +181,6 @@ class WebSocketService {
   void _handleWebSocketDone() {
     print("[WebSocketService] Connection closed.");
     if (_isDisposed) return;
-    // Only treat as unauthorized if we explicitly got an unauthorized message
     if (_currentWsStatus != WebSocketStatus.unauthorized) {
       _statusController.add(WebSocketStatus.disconnected);
       _scheduleReconnect();
@@ -196,19 +203,18 @@ class WebSocketService {
   }
 
   bool _isUnauthorized(String error) {
-    // Only treat as unauthorized if we get a clear 401 response
     return error.contains('401 Unauthorized') ||
         error.contains('invalid token') ||
         error.toString().contains('not upgraded to websocket: 401') ||
         error.contains('401') ||
-        error.contains('unauthorized') ||
-        error.contains('invalid token');
+        error.contains('unauthorized');
   }
 
   void sendMessage(String channelName, String text) {
     if (_isDisposed) return;
     if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
-      if (!_isDisposed) _errorController.add("Cannot send message: WebSocket not connected.");
+      if (!_isDisposed)
+        _errorController.add("Cannot send message: WebSocket not connected.");
       print("[WebSocketService] Cannot send message: WS not connected.");
       return;
     }
@@ -223,11 +229,11 @@ class WebSocketService {
     print("[WebSocketService] Sent message: $messageToSend");
   }
 
-  /// Sends a generic, structured message to the WebSocket server.
   void send(Map<String, dynamic> message) {
     if (_isDisposed) return;
     if (_ws == null || _currentWsStatus != WebSocketStatus.connected) {
-      if (!_isDisposed) _errorController.add("Cannot send event: WebSocket not connected.");
+      if (!_isDisposed)
+        _errorController.add("Cannot send event: WebSocket not connected.");
       print("[WebSocketService] Cannot send event: WS not connected.");
       return;
     }
@@ -236,23 +242,34 @@ class WebSocketService {
     print("[WebSocketService] Sent event: $messageToSend");
   }
 
+  /// A more robust disconnect method that properly cleans up state to prevent
+  /// reconnect loops with invalid tokens.
   void disconnect() {
     if (_isDisposed) return;
 
-    _reconnectTimer?.cancel();
-    _ws?.sink.close();
+    print("[WebSocketService] Disconnecting and clearing state...");
 
+    // 1. Cancel any pending reconnect timers to stop the loop.
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
+
+    // 2. Close the WebSocket sink and clear the channel object.
+    _ws?.sink.close();
+    _ws = null;
+
+    // 3. Clear the stale token to prevent it from being reused.
+    _token = null;
+
+    // 4. Update the status, if the service hasn't been disposed.
     if (!_isDisposed) {
       _statusController.add(WebSocketStatus.disconnected);
     }
-
-    print("[WebSocketService] Disconnected.");
   }
 
   void dispose() {
     if (_isDisposed) return;
     _isDisposed = true;
-    disconnect();
+    disconnect(); // Call the new, more robust disconnect method.
     _statusController.close();
     _messageController.close();
     _membersUpdateController.close();
@@ -261,3 +278,4 @@ class WebSocketService {
     _eventController.close();
   }
 }
+

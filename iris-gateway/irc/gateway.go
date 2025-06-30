@@ -12,7 +12,7 @@ import (
 
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/config"
-	"iris-gateway/events"
+	"iris-gateway/events" // Restored this import
 	"iris-gateway/push"
 	"iris-gateway/session"
 )
@@ -30,13 +30,13 @@ type ChannelHistory struct {
 }
 
 var (
-	gatewayConn        *ircevent.Connection
-	historyMap         = make(map[string]*ChannelHistory)
-	historyMutex       sync.RWMutex
-	historyDuration    = 7 * 24 * time.Hour // Default 7 days
-	persistedChannels  = make(map[string]bool)
-	channelsMutex      sync.RWMutex
-	channelsFile       = "persisted_channels.json"
+	gatewayConn       *ircevent.Connection
+	historyMap        = make(map[string]*ChannelHistory)
+	historyMutex      sync.RWMutex
+	historyDuration   = 7 * 24 * time.Hour // Default 7 days
+	persistedChannels = make(map[string]bool)
+	channelsMutex     sync.RWMutex
+	channelsFile      = "persisted_channels.json"
 )
 
 // Helper function for mention detection (case-insensitive, word boundary, NO @ required)
@@ -176,7 +176,6 @@ func InitGatewayBot() error {
 				historyMap[channelKey] = chHistory
 				log.Printf("[Gateway] Created new history slice for channel: %s", channelKey)
 			}
-			// Lock ordering: historyMutex (outer, short) -> chHistory.mutex (inner, can be slow)
 			chHistory.mutex.Lock()
 			historyMutex.Unlock()
 
@@ -256,31 +255,66 @@ func InitGatewayBot() error {
 				}
 			}
 		})
-		// --- END UPDATED LOGIC ---
 	})
 
-	// --- TOPIC HANDLING: Add callback for TOPIC and broadcast to all sessions in channel ---
-	ircConn.AddCallback("TOPIC", func(e *ircevent.Event) {
-		if len(e.Arguments) >= 2 {
-			channel := e.Arguments[0]
-			topic := e.Arguments[1]
+	// --- START OF CHANGE ---
+	// The Gateway Bot is now the central handler for all topic changes.
 
-			// Broadcast topic change to all users in the channel
-			session.ForEachSession(func(s *session.UserSession) {
-				s.Mutex.RLock()
-				_, inChannel := s.Channels[strings.ToLower(channel)]
-				s.Mutex.RUnlock()
-
-				if inChannel {
-					s.Broadcast(events.EventTypeTopicChange, map[string]interface{}{
-						"channel": channel,
-						"topic":   topic,
-						"set_by":  e.Nick,
-					})
-				}
-			})
+	// This handles RPL_TOPIC (332), sent on join to give the current topic.
+	ircConn.AddCallback("332", func(e *ircevent.Event) {
+		if len(e.Arguments) < 3 {
+			return
 		}
+		channelName := e.Arguments[1]
+		topic := e.Arguments[2]
+
+		log.Printf("[Gateway] Received initial TOPIC (332) for %s", channelName)
+
+		// Find all sessions for users in this channel and update their state and clients.
+		session.ForEachSession(func(s *session.UserSession) {
+			s.Mutex.RLock()
+			_, inChannel := s.Channels[strings.ToLower(channelName)]
+			s.Mutex.RUnlock()
+
+			if inChannel {
+				s.SetChannelTopic(channelName, topic) // Update session state
+				s.Broadcast(events.EventTypeTopicChange, map[string]interface{}{
+					"channel": channelName,
+					"topic":   topic,
+					"set_by":  "", // No specific user sets topic on join
+				})
+			}
+		})
 	})
+
+	// This handles the TOPIC command, for when a user changes the topic live.
+	ircConn.AddCallback("TOPIC", func(e *ircevent.Event) {
+		if len(e.Arguments) < 2 {
+			return
+		}
+		channelName := e.Arguments[0]
+		topic := e.Arguments[1]
+		setBy := e.Nick
+
+		log.Printf("[Gateway] Saw TOPIC change in %s by %s", channelName, setBy)
+
+		// Find all sessions for users in this channel and update their state and clients.
+		session.ForEachSession(func(s *session.UserSession) {
+			s.Mutex.RLock()
+			_, inChannel := s.Channels[strings.ToLower(channelName)]
+			s.Mutex.RUnlock()
+
+			if inChannel {
+				s.SetChannelTopic(channelName, topic) // Update session state
+				s.Broadcast(events.EventTypeTopicChange, map[string]interface{}{
+					"channel": channelName,
+					"topic":   topic,
+					"set_by":  setBy,
+				})
+			}
+		})
+	})
+	// --- END OF CHANGE ---
 
 	ircConn.AddCallback("INVITE", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 2 {
@@ -345,9 +379,16 @@ func GetChannelHistory(channel string, limit int) []Message {
 
 	if limit <= 0 || limit >= len(chHistory.Messages) {
 		log.Printf("[Gateway] Returning all %d messages for channel %s", len(chHistory.Messages), channelKey)
-		return chHistory.Messages
+		// Return a copy to avoid race conditions on the slice
+		messagesCopy := make([]Message, len(chHistory.Messages))
+		copy(messagesCopy, chHistory.Messages)
+		return messagesCopy
 	}
 
 	log.Printf("[Gateway] Returning last %d messages for channel %s", limit, channelKey)
-	return chHistory.Messages[len(chHistory.Messages)-limit:]
+	// Return a copy of the slice segment
+	start := len(chHistory.Messages) - limit
+	messagesCopy := make([]Message, limit)
+	copy(messagesCopy, chHistory.Messages[start:])
+	return messagesCopy
 }

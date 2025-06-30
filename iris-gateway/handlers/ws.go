@@ -69,20 +69,21 @@ func WebSocketHandler(c *gin.Context) {
 
 	go func() {
 		defer func() {
-			// On disconnect, remove the websocket from the session
+			// On disconnect, just remove the specific websocket from the session's active list.
 			sess.RemoveWebSocket(conn)
-
-			// --- ADDED CHANGE: Clean up the token for this disconnected device ---
-			// This prevents the session map from growing with stale tokens.
-			session.UnmapToken(token)
-
 			conn.Close()
 			log.Printf("[WS] WebSocket disconnected for user %s (token: %s). Remaining devices: %d\n", sess.Username, token, len(sess.WebSockets))
+
+			// --- THE FIX ---
+			// The aggressive `session.UnmapToken(token)` call has been removed.
+			// A WebSocket disconnect should NOT invalidate the token. This allows
+			// the client to reconnect seamlessly after backgrounding.
 
 			// Use a small delay to prevent rapid away/back toggling on reconnects
 			time.Sleep(2 * time.Second)
 
 			// If no more WebSockets are connected for this session, set the user as away.
+			// This check is still valid and provides the desired BNC-like behavior.
 			if !sess.IsActive() && sess.IRC != nil {
 				sess.SetAway("IRSI")
 				log.Printf("[IRC] Sent AWAY command for %s (no more clients connected)", sess.Username)
