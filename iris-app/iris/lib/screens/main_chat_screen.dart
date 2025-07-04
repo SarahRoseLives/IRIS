@@ -10,6 +10,7 @@ import '../widgets/message_input.dart';
 import '../screens/profile_screen.dart';
 import '../models/encryption_session.dart';
 import '../widgets/channel_topic.dart';
+import '../commands/slash_command.dart'; // Import for SlashCommand type
 
 class MainChatScreen extends StatelessWidget {
   const MainChatScreen({super.key});
@@ -367,6 +368,9 @@ class MainChatScreen extends StatelessWidget {
                                 }
                               },
                               allUsernames: allUsernames.toList(),
+                              // START OF CHANGE: Pass available commands
+                              availableCommands: viewModel.availableCommands,
+                              // END OF CHANGE
                               onAttachmentSelected: (filePath) async {
                                 final url = await viewModel
                                     .uploadAttachmentAndGetUrl(filePath);

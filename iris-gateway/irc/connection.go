@@ -354,12 +354,16 @@ func AuthenticateWithNickServ(username, password, clientIP string, userSession *
 		}
 	})
 
+	// --- START OF CHANGE ---
+	// Add a new callback for the AWAY event.
+	// This event is sent by the server when any user's away status changes.
 	connClient.AddCallback("AWAY", func(e *ircevent.Event) {
 		awayUserNick := e.Nick
 		isNowAway := len(e.Message()) > 0
 		log.Printf("[IRC] Received AWAY notification for %s. IsAway: %t", awayUserNick, isNowAway)
 		session.UpdateAwayStatusForAllSessions(awayUserNick, isNowAway)
 	})
+	// --- END OF CHANGE ---
 
 	connClient.AddCallback("QUIT", func(e *ircevent.Event) {
 		quittingUser := e.Nick

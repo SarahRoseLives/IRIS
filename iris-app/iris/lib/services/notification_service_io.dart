@@ -67,13 +67,26 @@ class NotificationService {
     if (!_isSupported || _flutterLocalNotificationsPlugin == null) return;
 
     // For Android 8.0+, creating a channel is required to show any notification.
+    // --- Begin: Delete and recreate channel to ensure updated sound settings ---
+    final androidPlugin = _flutterLocalNotificationsPlugin!
+        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+    if (androidPlugin != null) {
+      try {
+        await androidPlugin.deleteNotificationChannel('iris_channel_id');
+        print('[NotificationService] Deleted existing notification channel to ensure proper sound settings.');
+      } catch (e) {
+        print('[NotificationService] Could not delete notification channel: $e');
+      }
+    }
+    // --- End: Delete and recreate channel ---
+
     final AndroidNotificationChannel channel = AndroidNotificationChannel(
       'iris_channel_id', // id
       'IRIS Messages', // title
       description: 'Notifications for new IRIS chat messages', // description
       importance: Importance.high, // Changed from max to high for better compatibility
       playSound: true,
-      sound: RawResourceAndroidNotificationSound('notification'),
+      // sound: RawResourceAndroidNotificationSound('notification'), // REMOVED
       enableVibration: true,
       // --- FIX: Conditionally set vibrationPattern to null on web ---
       vibrationPattern: kIsWeb ? null : Int64List.fromList([0, 250, 250, 250]),
@@ -131,7 +144,7 @@ class NotificationService {
           priority: Priority.high,
           color: const Color(0xFF5865F2),
           playSound: true,
-          sound: const RawResourceAndroidNotificationSound('notification'),
+          // sound: const RawResourceAndroidNotificationSound('notification'), // REMOVED
           enableVibration: true,
           // --- FIX: Conditionally set vibrationPattern to null on web ---
           vibrationPattern: kIsWeb ? null : Int64List.fromList([0, 250, 250, 250]),

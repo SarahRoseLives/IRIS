@@ -20,10 +20,9 @@ func main() {
 	// Initialize Firebase Cloud Messaging
 	push.InitFCM()
 
-	// Initialize the IRC gateway bot
-	if err := irc.InitGatewayBot(); err != nil {
-		log.Fatalf("Failed to initialize IRC gateway bot: %v", err)
-	}
+	// Start the IRC gateway bot in the background.
+	// It will now handle its own connection and reconnection lifecycle.
+	go irc.StartGatewayBot()
 
 	// Clean up any files older than configured duration on startup
 	go func() {

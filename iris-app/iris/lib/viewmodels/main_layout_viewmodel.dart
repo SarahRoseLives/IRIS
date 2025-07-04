@@ -13,6 +13,8 @@ import 'chat_controller.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
 import '../models/encryption_session.dart';
+import '../commands/slash_command.dart'; // Import for commands
+import '../models/irc_role.dart';
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
@@ -42,7 +44,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   final Set<String> _blockedUsers = {};
   final Set<String> _hiddenMessageIds = {};
 
-  bool _userScrolledUp = false; // <-- FIX: This line was missing
+  // START OF CHANGE: Fix for chat bouncing issue
+  bool _userScrolledUp = false;
+  // END OF CHANGE
 
   Set<String> get blockedUsers => _blockedUsers;
   Set<String> get hiddenMessageIds => _hiddenMessageIds;
@@ -123,6 +127,14 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   Message? getLastMessage(String channelName) =>
       chatState.getLastMessage(channelName);
 
+  // START OF CHANGE: Getter for available slash commands
+  List<SlashCommand> get availableCommands {
+    final IrcRole userRole =
+        _chatController.getCurrentUserRoleInChannel(selectedConversationTarget);
+    return _chatController.getAvailableCommandsForRole(userRole);
+  }
+  // END OF CHANGE
+
   bool get hasUnreadDms {
     for (final dmName in dmChannelNames) {
       if (hasUnreadMessages(dmName)) {
@@ -159,8 +171,15 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _loadingChannels = true;
     notifyListeners();
     try {
+      // 1. First, get the authoritative channel list from the server
       final serverChannels = await _chatController.apiService.fetchChannels();
       chatState.mergeChannels(serverChannels);
+
+      // 2. NOW, process any pending messages that arrived when the app was closed.
+      // This adds the new DM channel to the now-stable list.
+      await _chatController.processPendingBackgroundMessages();
+
+      // 3. Finally, connect to the WebSocket.
       _chatController.connectWebSocket();
     } on SessionExpiredException {
       AuthManager.forceLogout(showExpiredMessage: true);
@@ -203,19 +222,26 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
 
+    // START OF CHANGE: Chat bounce fix
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      _scrollToBottomIfUserAtBottom();
+      _scrollToTopIfAtBottom();
     });
+    // END OF CHANGE
 
     notifyListeners();
   }
 
+  // START OF CHANGE: Chat bounce fix
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
-    final atBottom = (position.maxScrollExtent - position.pixels) <= 50.0;
-    _userScrolledUp = !atBottom;
+    // "At the bottom" of the chat now means scrolled to the top of the reversed list.
+    final atBottom = position.pixels <= 50.0;
+    if (atBottom != !_userScrolledUp) {
+      _userScrolledUp = !atBottom;
+    }
   }
+  // END OF CHANGE
 
   void _onWsStatusChanged(WebSocketStatus status) {
     if (status == WebSocketStatus.connected) {
@@ -365,11 +391,12 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
   }
 
-  void _scrollToBottom() {
+  // START OF CHANGE: Chat bounce fix (renamed methods)
+  void _scrollToTop() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
-          _scrollController.position.maxScrollExtent,
+          0.0, // Top of the reversed list
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -377,19 +404,22 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     });
   }
 
-  void _scrollToBottomIfUserAtBottom() {
+  void _scrollToTopIfAtBottom() {
     if (_scrollController.hasClients && !_userScrolledUp) {
-      _scrollToBottom();
+      _scrollToTop();
     }
   }
+  // END OF CHANGE
 
   Future<void> handleSendMessage() async {
     final text = _msgController.text;
     if (text.trim().isEmpty) return;
     _msgController.clear();
     await _chatController.handleSendMessage(text);
+    // START OF CHANGE: Chat bounce fix
     _userScrolledUp = false;
-    _scrollToBottom();
+    _scrollToTop();
+    // END OF CHANGE
   }
 
   Future<void> setMyPronouns(String pronouns) async {
@@ -403,8 +433,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       final target = chatState.selectedConversationTarget;
       return target.startsWith('@') ? target : null;
     };
+    // START OF CHANGE: Chat bounce fix
     _userScrolledUp = false;
-    _scrollToBottom();
+    _scrollToTop();
+    // END OF CHANGE
   }
 
   void onUnjoinedChannelTap(String channelName) =>
@@ -436,8 +468,10 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     }
     chatState.selectConversation(channelName);
     notifyListeners();
+    // START OF CHANGE: Chat bounce fix
     _userScrolledUp = false;
-    _scrollToBottom();
+    _scrollToTop();
+    // END OF CHANGE
   }
 
   void removeDmMessage(Message message) {

@@ -103,45 +103,69 @@ func isChannelPersisted(channel string) bool {
 	return persistedChannels[strings.ToLower(channel)]
 }
 
-// Call this once at startup (from main.go)
-func InitGatewayBot() error {
-	// Load persisted channels
+// Persistent, robust gateway bot connection loop
+func StartGatewayBot() {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[Gateway] Panic occurred: %v. Restarting gateway bot in 15 seconds...", r)
+			time.Sleep(15 * time.Second)
+			go StartGatewayBot()
+		}
+	}()
+
 	if err := loadPersistedChannels(); err != nil {
 		log.Printf("[Gateway] Warning: Could not load persisted channels: %v", err)
 	}
-
-	// Create a dummy session for the gateway
-	gatewaySession := session.NewUserSession(config.Cfg.GatewayNick)
-	gatewaySession.IRC = nil // Will be set by AuthenticateWithNickServ
-
-	clientIP := "127.0.0.1" // Gateway connects from localhost
-
-	// Use the same authentication flow as clients
-	ircConn, err := AuthenticateWithNickServ(
-		config.Cfg.GatewayNick,
-		config.Cfg.GatewayPassword,
-		clientIP,
-		gatewaySession,
-	)
-	if err != nil {
-		return fmt.Errorf("failed to authenticate gateway bot: %w", err)
-	}
-
-	// Set up the gateway connection
-	gatewayConn = ircConn
-	gatewaySession.IRC = ircConn
-
-	// Parse history duration from config
 	duration, err := time.ParseDuration(config.Cfg.HistoryDuration)
 	if err != nil {
 		log.Printf("Invalid history duration '%s', using default 7 days", config.Cfg.HistoryDuration)
+		historyDuration = 7 * 24 * time.Hour
 	} else {
 		historyDuration = duration
 	}
 
+	for {
+		log.Println("[Gateway] Attempting to connect gateway bot to IRC...")
+		// New session and connection object each time
+		gatewaySession := session.NewUserSession(config.Cfg.GatewayNick)
+		ircConn, err := AuthenticateWithNickServ(
+			config.Cfg.GatewayNick,
+			config.Cfg.GatewayPassword,
+			"127.0.0.1",
+			gatewaySession,
+		)
+		if err != nil || ircConn == nil {
+			log.Printf("[Gateway] Failed to connect: %v. Retrying in 15 seconds...", err)
+			time.Sleep(15 * time.Second)
+			continue
+		}
+		log.Println("[Gateway] Connection successful. Setting up callbacks and starting event loop.")
+
+		gatewayConn = ircConn
+		gatewaySession.IRC = ircConn
+
+		addGatewayCallbacks(ircConn)
+
+		// On error/disconnect, just log; no need to call Quit(), we want Loop() to exit naturally.
+		ircConn.AddCallback("ERROR", func(e *ircevent.Event) {
+			log.Printf("[Gateway] IRC ERROR received: %v", e.Message())
+		})
+		ircConn.AddCallback("DISCONNECT", func(e *ircevent.Event) {
+			log.Printf("[Gateway] IRC DISCONNECT event received.")
+		})
+
+		log.Println("[Gateway] Starting IRC event loop")
+		ircConn.Loop()
+		log.Println("[Gateway] IRC event loop exited (disconnected). Will reconnect in 15 seconds.")
+		gatewayConn = nil
+		time.Sleep(15 * time.Second)
+	}
+}
+
+// Helper function to keep callback setup clean
+func addGatewayCallbacks(ircConn *ircevent.Connection) {
 	ircConn.AddCallback("001", func(e *ircevent.Event) {
 		log.Println("[Gateway] Connected to IRC server")
-		// Join all persisted channels
 		channelsMutex.RLock()
 		for channel := range persistedChannels {
 			log.Printf("[Gateway] Auto-joining persisted channel: %s", channel)
@@ -279,7 +303,6 @@ func InitGatewayBot() error {
 		}
 	})
 
-	// --- START OF CHANGE ---
 	// The Gateway Bot is now the central handler for all topic changes.
 
 	// This handles RPL_TOPIC (332), sent on join to give the current topic.
@@ -336,7 +359,6 @@ func InitGatewayBot() error {
 			}
 		})
 	})
-	// --- END OF CHANGE ---
 
 	ircConn.AddCallback("INVITE", func(e *ircevent.Event) {
 		if len(e.Arguments) >= 2 {
@@ -358,9 +380,6 @@ func InitGatewayBot() error {
 			}
 		}
 	})
-
-	go ircConn.Loop()
-	return nil
 }
 
 // Exported for use by handlers
@@ -368,6 +387,8 @@ func JoinChannel(channel string) {
 	if gatewayConn != nil {
 		gatewayConn.Join(channel)
 		persistChannel(channel)
+	} else {
+		log.Printf("[Gateway] Cannot join channel, not connected.")
 	}
 }
 

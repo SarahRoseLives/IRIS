@@ -11,10 +11,13 @@ import '../services/api_service.dart';
 import '../services/websocket_service.dart';
 import '../services/notification_service_platform.dart';
 import '../services/encryption_service.dart';
+import '../services/command_handler.dart'; // Import the new handler
 import 'chat_state.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
 import '../models/encryption_session.dart';
+import '../models/irc_role.dart'; // Import the new role model
+import '../commands/slash_command.dart'; // Import SlashCommand
 import '../config.dart';
 
 class ChatController {
@@ -26,6 +29,7 @@ class ChatController {
   final WebSocketService _webSocketService;
   final NotificationService _notificationService;
   final EncryptionService _encryptionService;
+  final CommandHandler _commandHandler; // Add the command handler instance
 
   WebSocketStatus _currentWsStatus = WebSocketStatus.disconnected;
 
@@ -48,18 +52,40 @@ class ChatController {
     required this.token,
     required this.chatState,
     required this.isAppInBackground,
-  })  : apiService = ApiService(token),
+  })  : apiService = GetIt.instance<ApiService>(), // ---> FIX: Use GetIt to get the singleton ApiService <---
         _webSocketService = GetIt.instance<WebSocketService>(),
         _notificationService = GetIt.instance<NotificationService>(),
-        _encryptionService = GetIt.instance<EncryptionService>();
+        _encryptionService = GetIt.instance<EncryptionService>(),
+        _commandHandler = CommandHandler(); // Initialize the command handler
 
   Future<void> initialize() async {
+    _commandHandler.registerCommands(); // Register all commands on init
     await chatState.loadPersistedMessages();
     chatState.setAvatarPlaceholder(username);
     await loadAvatarForUser(username);
 
+    // REMOVED: Processing of pending background messages from here
+
+    _listenToWebSocketStatus();
+    _listenToInitialState();
+    _listenToWebSocketMessages();
+    _listenToMembersUpdate();
+    _listenToWebSocketErrors();
+
+    _initNotifications();
+    _handlePendingNotification();
+  }
+
+  // NEW METHOD to be called from the ViewModel
+  Future<void> processPendingBackgroundMessages() async {
     final prefs = await SharedPreferences.getInstance();
     final pendingMessages = prefs.getStringList('pending_dm_messages') ?? [];
+    if (pendingMessages.isEmpty) {
+      return;
+    }
+
+    print(
+        '[ChatController] Processing ${pendingMessages.length} pending background messages.');
     for (final messageJson in pendingMessages) {
       try {
         final messageData = json.decode(messageJson) as Map<String, dynamic>;
@@ -77,6 +103,8 @@ class ChatController {
             'id': messageData['id'] ??
                 'pending-${DateTime.now().millisecondsSinceEpoch}',
           });
+          // This will now reliably add the message and create the channel
+          // because the main channel list is already stable.
           chatState.addMessage(channelName, newMessage);
         }
       } catch (e) {
@@ -84,15 +112,88 @@ class ChatController {
       }
     }
     await prefs.remove('pending_dm_messages');
+  }
 
-    _listenToWebSocketStatus();
-    _listenToInitialState();
-    _listenToWebSocketMessages();
-    _listenToMembersUpdate();
-    _listenToWebSocketErrors();
+  // START OF CHANGE: Expose command handler logic
+  /// Gets the list of commands a user is allowed to run based on their role.
+  List<SlashCommand> getAvailableCommandsForRole(IrcRole userRole) {
+    return _commandHandler.getAvailableCommandsForRole(userRole);
+  }
+  // END OF CHANGE
 
-    _initNotifications();
-    _handlePendingNotification();
+  /// Gets the current user's role in a specific channel by their prefix.
+  IrcRole getCurrentUserRoleInChannel(String channelName) {
+    final channel = chatState.channels.firstWhere(
+      (c) => c.name.toLowerCase() == channelName.toLowerCase(),
+      orElse: () => Channel(name: '', members: []),
+    );
+
+    // In a DM or if channel not found, user has basic permissions.
+    if (!channel.name.startsWith('#')) return IrcRole.user;
+
+    final member = channel.members.firstWhere(
+      (m) => m.nick.toLowerCase() == username.toLowerCase(),
+      orElse: () => ChannelMember(nick: '', prefix: ''),
+    );
+
+    // Map prefix to the correct IrcRole enum value.
+    switch (member.prefix) {
+      case '~':
+        return IrcRole.owner;
+      case '&':
+        return IrcRole.admin;
+      case '@':
+        return IrcRole.op;
+      case '%':
+        return IrcRole.halfOp;
+      case '+':
+        return IrcRole.voiced;
+      default:
+        return IrcRole.user;
+    }
+  }
+
+  Future<void> handleSendMessage(String text) async {
+    if (text.trim().isEmpty) return;
+
+    // If the message is a command, delegate it to the command handler.
+    if (text.startsWith('/')) {
+      await _commandHandler.handleCommand(text, this);
+      return;
+    }
+
+    // Regular message sending logic remains the same.
+    final currentConversation = chatState.selectedConversationTarget;
+    final isDm = currentConversation.startsWith('@');
+    String target =
+        isDm ? currentConversation.substring(1) : currentConversation;
+
+    final sentMessage = Message(
+      from: username,
+      content: text,
+      time: DateTime.now(),
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      isEncrypted: isDm &&
+          _encryptionService.getSessionStatus(currentConversation) ==
+              EncryptionStatus.active,
+    );
+    chatState.addMessage(currentConversation, sentMessage);
+
+    if (isDm &&
+        _encryptionService.getSessionStatus(currentConversation) ==
+            EncryptionStatus.active) {
+      final encryptedText =
+          await _encryptionService.encryptMessage(currentConversation, text);
+      if (encryptedText != null) {
+        _webSocketService.sendMessage(target, encryptedText);
+      } else {
+        chatState.addSystemMessage(currentConversation,
+            'Could not encrypt message. Session may be invalid.');
+      }
+      return;
+    }
+
+    _webSocketService.sendMessage(target, text);
   }
 
   void connectWebSocket() {
@@ -210,6 +311,14 @@ class ChatController {
       final String sender = message['sender'] ?? 'Unknown';
       String text = message['text'] ?? '';
 
+      // --- START OF CHANGE ---
+      // Handle the new control message from the other client
+      if (text == '[ENCRYPTION-TERMINATE-UNEXPECTED]') {
+        _handleUnexpectedEncryptionEnd(sender);
+        return;
+      }
+      // --- END OF CHANGE ---
+
       if (text.startsWith('[ENCRYPTION-REQUEST] ')) {
         await _handleEncryptionRequest(sender, text);
         return;
@@ -229,11 +338,15 @@ class ChatController {
 
       final encStatus = _encryptionService.getSessionStatus('@$sender');
       if (encStatus == EncryptionStatus.active) {
+        // --- START OF CHANGE ---
+        // The recipient of the unencrypted message now sends a notification back
         chatState.addSystemMessage('@$sender',
             '⚠️ WARNING: Received an unencrypted message during a secure session. The session has been terminated for your safety. Please re-initiate encryption.');
+        _webSocketService.sendMessage(sender, '[ENCRYPTION-TERMINATE-UNEXPECTED]');
         _encryptionService.endEncryption('@$sender');
         chatState.setEncryptionStatus('@$sender', EncryptionStatus.error);
         return;
+        // --- END OF CHANGE ---
       }
 
       String channelName = (message['channel_name'] ?? '').toLowerCase();
@@ -316,6 +429,20 @@ class ChatController {
     });
   }
 
+  // --- START OF CHANGE ---
+  /// Handles the notification from the other client that our unencrypted
+  /// message was rejected, terminating the session.
+  void _handleUnexpectedEncryptionEnd(String from) {
+    final target = '@$from';
+    _encryptionService.endEncryption(target);
+    chatState.setEncryptionStatus(target, EncryptionStatus.error);
+    chatState.addSystemMessage(
+      target,
+      '❌ Your message was not delivered because the conversation was encrypted. The session has now been terminated. Please resend your message.',
+    );
+  }
+  // --- END OF CHANGE ---
+
   void _listenToMembersUpdate() {
     _membersUpdateSub = _webSocketService.membersUpdateStream.listen((update) {
       final String channelName = update['channel_name'];
@@ -339,47 +466,6 @@ class ChatController {
 
   void sendRawWebSocketMessage(Map<String, dynamic> message) {
     _webSocketService.send(message);
-  }
-
-  Future<void> handleSendMessage(String text) async {
-    if (text.trim().isEmpty) return;
-
-    if (text.startsWith('/')) {
-      await _handleCommand(text);
-      return;
-    }
-
-    final currentConversation = chatState.selectedConversationTarget;
-    final isDm = currentConversation.startsWith('@');
-    String target =
-        isDm ? currentConversation.substring(1) : currentConversation;
-
-    final sentMessage = Message(
-      from: username,
-      content: text,
-      time: DateTime.now(),
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
-      isEncrypted: isDm &&
-          _encryptionService.getSessionStatus(currentConversation) ==
-              EncryptionStatus.active,
-    );
-    chatState.addMessage(currentConversation, sentMessage);
-
-    if (isDm &&
-        _encryptionService.getSessionStatus(currentConversation) ==
-            EncryptionStatus.active) {
-      final encryptedText =
-          await _encryptionService.encryptMessage(currentConversation, text);
-      if (encryptedText != null) {
-        _webSocketService.sendMessage(target, encryptedText);
-      } else {
-        chatState.addSystemMessage(currentConversation,
-            'Could not encrypt message. Session may be invalid.');
-      }
-      return;
-    }
-
-    _webSocketService.sendMessage(target, text);
   }
 
   Future<void> setMyPronouns(String pronouns) async {
@@ -560,36 +646,6 @@ class ChatController {
       } catch (e) {
         /* Ignore */
       }
-    }
-  }
-
-  Future<void> _handleCommand(String commandText) async {
-    final parts = commandText.substring(1).split(' ');
-    final command = parts[0].toLowerCase();
-    final args = parts.skip(1).join(' ').trim();
-
-    switch (command) {
-      case 'join':
-        if (args.isNotEmpty && args.startsWith('#')) {
-          joinChannel(args);
-        } else {
-          chatState.addSystemMessage(chatState.selectedConversationTarget,
-              'Usage: /join <#channel_name>');
-        }
-        break;
-      case 'part':
-        String channelToPart =
-            args.isNotEmpty ? args : chatState.selectedConversationTarget;
-        if (channelToPart.isNotEmpty && channelToPart.startsWith('#')) {
-          partChannel(channelToPart);
-        } else {
-          chatState.addSystemMessage(chatState.selectedConversationTarget,
-              'Usage: /part [#channel_name]');
-        }
-        break;
-      default:
-        chatState.addSystemMessage(
-            chatState.selectedConversationTarget, 'Unknown command: /$command.');
     }
   }
 

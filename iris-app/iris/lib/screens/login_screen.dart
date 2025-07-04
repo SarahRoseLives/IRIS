@@ -5,6 +5,7 @@ import '../models/login_response.dart';
 import '../main_layout.dart';
 import '../services/fingerprint_service.dart'; // Import the service
 import '../utils/motd.dart';
+import 'package:get_it/get_it.dart'; // Add this import
 
 class LoginScreen extends StatefulWidget {
   final bool showExpiredMessage;
@@ -111,6 +112,9 @@ class _LoginScreenState extends State<LoginScreen> {
       if (response.success && response.token != null) {
         final token = response.token!;
         final username = _usernameController.text.trim();
+
+        // ---> FIX: Set the token on the singleton ApiService <---
+        GetIt.instance<ApiService>().setToken(token);
 
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('auth_token', token);

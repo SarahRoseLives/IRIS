@@ -323,6 +323,9 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
 
     if (mounted) {
       if (token != null && username != null) {
+        // ---> FIX: Set the token on the singleton ApiService <---
+        GetIt.instance<ApiService>().setToken(token);
+
         setState(() {
           _isLoggedIn = true;
           _isLoading = false;

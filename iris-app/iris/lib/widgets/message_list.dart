@@ -54,12 +54,16 @@ class MessageList extends StatelessWidget {
     final Set<String> blockedUsers = viewModel.blockedUsers;
     final Set<String> hiddenMessageIds = viewModel.hiddenMessageIds;
 
+    // START OF CHANGE: Chat bounce fix
     return ListView.builder(
       controller: scrollController,
       physics: const ClampingScrollPhysics(),
       itemCount: messages.length,
+      reverse: true, // This anchors the list to the bottom, fixing the bounce
       itemBuilder: (context, index) {
-        final message = messages[index];
+        // Access messages in reverse to show the newest at the bottom
+        final message = messages[messages.length - 1 - index];
+    // END OF CHANGE
 
         if (message.isNotice) {
           return _buildNoticeWidget(context, message);
@@ -500,9 +504,9 @@ class MessageList extends StatelessWidget {
         if (isImg) {
           _showImagePreview(context, url);
         } else {
-          if (await canLaunchUrl(Uri.parse(url))) {
-            await launchUrl(Uri.parse(url),
-                mode: LaunchMode.externalApplication);
+          final uri = Uri.parse(url);
+          if (await canLaunchUrl(uri)) {
+            await launchUrl(uri, mode: LaunchMode.externalApplication);
           }
         }
       },
