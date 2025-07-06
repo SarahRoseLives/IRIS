@@ -1,20 +1,20 @@
-import 'package:flutter/material.dart';
 import 'dart:async';
-import 'package:get_it/get_it.dart';
+
 import 'package:flutter/foundation.dart'; // Needed for kIsWeb
+import 'package:flutter/material.dart';
+import 'package:get_it/get_it.dart';
 
+import '../commands/slash_command.dart'; // Import for commands
 import '../main.dart'; // Provides AuthManager
-import '../services/api_service.dart'; // Provides SessionExpiredException
-
-import '../services/websocket_service.dart';
-import '../services/notification_service_platform.dart';
-import 'chat_state.dart';
-import 'chat_controller.dart';
 import '../models/channel.dart';
 import '../models/channel_member.dart';
 import '../models/encryption_session.dart';
-import '../commands/slash_command.dart'; // Import for commands
 import '../models/irc_role.dart';
+import '../services/api_service.dart'; // Provides SessionExpiredException
+import '../services/notification_service_platform.dart';
+import '../services/websocket_service.dart';
+import 'chat_controller.dart';
+import 'chat_state.dart';
 
 class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   // State and Controller
@@ -44,9 +44,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   final Set<String> _blockedUsers = {};
   final Set<String> _hiddenMessageIds = {};
 
-  // START OF CHANGE: Fix for chat bouncing issue
-  bool _userScrolledUp = false;
+  // START OF CHANGE: Add PageController for mobile layout
+  late final PageController pageController;
   // END OF CHANGE
+
+  bool _userScrolledUp = false;
 
   Set<String> get blockedUsers => _blockedUsers;
   Set<String> get hiddenMessageIds => _hiddenMessageIds;
@@ -72,6 +74,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   MainLayoutViewModel({required this.username, this.token}) {
+    // START OF CHANGE: Initialize PageController
+    // The chat screen (center) is at index 1.
+    pageController = PageController(initialPage: 1);
+    // END OF CHANGE
+
     if (token == null) {
       print("[ViewModel] Error: Token is null. Cannot initialize.");
       _loadingChannels = false;
@@ -99,6 +106,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   // --- GETTERS ---
+  bool get isDesktopLayout =>
+      kIsWeb || defaultTargetPlatform == TargetPlatform.linux;
   AppLifecycleState get appLifecycleState => _appLifecycleState;
   bool get showLeftDrawer => _showLeftDrawer;
   bool get showRightDrawer => _showRightDrawer;
@@ -127,13 +136,11 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
   Message? getLastMessage(String channelName) =>
       chatState.getLastMessage(channelName);
 
-  // START OF CHANGE: Getter for available slash commands
   List<SlashCommand> get availableCommands {
     final IrcRole userRole =
         _chatController.getCurrentUserRoleInChannel(selectedConversationTarget);
     return _chatController.getAvailableCommandsForRole(userRole);
   }
-  // END OF CHANGE
 
   bool get hasUnreadDms {
     for (final dmName in dmChannelNames) {
@@ -171,15 +178,9 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _loadingChannels = true;
     notifyListeners();
     try {
-      // 1. First, get the authoritative channel list from the server
       final serverChannels = await _chatController.apiService.fetchChannels();
       chatState.mergeChannels(serverChannels);
-
-      // 2. NOW, process any pending messages that arrived when the app was closed.
-      // This adds the new DM channel to the now-stable list.
       await _chatController.processPendingBackgroundMessages();
-
-      // 3. Finally, connect to the WebSocket.
       _chatController.connectWebSocket();
     } on SessionExpiredException {
       AuthManager.forceLogout(showExpiredMessage: true);
@@ -221,27 +222,20 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         }
       }
     }
-
-    // START OF CHANGE: Chat bounce fix
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _scrollToTopIfAtBottom();
     });
-    // END OF CHANGE
-
     notifyListeners();
   }
 
-  // START OF CHANGE: Chat bounce fix
   void _onScroll() {
     if (!_scrollController.hasClients) return;
     final position = _scrollController.position;
-    // "At the bottom" of the chat now means scrolled to the top of the reversed list.
     final atBottom = position.pixels <= 50.0;
     if (atBottom != !_userScrolledUp) {
       _userScrolledUp = !atBottom;
     }
   }
-  // END OF CHANGE
 
   void _onWsStatusChanged(WebSocketStatus status) {
     if (status == WebSocketStatus.connected) {
@@ -366,37 +360,70 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     _shouldShowSafetyNumberDialog = false;
   }
 
+  // START OF CHANGE: New and updated methods for panel control
+  void goToChatScreen() {
+    if (pageController.hasClients && pageController.page?.round() != 1) {
+      pageController.animateToPage(
+        1,
+        duration: const Duration(milliseconds: 300),
+        curve: Curves.easeOut,
+      );
+    }
+  }
+
   void toggleLeftDrawer() {
-    if (kIsWeb) {
-      _showLeftDrawer = !_showLeftDrawer;
-    } else {
+    if (isDesktopLayout) {
       _showLeftDrawer = !_showLeftDrawer;
       if (_showLeftDrawer) _showRightDrawer = false;
+    } else {
+      if (pageController.hasClients) {
+        pageController.animateToPage(
+          0,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
     }
     notifyListeners();
   }
 
   void toggleRightDrawer() {
-    if (kIsWeb) {
-      _showRightDrawer = !_showRightDrawer;
-    } else {
+    if (isDesktopLayout) {
       _showRightDrawer = !_showRightDrawer;
       if (_showRightDrawer) _showLeftDrawer = false;
+    } else {
+      if (pageController.hasClients) {
+        pageController.animateToPage(
+          2,
+          duration: const Duration(milliseconds: 250),
+          curve: Curves.easeOut,
+        );
+      }
     }
     notifyListeners();
   }
+
+  void closeSidePanels() {
+    if (isDesktopLayout) {
+      if (_showLeftDrawer) _showLeftDrawer = false;
+      if (_showRightDrawer) _showRightDrawer = false;
+    } else {
+      goToChatScreen();
+    }
+    notifyListeners();
+  }
+  // END OF CHANGE
 
   void toggleUnjoinedChannelsExpanded() {
     _unjoinedChannelsExpanded = !_unjoinedChannelsExpanded;
     notifyListeners();
   }
 
-  // START OF CHANGE: Chat bounce fix (renamed methods)
   void _scrollToTop() {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scrollController.hasClients) {
         _scrollController.animateTo(
-          0.0, // Top of the reversed list
+          0.0,
           duration: const Duration(milliseconds: 300),
           curve: Curves.easeOut,
         );
@@ -409,39 +436,51 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
       _scrollToTop();
     }
   }
-  // END OF CHANGE
 
   Future<void> handleSendMessage() async {
     final text = _msgController.text;
     if (text.trim().isEmpty) return;
     _msgController.clear();
     await _chatController.handleSendMessage(text);
-    // START OF CHANGE: Chat bounce fix
     _userScrolledUp = false;
     _scrollToTop();
-    // END OF CHANGE
   }
 
   Future<void> setMyPronouns(String pronouns) async {
     await _chatController.setMyPronouns(pronouns);
   }
 
+  // START OF CHANGE: Add auto-slide-back logic
   void onChannelSelected(String channelName) {
     chatState.selectConversation(channelName);
+    if (!isDesktopLayout) {
+      goToChatScreen();
+    }
     notifyListeners();
     NotificationService.getCurrentDMChannel = () {
       final target = chatState.selectedConversationTarget;
       return target.startsWith('@') ? target : null;
     };
-    // START OF CHANGE: Chat bounce fix
     _userScrolledUp = false;
     _scrollToTop();
-    // END OF CHANGE
   }
 
-  void onUnjoinedChannelTap(String channelName) =>
-      _chatController.joinChannel(channelName);
-  void onDmSelected(String dmChannelName) => onChannelSelected(dmChannelName);
+  void onUnjoinedChannelTap(String channelName) {
+    _chatController.joinChannel(channelName);
+    if (!isDesktopLayout) {
+      // The join action will eventually select the channel, which
+      // will trigger the slide back via onChannelSelected.
+      // We can also trigger it immediately for a faster UI response.
+      goToChatScreen();
+    }
+  }
+
+  void onDmSelected(String dmChannelName) {
+    // This now correctly calls the updated onChannelSelected
+    onChannelSelected(dmChannelName);
+  }
+  // END OF CHANGE
+
   void partChannel(String channelName) =>
       _chatController.partChannel(channelName);
 
@@ -466,12 +505,8 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
         members: [],
       ));
     }
-    chatState.selectConversation(channelName);
-    notifyListeners();
-    // START OF CHANGE: Chat bounce fix
-    _userScrolledUp = false;
-    _scrollToTop();
-    // END OF CHANGE
+    // Updated to call the method that handles sliding back
+    onChannelSelected(channelName);
   }
 
   void removeDmMessage(Message message) {
@@ -512,15 +547,16 @@ class MainLayoutViewModel extends ChangeNotifier with WidgetsBindingObserver {
     chatState.removeListener(_onChatStateChanged);
     _wsStatusSub?.cancel();
     _errorSub?.cancel();
-
     if (_wsStatus == WebSocketStatus.connected) {
       _chatController.disconnectWebSocket();
     }
-
     _scrollController.removeListener(_onScroll);
     _chatController.dispose();
     _msgController.dispose();
     _scrollController.dispose();
+    // START OF CHANGE: Dispose the PageController
+    pageController.dispose();
+    // END OF CHANGE
     super.dispose();
   }
 }

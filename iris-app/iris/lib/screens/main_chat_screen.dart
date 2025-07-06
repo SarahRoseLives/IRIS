@@ -1,24 +1,149 @@
-import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // For kIsWeb and defaultTargetPlatform
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
-import '../viewmodels/main_layout_viewmodel.dart';
-import '../widgets/left_drawer.dart';
-import '../widgets/right_drawer.dart';
-import '../widgets/message_list.dart';
-import '../widgets/message_input.dart';
-import '../screens/profile_screen.dart';
-import '../models/encryption_session.dart';
-import '../widgets/channel_topic.dart';
 import '../commands/slash_command.dart'; // Import for SlashCommand type
+import '../models/encryption_session.dart';
+import '../screens/profile_screen.dart';
+import '../viewmodels/main_layout_viewmodel.dart';
+import '../widgets/channel_topic.dart';
+import '../widgets/left_drawer.dart';
+import '../widgets/message_input.dart';
+import '../widgets/message_list.dart';
+import '../widgets/right_drawer.dart';
 
 class MainChatScreen extends StatelessWidget {
   const MainChatScreen({super.key});
 
-  void _showSafetyNumberDialog(
-    BuildContext context,
-    MainLayoutViewModel viewModel,
-  ) {
+  @override
+  Widget build(BuildContext context) {
+    const double leftDrawerWidth = 280;
+    const double rightDrawerWidth = 240;
+
+    return Consumer<MainLayoutViewModel>(
+      builder: (context, viewModel, child) {
+        final isDesktopLayout = viewModel.isDesktopLayout;
+
+        // The main chat view content is extracted into a reusable widget
+        final mainChatView = _MainChatView(viewModel: viewModel);
+
+        if (isDesktopLayout) {
+          // --- WEB/DESKTOP LAYOUT (Existing Behavior) ---
+          return Scaffold(
+            backgroundColor: const Color(0xFF313338),
+            body: Row(
+              children: [
+                // Left drawer is permanently visible on desktop
+                SizedBox(
+                  width: leftDrawerWidth,
+                  child: Drawer(
+                    elevation: 0,
+                    backgroundColor: Colors.transparent,
+                    child: LeftDrawer(
+                      dms: viewModel.dmChannelNames,
+                      userAvatars: viewModel.userAvatars,
+                      userStatuses: viewModel.chatState.userStatuses,
+                      joinedChannels: viewModel.joinedPublicChannelNames,
+                      unjoinedChannels: viewModel.unjoinedPublicChannelNames,
+                      selectedConversationTarget:
+                          viewModel.selectedConversationTarget,
+                      onChannelSelected: viewModel.onChannelSelected,
+                      onChannelPart: viewModel.partChannel,
+                      onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
+                      onDmSelected: viewModel.onDmSelected,
+                      onRemoveDm: viewModel.removeDmChannel,
+                      onIrisTap: viewModel.selectMainView,
+                      loadingChannels: viewModel.loadingChannels,
+                      error: viewModel.channelError,
+                      wsStatus: viewModel.wsStatus,
+                      onCloseDrawer: viewModel.closeSidePanels,
+                      unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
+                      onToggleUnjoined:
+                          viewModel.toggleUnjoinedChannelsExpanded,
+                      hasUnreadMessages: viewModel.hasUnreadMessages,
+                      getLastMessage: viewModel.getLastMessage,
+                      currentUsername: viewModel.username,
+                      isDrawer: true, // Render with web drawer UI
+                    ),
+                  ),
+                ),
+                // Main content area
+                Expanded(child: mainChatView),
+                // Right drawer is permanently visible on desktop
+                SizedBox(
+                  width: rightDrawerWidth,
+                  child: Drawer(
+                    elevation: 0,
+                    backgroundColor: Colors.transparent,
+                    child: RightDrawer(
+                      members: viewModel.members,
+                      userAvatars: viewModel.userAvatars,
+                      onCloseDrawer: viewModel.closeSidePanels,
+                      isDrawer: true, // Render with web drawer UI
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        } else {
+          // --- ANDROID/MOBILE LAYOUT (New Sliding Screens) ---
+          return Scaffold(
+            backgroundColor: const Color(0xFF313338),
+            body: PageView(
+              controller: viewModel.pageController,
+              children: [
+                // Page 0: Left Panel Screen
+                LeftDrawer(
+                  dms: viewModel.dmChannelNames,
+                  userAvatars: viewModel.userAvatars,
+                  userStatuses: viewModel.chatState.userStatuses,
+                  joinedChannels: viewModel.joinedPublicChannelNames,
+                  unjoinedChannels: viewModel.unjoinedPublicChannelNames,
+                  selectedConversationTarget:
+                      viewModel.selectedConversationTarget,
+                  onChannelSelected: viewModel.onChannelSelected,
+                  onChannelPart: viewModel.partChannel,
+                  onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
+                  onDmSelected: viewModel.onDmSelected,
+                  onRemoveDm: viewModel.removeDmChannel,
+                  onIrisTap: viewModel.selectMainView,
+                  loadingChannels: viewModel.loadingChannels,
+                  error: viewModel.channelError,
+                  wsStatus: viewModel.wsStatus,
+                  onCloseDrawer: viewModel.closeSidePanels,
+                  unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
+                  onToggleUnjoined: viewModel.toggleUnjoinedChannelsExpanded,
+                  hasUnreadMessages: viewModel.hasUnreadMessages,
+                  getLastMessage: viewModel.getLastMessage,
+                  currentUsername: viewModel.username,
+                  isDrawer: false, // Render as a full page
+                ),
+                // Page 1: Main Chat Screen
+                mainChatView,
+                // Page 2: Right Panel Screen
+                RightDrawer(
+                  members: viewModel.members,
+                  userAvatars: viewModel.userAvatars,
+                  onCloseDrawer: viewModel.closeSidePanels,
+                  isDrawer: false, // Render as a full page
+                ),
+              ],
+            ),
+          );
+        }
+      },
+    );
+  }
+}
+
+/// This private widget contains the reusable UI for the central chat view.
+class _MainChatView extends StatelessWidget {
+  final MainLayoutViewModel viewModel;
+
+  const _MainChatView({required this.viewModel});
+
+  void _showSafetyNumberDialog(BuildContext context) {
     showDialog(
       context: context,
       builder: (context) {
@@ -75,7 +200,6 @@ class MainChatScreen extends StatelessWidget {
 
   void _showEncryptionOptions(
     BuildContext context,
-    MainLayoutViewModel viewModel,
     EncryptionStatus status,
   ) {
     showModalBottomSheet(
@@ -93,7 +217,7 @@ class MainChatScreen extends StatelessWidget {
                       style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
-                    _showSafetyNumberDialog(context, viewModel);
+                    _showSafetyNumberDialog(context);
                   },
                 ),
                 ListTile(
@@ -148,298 +272,160 @@ class MainChatScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    const double leftDrawerWidth = 280;
-    const double rightDrawerWidth = 240;
+    final Set<String> allUsernames = {
+      ...viewModel.members.map((m) => m.nick),
+      ...viewModel.currentChannelMessages.map((m) => m.from),
+    };
 
-    return Consumer<MainLayoutViewModel>(
-      builder: (context, viewModel, child) {
-        final Set<String> allUsernames = {
-          ...viewModel.members.map((m) => m.nick),
-          ...viewModel.currentChannelMessages.map((m) => m.from),
-        };
+    final isDm = viewModel.selectedConversationTarget.startsWith('@');
+    final encryptionStatus = viewModel.currentEncryptionStatus;
 
-        final isDm = viewModel.selectedConversationTarget.startsWith('@');
-        final encryptionStatus = viewModel.currentEncryptionStatus;
+    IconData lockIconData;
+    Color lockIconColor;
+    String lockTooltip;
 
-        IconData lockIconData;
-        Color lockIconColor;
-        String lockTooltip;
+    switch (encryptionStatus) {
+      case EncryptionStatus.active:
+        lockIconData = Icons.lock;
+        lockIconColor = Colors.greenAccent;
+        lockTooltip = "Encrypted session is active. Click to end.";
+        break;
+      case EncryptionStatus.pending:
+        lockIconData = Icons.lock_clock;
+        lockIconColor = Colors.amber;
+        lockTooltip = "Encryption request is pending...";
+        break;
+      case EncryptionStatus.error:
+        lockIconData = Icons.error;
+        lockIconColor = Colors.redAccent;
+        lockTooltip = "Encryption error. Click to reset.";
+        break;
+      case EncryptionStatus.none:
+      default:
+        lockIconData = Icons.lock_open;
+        lockIconColor = Colors.white70;
+        lockTooltip = "Session is not encrypted. Click to start.";
+        break;
+    }
 
-        switch (encryptionStatus) {
-          case EncryptionStatus.active:
-            lockIconData = Icons.lock;
-            lockIconColor = Colors.greenAccent;
-            lockTooltip = "Encrypted session is active. Click to end.";
-            break;
-          case EncryptionStatus.pending:
-            lockIconData = Icons.lock_clock;
-            lockIconColor = Colors.amber;
-            lockTooltip = "Encryption request is pending...";
-            break;
-          case EncryptionStatus.error:
-            lockIconData = Icons.error;
-            lockIconColor = Colors.redAccent;
-            lockTooltip = "Encryption error. Click to reset.";
-            break;
-          case EncryptionStatus.none:
-          default:
-            lockIconData = Icons.lock_open;
-            lockIconColor = Colors.white70;
-            lockTooltip = "Session is not encrypted. Click to start.";
-            break;
-        }
+    // Listen for when a session becomes active to show the dialog
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (viewModel.shouldShowSafetyNumberDialog) {
+        _showSafetyNumberDialog(context);
+        viewModel.didShowSafetyNumberDialog(); // Reset the flag
+      }
+    });
 
-        // Listen for when a session becomes active to show the dialog
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          if (viewModel.shouldShowSafetyNumberDialog) {
-            _showSafetyNumberDialog(context, viewModel);
-            viewModel.didShowSafetyNumberDialog(); // Reset the flag
-          }
-        });
-
-        // Create a single flag for desktop-like layouts (Web and Linux).
-        final isDesktopLayout =
-            kIsWeb || defaultTargetPlatform == TargetPlatform.linux;
-
-        return Scaffold(
-          backgroundColor: const Color(0xFF313338),
-          body: Row(
-            children: [
-              // Left drawer (desktop: always visible, mobile: overlay)
-              if (isDesktopLayout || viewModel.showLeftDrawer)
-                SizedBox(
-                  width: leftDrawerWidth,
-                  child: Drawer(
-                    elevation: 0,
-                    backgroundColor: Colors.transparent,
-                    child: LeftDrawer(
-                      dms: viewModel.dmChannelNames,
-                      userAvatars: viewModel.userAvatars,
-                      userStatuses: viewModel.chatState.userStatuses,
-                      joinedChannels: viewModel.joinedPublicChannelNames,
-                      unjoinedChannels: viewModel.unjoinedPublicChannelNames,
-                      selectedConversationTarget:
-                          viewModel.selectedConversationTarget,
-                      onChannelSelected: viewModel.onChannelSelected,
-                      onChannelPart: viewModel.partChannel,
-                      onUnjoinedChannelTap: viewModel.onUnjoinedChannelTap,
-                      onDmSelected: viewModel.onDmSelected,
-                      onRemoveDm: viewModel.removeDmChannel,
-                      onIrisTap: viewModel.selectMainView,
-                      loadingChannels: viewModel.loadingChannels,
-                      error: viewModel.channelError,
-                      wsStatus: viewModel.wsStatus,
-                      showDrawer: viewModel.showLeftDrawer,
-                      onCloseDrawer: viewModel.toggleLeftDrawer,
-                      unjoinedExpanded: viewModel.unjoinedChannelsExpanded,
-                      onToggleUnjoined:
-                          viewModel.toggleUnjoinedChannelsExpanded,
-                      hasUnreadMessages: viewModel.hasUnreadMessages,
-                      getLastMessage: viewModel.getLastMessage,
-                      currentUsername: viewModel.username,
-                    ),
-                  ),
-                ),
-
-              // Main content area
-              Expanded(
-                child: Stack(
-                  children: [
-                    GestureDetector(
-                      onHorizontalDragUpdate: (details) {
-                        // Disable swipe gestures on desktop layouts.
-                        if (isDesktopLayout) return;
-
-                        final width = MediaQuery.of(context).size.width;
-                        if (details.delta.dx > 5 &&
-                            details.globalPosition.dx < 50) {
-                          if (!viewModel.showLeftDrawer &&
-                              !viewModel.showRightDrawer) {
-                            viewModel.toggleLeftDrawer();
-                          }
-                        } else if (details.delta.dx < -5 &&
-                            details.globalPosition.dx > width - 50) {
-                          if (!viewModel.showLeftDrawer &&
-                              !viewModel.showRightDrawer) {
-                            viewModel.toggleRightDrawer();
-                          }
-                        } else if (viewModel.showLeftDrawer &&
-                            details.delta.dx < -5) {
-                          viewModel.toggleLeftDrawer();
-                        } else if (viewModel.showRightDrawer &&
-                            details.delta.dx > 5) {
-                          viewModel.toggleRightDrawer();
-                        }
-                      },
-                      child: SafeArea(
-                        child: Column(
-                          children: [
-                            Container(
-                              color: const Color(0xFF232428),
-                              height: 56,
-                              child: Row(
-                                children: [
-                                  // --- START OF CHANGE ---
-                                  // Hide the menu button on desktop layouts.
-                                  if (!isDesktopLayout)
-                                    Stack(
-                                      clipBehavior: Clip.none,
-                                      children: [
-                                        IconButton(
-                                          icon: const Icon(Icons.menu,
-                                              color: Colors.white54),
-                                          tooltip: "Open Channels Drawer",
-                                          onPressed: viewModel.toggleLeftDrawer,
-                                        ),
-                                        if (viewModel.hasUnreadDms)
-                                          Positioned(
-                                            bottom: 12,
-                                            right: 12,
-                                            child: Container(
-                                              width: 10,
-                                              height: 10,
-                                              decoration: BoxDecoration(
-                                                color: Colors.redAccent,
-                                                shape: BoxShape.circle,
-                                                border: Border.all(
-                                                  color:
-                                                      const Color(0xFF232428),
-                                                  width: 1.5,
-                                                ),
-                                              ),
-                                            ),
-                                          ),
-                                      ],
-                                    ),
-                                  // --- END OF CHANGE ---
-                                  Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 8),
-                                    child: Text(
-                                      viewModel.selectedConversationTarget,
-                                      style: const TextStyle(
-                                          color: Colors.white, fontSize: 20),
-                                    ),
-                                  ),
-                                  const Spacer(),
-                                  if (isDm)
-                                    IconButton(
-                                      icon: Icon(lockIconData,
-                                          color: lockIconColor),
-                                      tooltip: lockTooltip,
-                                      onPressed: () => _showEncryptionOptions(
-                                          context,
-                                          viewModel,
-                                          encryptionStatus),
-                                    ),
-                                  // Hide the members button on desktop layouts.
-                                  if (!isDesktopLayout)
-                                    IconButton(
-                                      icon: const Icon(Icons.people,
-                                          color: Colors.white70),
-                                      tooltip: "Open Members Drawer",
-                                      onPressed: viewModel.toggleRightDrawer,
-                                    ),
-                                ],
-                              ),
-                            ),
-                            if (!isDm) const ChannelTopic(),
-                            Expanded(
-                              child: MessageList(
-                                messages: viewModel.currentChannelMessages,
-                                scrollController: viewModel.scrollController,
-                                userAvatars: viewModel.userAvatars,
-                                currentUsername: viewModel.username,
-                                encryptionStatus: encryptionStatus,
-                              ),
-                            ),
-                            MessageInput(
-                              controller: viewModel.msgController,
-                              onSendMessage: viewModel.handleSendMessage,
-                              onProfilePressed: () {
-                                if (viewModel.token != null) {
-                                  Navigator.push(
-                                    context,
-                                    MaterialPageRoute(
-                                      builder: (context) => ProfileScreen(
-                                          authToken: viewModel.token!),
-                                    ),
-                                  );
-                                }
-                              },
-                              allUsernames: allUsernames.toList(),
-                              // START OF CHANGE: Pass available commands
-                              availableCommands: viewModel.availableCommands,
-                              // END OF CHANGE
-                              onAttachmentSelected: (filePath) async {
-                                final url = await viewModel
-                                    .uploadAttachmentAndGetUrl(filePath);
-                                if (url != null && url.isNotEmpty) {
-                                  final controller = viewModel.msgController;
-                                  final text = controller.text;
-                                  final selection = controller.selection;
-                                  final cursor = selection.baseOffset < 0
-                                      ? text.length
-                                      : selection.baseOffset;
-                                  final filename = url.split('/').last;
-                                  final hyperlink = '[$filename]($url)';
-                                  final newText = text.replaceRange(
-                                      cursor, cursor, hyperlink + ' ');
-                                  controller.value = controller.value.copyWith(
-                                    text: newText,
-                                    selection: TextSelection.collapsed(
-                                        offset: cursor + hyperlink.length + 1),
-                                  );
-                                }
-                                // Return null as the function signature expects a String?
-                                return null;
-                              },
-                            ),
-                          ],
-                        ),
+    return SafeArea(
+      child: Column(
+        children: [
+          Container(
+            color: const Color(0xFF232428),
+            height: 56,
+            child: Row(
+              children: [
+                if (!viewModel.isDesktopLayout)
+                  Stack(
+                    clipBehavior: Clip.none,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.menu, color: Colors.white54),
+                        tooltip: "Open Channels & DMs",
+                        onPressed: viewModel.toggleLeftDrawer,
                       ),
-                    ),
-                    // Overlay for mobile when drawers are open
-                    if (!isDesktopLayout &&
-                        (viewModel.showLeftDrawer ||
-                            viewModel.showRightDrawer))
-                      Positioned.fill(
-                        child: GestureDetector(
-                          onTap: () {
-                            if (viewModel.showLeftDrawer) {
-                              viewModel.toggleLeftDrawer();
-                            }
-                            if (viewModel.showRightDrawer) {
-                              viewModel.toggleRightDrawer();
-                            }
-                          },
+                      if (viewModel.hasUnreadDms)
+                        Positioned(
+                          bottom: 12,
+                          right: 12,
                           child: Container(
-                            color: Colors.black.withOpacity(0.5),
+                            width: 10,
+                            height: 10,
+                            decoration: BoxDecoration(
+                              color: Colors.redAccent,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: const Color(0xFF232428),
+                                width: 1.5,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                  ],
-                ),
-              ),
-
-              // Right drawer (desktop: always visible, mobile: overlay)
-              if (isDesktopLayout || viewModel.showRightDrawer)
-                SizedBox(
-                  width: rightDrawerWidth,
-                  child: Drawer(
-                    elevation: 0,
-                    backgroundColor: Colors.transparent,
-                    child: RightDrawer(
-                      members: viewModel.members,
-                      userAvatars: viewModel.userAvatars,
-                      onCloseDrawer: viewModel.toggleRightDrawer,
-                    ),
+                    ],
+                  ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8),
+                  child: Text(
+                    viewModel.selectedConversationTarget,
+                    style: const TextStyle(color: Colors.white, fontSize: 20),
                   ),
                 ),
-            ],
+                const Spacer(),
+                if (isDm)
+                  IconButton(
+                    icon: Icon(lockIconData, color: lockIconColor),
+                    tooltip: lockTooltip,
+                    onPressed: () =>
+                        _showEncryptionOptions(context, encryptionStatus),
+                  ),
+                if (!viewModel.isDesktopLayout)
+                  IconButton(
+                    icon: const Icon(Icons.people, color: Colors.white70),
+                    tooltip: "Open Members List",
+                    onPressed: viewModel.toggleRightDrawer,
+                  ),
+              ],
+            ),
           ),
-        );
-      },
+          if (!isDm) const ChannelTopic(),
+          Expanded(
+            child: MessageList(
+              messages: viewModel.currentChannelMessages,
+              scrollController: viewModel.scrollController,
+              userAvatars: viewModel.userAvatars,
+              currentUsername: viewModel.username,
+              encryptionStatus: encryptionStatus,
+            ),
+          ),
+          MessageInput(
+            controller: viewModel.msgController,
+            onSendMessage: viewModel.handleSendMessage,
+            onProfilePressed: () {
+              if (viewModel.token != null) {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) =>
+                        ProfileScreen(authToken: viewModel.token!),
+                  ),
+                );
+              }
+            },
+            allUsernames: allUsernames.toList(),
+            availableCommands: viewModel.availableCommands,
+            onAttachmentSelected: (filePath) async {
+              final url =
+                  await viewModel.uploadAttachmentAndGetUrl(filePath);
+              if (url != null && url.isNotEmpty) {
+                final controller = viewModel.msgController;
+                final text = controller.text;
+                final selection = controller.selection;
+                final cursor =
+                    selection.baseOffset < 0 ? text.length : selection.baseOffset;
+                final filename = url.split('/').last;
+                final hyperlink = '[$filename]($url)';
+                final newText =
+                    text.replaceRange(cursor, cursor, '$hyperlink ');
+                controller.value = controller.value.copyWith(
+                  text: newText,
+                  selection: TextSelection.collapsed(
+                      offset: cursor + hyperlink.length + 1),
+                );
+              }
+              return null;
+            },
+          ),
+        ],
+      ),
     );
   }
 }

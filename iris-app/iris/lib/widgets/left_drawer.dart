@@ -1,8 +1,9 @@
-import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart'; // For kIsWeb
+import 'package:flutter/material.dart';
+
 import '../models/channel.dart';
-import '../services/websocket_service.dart';
 import '../models/user_status.dart';
+import '../services/websocket_service.dart';
 import '../widgets/user_avatar.dart';
 
 class LeftDrawer extends StatelessWidget {
@@ -20,7 +21,6 @@ class LeftDrawer extends StatelessWidget {
   final bool loadingChannels;
   final String? error;
   final WebSocketStatus wsStatus;
-  final bool showDrawer;
   final VoidCallback onCloseDrawer;
   final bool unjoinedExpanded;
   final VoidCallback onToggleUnjoined;
@@ -28,6 +28,9 @@ class LeftDrawer extends StatelessWidget {
   final bool Function(String channelName) hasUnreadMessages;
   final Message? Function(String channelName) getLastMessage;
   final String currentUsername;
+  // START OF CHANGE: Add property to distinguish drawer from page
+  final bool isDrawer;
+  // END OF CHANGE
 
   const LeftDrawer({
     super.key,
@@ -46,13 +49,15 @@ class LeftDrawer extends StatelessWidget {
     required this.loadingChannels,
     this.error,
     required this.wsStatus,
-    required this.showDrawer,
     required this.onCloseDrawer,
     required this.unjoinedExpanded,
     required this.onToggleUnjoined,
     required this.hasUnreadMessages,
     required this.getLastMessage,
     required this.currentUsername,
+    // START OF CHANGE: Add to constructor
+    this.isDrawer = true, // Default to true for web
+    // END OF CHANGE
   });
 
   void _showNewDMDialog(BuildContext context) {
@@ -96,7 +101,8 @@ class LeftDrawer extends StatelessWidget {
             children: [
               ListTile(
                 leading: const Icon(Icons.delete, color: Colors.red),
-                title: const Text('Remove DM', style: TextStyle(color: Colors.red)),
+                title:
+                    const Text('Remove DM', style: TextStyle(color: Colors.red)),
                 onTap: () {
                   Navigator.pop(context);
                   onRemoveDm(dmChannelName);
@@ -104,7 +110,8 @@ class LeftDrawer extends StatelessWidget {
               ),
               ListTile(
                 leading: const Icon(Icons.cancel, color: Colors.white),
-                title: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                title:
+                    const Text('Cancel', style: TextStyle(color: Colors.white)),
                 onTap: () => Navigator.pop(context),
               ),
             ],
@@ -137,7 +144,8 @@ class LeftDrawer extends StatelessWidget {
               const Divider(height: 1, color: Colors.white24),
               ListTile(
                 leading: const Icon(Icons.exit_to_app, color: Colors.red),
-                title: const Text('Leave Channel', style: TextStyle(color: Colors.red)),
+                title: const Text('Leave Channel',
+                    style: TextStyle(color: Colors.red)),
                 onTap: () {
                   Navigator.pop(context);
                   onChannelPart(channel);
@@ -146,7 +154,8 @@ class LeftDrawer extends StatelessWidget {
               ),
               ListTile(
                 leading: const Icon(Icons.cancel, color: Colors.white),
-                title: const Text('Cancel', style: TextStyle(color: Colors.white)),
+                title:
+                    const Text('Cancel', style: TextStyle(color: Colors.white)),
                 onTap: () => Navigator.pop(context),
               ),
             ],
@@ -158,203 +167,216 @@ class LeftDrawer extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sortedDms = List<String>.from(dms)..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    final sortedDms = List<String>.from(dms)
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
 
-    return Material(
-      color: Colors.transparent,
-      child: Row(
-        children: [
-          Expanded(
-            child: Column(
-              children: [
-                Expanded(
-                  child: Row(
+    // START OF CHANGE: Extracted panel content
+    final panelContent = Column(
+      children: [
+        Expanded(
+          child: Row(
+            children: [
+              Container(
+                width: 80,
+                color: const Color(0xFF232428),
+                child: SafeArea(
+                  child: Column(
                     children: [
-                      Container(
-                        width: 80,
-                        color: const Color(0xFF232428),
-                        child: SafeArea(
-                          child: Column(
-                            children: [
-                              const SizedBox(height: 20),
-                              Tooltip(
-                                message: "Channels",
-                                child: GestureDetector(
-                                  onTap: onIrisTap,
-                                  // ===== START OF CHANGE =====
-                                  child: CircleAvatar(
-                                    radius: 28,
-                                    // The background color will show if the image fails to load.
-                                    backgroundColor: !selectedConversationTarget.startsWith('@')
-                                        ? Colors.white
-                                        : const Color(0xFF5865F2),
-                                    // Use backgroundImage for automatic clipping and correct aspect ratio handling.
-                                    backgroundImage: const AssetImage('assets/icon.png'),
-                                  ),
-                                  // ===== END OF CHANGE =====
-                                ),
-                              ),
-                              const SizedBox(height: 10),
-                              const Divider(color: Colors.white24, indent: 20, endIndent: 20),
-                              Expanded(
-                                child: ListView.builder(
-                                  itemCount: sortedDms.length,
-                                  itemBuilder: (context, idx) {
-                                    final dmChannelName = sortedDms[idx];
-                                    final username = dmChannelName.substring(1);
-                                    final avatarUrl = userAvatars[username];
-                                    final status = userStatuses[username] ?? UserStatus.offline;
-                                    final isSelected = selectedConversationTarget.toLowerCase() == dmChannelName.toLowerCase();
-                                    final lastMessage = getLastMessage(dmChannelName);
-                                    final isUnread = hasUnreadMessages(dmChannelName) &&
-                                        (lastMessage != null && lastMessage.from != currentUsername);
-
-                                    return Padding(
-                                      padding: const EdgeInsets.symmetric(vertical: 8.0),
-                                      child: Tooltip(
-                                        message: username,
-                                        child: GestureDetector(
-                                          onTap: () {
-                                            onDmSelected(dmChannelName);
-                                            onCloseDrawer();
-                                          },
-                                          onLongPress: () => _showDmOptions(context, dmChannelName),
-                                          child: Stack(
-                                            alignment: Alignment.center,
-                                            clipBehavior: Clip.none,
-                                            children: [
-                                              UserAvatar(
-                                                radius: 28,
-                                                username: username,
-                                                avatarUrl: avatarUrl,
-                                                status: status,
-                                                showStatusDot: true,
-                                              ),
-                                              if (isSelected)
-                                                Positioned.fill(
-                                                  child: Container(
-                                                    decoration: BoxDecoration(
-                                                      shape: BoxShape.circle,
-                                                      border: Border.all(color: Colors.white, width: 3),
-                                                    ),
-                                                  ),
-                                                ),
-                                              if (isUnread && !isSelected)
-                                                Positioned(
-                                                  left: 2,
-                                                  child: Container(
-                                                    width: 8,
-                                                    height: 8,
-                                                    decoration: const BoxDecoration(
-                                                      color: Colors.white,
-                                                      shape: BoxShape.circle,
-                                                    ),
-                                                  ),
-                                                ),
-                                            ],
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                ),
-                              ),
-                            ],
+                      const SizedBox(height: 20),
+                      Tooltip(
+                        message: "Channels",
+                        child: GestureDetector(
+                          onTap: onIrisTap,
+                          child: CircleAvatar(
+                            radius: 28,
+                            backgroundColor:
+                                !selectedConversationTarget.startsWith('@')
+                                    ? Colors.white
+                                    : const Color(0xFF5865F2),
+                            backgroundImage:
+                                const AssetImage('assets/icon.png'),
                           ),
                         ),
                       ),
+                      const SizedBox(height: 10),
+                      const Divider(
+                          color: Colors.white24, indent: 20, endIndent: 20),
                       Expanded(
-                        child: SafeArea(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Padding(
-                                padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
-                                child: Text(
-                                  "Channels",
-                                  style: TextStyle(
-                                    color: Colors.grey[400],
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 12,
-                                    letterSpacing: 0.5,
+                        child: ListView.builder(
+                          itemCount: sortedDms.length,
+                          itemBuilder: (context, idx) {
+                            final dmChannelName = sortedDms[idx];
+                            final username = dmChannelName.substring(1);
+                            final avatarUrl = userAvatars[username];
+                            final status =
+                                userStatuses[username] ?? UserStatus.offline;
+                            final isSelected =
+                                selectedConversationTarget.toLowerCase() ==
+                                    dmChannelName.toLowerCase();
+                            final lastMessage = getLastMessage(dmChannelName);
+                            final isUnread = hasUnreadMessages(dmChannelName) &&
+                                (lastMessage != null &&
+                                    lastMessage.from != currentUsername);
+
+                            return Padding(
+                              padding:
+                                  const EdgeInsets.symmetric(vertical: 8.0),
+                              child: Tooltip(
+                                message: username,
+                                child: GestureDetector(
+                                  onTap: () {
+                                    onDmSelected(dmChannelName);
+                                  },
+                                  onLongPress: () =>
+                                      _showDmOptions(context, dmChannelName),
+                                  child: Stack(
+                                    alignment: Alignment.center,
+                                    clipBehavior: Clip.none,
+                                    children: [
+                                      UserAvatar(
+                                        radius: 28,
+                                        username: username,
+                                        avatarUrl: avatarUrl,
+                                        status: status,
+                                        showStatusDot: true,
+                                      ),
+                                      if (isSelected)
+                                        Positioned.fill(
+                                          child: Container(
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              border: Border.all(
+                                                  color: Colors.white,
+                                                  width: 3),
+                                            ),
+                                          ),
+                                        ),
+                                      if (isUnread && !isSelected)
+                                        Positioned(
+                                          left: 2,
+                                          child: Container(
+                                            width: 8,
+                                            height: 8,
+                                            decoration: const BoxDecoration(
+                                              color: Colors.white,
+                                              shape: BoxShape.circle,
+                                            ),
+                                          ),
+                                        ),
+                                    ],
                                   ),
                                 ),
                               ),
-                              Expanded(
-                                child: ListView(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                                  children: [
-                                    ...joinedChannels.map((channel) {
-                                      final isSelected = selectedConversationTarget.toLowerCase() == channel.toLowerCase();
-                                      final lastMessage = getLastMessage(channel);
-                                      final isUnread = hasUnreadMessages(channel) &&
-                                          (lastMessage != null && lastMessage.from != currentUsername);
-                                      // Only show preview if last message is NOT from current user and not null
-                                      final bool showSubtitle = lastMessage != null &&
-                                          !isSelected &&
-                                          isUnread &&
-                                          lastMessage.from != currentUsername;
-                                      final String? subtitle = showSubtitle
-                                          ? '${lastMessage!.from}: ${lastMessage.content}'
-                                          : null;
-
-                                      return ChannelListItem(
-                                        name: channel,
-                                        isSelected: isSelected,
-                                        isUnread: isUnread,
-                                        subtitle: subtitle,
-                                        onTap: () {
-                                          onChannelSelected(channel);
-                                          onCloseDrawer();
-                                        },
-                                        onLongPress: () => _showLeaveDialog(context, channel),
-                                      );
-                                    }).toList(),
-                                    if (unjoinedChannels.isNotEmpty)
-                                      ExpansionTile(
-                                        title: Text(
-                                            "Other Channels",
-                                            style: TextStyle(
-                                                color: Colors.grey[400],
-                                                fontWeight: FontWeight.bold,
-                                                fontSize: 12)),
-                                        iconColor: Colors.grey[400],
-                                        collapsedIconColor: Colors.grey[400],
-                                        initiallyExpanded: unjoinedExpanded,
-                                        onExpansionChanged: (_) => onToggleUnjoined(),
-                                        children: unjoinedChannels.map((channel) {
-                                          return ChannelListItem(
-                                            name: channel,
-                                            isSelected: false,
-                                            isUnread: false,
-                                            onTap: () {
-                                              onUnjoinedChannelTap(channel);
-                                              onCloseDrawer();
-                                            },
-                                          );
-                                        }).toList(),
-                                      ),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
+                            );
+                          },
                         ),
                       ),
                     ],
                   ),
                 ),
-              ],
-            ),
+              ),
+              Expanded(
+                child: SafeArea(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 20, 16, 8),
+                        child: Text(
+                          "Channels",
+                          style: TextStyle(
+                            color: Colors.grey[400],
+                            fontWeight: FontWeight.bold,
+                            fontSize: 12,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                      ),
+                      Expanded(
+                        child: ListView(
+                          padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                          children: [
+                            ...joinedChannels.map((channel) {
+                              final isSelected =
+                                  selectedConversationTarget.toLowerCase() ==
+                                      channel.toLowerCase();
+                              final lastMessage = getLastMessage(channel);
+                              final isUnread = hasUnreadMessages(channel) &&
+                                  (lastMessage != null &&
+                                      lastMessage.from != currentUsername);
+                              final bool showSubtitle = lastMessage != null &&
+                                  !isSelected &&
+                                  isUnread &&
+                                  lastMessage.from != currentUsername;
+                              final String? subtitle = showSubtitle
+                                  ? '${lastMessage!.from}: ${lastMessage.content}'
+                                  : null;
+
+                              return ChannelListItem(
+                                name: channel,
+                                isSelected: isSelected,
+                                isUnread: isUnread,
+                                subtitle: subtitle,
+                                onTap: () {
+                                  onChannelSelected(channel);
+                                },
+                                onLongPress: () =>
+                                    _showLeaveDialog(context, channel),
+                              );
+                            }).toList(),
+                            if (unjoinedChannels.isNotEmpty)
+                              ExpansionTile(
+                                title: Text("Other Channels",
+                                    style: TextStyle(
+                                        color: Colors.grey[400],
+                                        fontWeight: FontWeight.bold,
+                                        fontSize: 12)),
+                                iconColor: Colors.grey[400],
+                                collapsedIconColor: Colors.grey[400],
+                                initiallyExpanded: unjoinedExpanded,
+                                onExpansionChanged: (_) => onToggleUnjoined(),
+                                children: unjoinedChannels.map((channel) {
+                                  return ChannelListItem(
+                                    name: channel,
+                                    isSelected: false,
+                                    isUnread: false,
+                                    onTap: () {
+                                      onUnjoinedChannelTap(channel);
+                                    },
+                                  );
+                                }).toList(),
+                              ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-          // Always show the close handle, both web and mobile!
+        ),
+      ],
+    );
+    // END OF CHANGE
+
+    // Conditionally wrap the content for drawer-style UI
+    if (!isDrawer) {
+      return panelContent;
+    }
+
+    return Material(
+      color: Colors.transparent,
+      child: Row(
+        children: [
+          Expanded(child: panelContent),
           GestureDetector(
             onTap: onCloseDrawer,
             child: Container(
               width: 20,
               height: double.infinity,
               color: const Color(0xFF232428),
-              child: Center(
+              child: const Center(
                 child: Icon(
                   Icons.chevron_left,
                   color: Colors.white54,
@@ -392,7 +414,9 @@ class ChannelListItem extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 1.0),
       child: Material(
-        color: isSelected ? const Color(0xFF5865F2).withOpacity(0.6) : Colors.transparent,
+        color: isSelected
+            ? const Color(0xFF5865F2).withOpacity(0.6)
+            : Colors.transparent,
         borderRadius: BorderRadius.circular(5),
         child: InkWell(
           onTap: onTap,
@@ -403,7 +427,8 @@ class ChannelListItem extends StatelessWidget {
               AnimatedContainer(
                 duration: const Duration(milliseconds: 200),
                 width: 4,
-                height: isUnread && !isSelected ? (subtitle != null ? 36 : 24) : 0,
+                height:
+                    isUnread && !isSelected ? (subtitle != null ? 36 : 24) : 0,
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.only(
@@ -414,7 +439,8 @@ class ChannelListItem extends StatelessWidget {
               ),
               Expanded(
                 child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisAlignment: MainAxisAlignment.center,
@@ -423,7 +449,8 @@ class ChannelListItem extends StatelessWidget {
                         name,
                         style: TextStyle(
                           color: isActive ? Colors.white : Colors.white70,
-                          fontWeight: isActive ? FontWeight.w800 : FontWeight.w500,
+                          fontWeight:
+                              isActive ? FontWeight.w800 : FontWeight.w500,
                           fontSize: 16,
                         ),
                       ),
