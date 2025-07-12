@@ -2,14 +2,17 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
 import '../models/login_response.dart';
-import '../main_layout.dart';
+// REMOVE: import '../main_layout.dart'; // No longer navigate directly
 import '../services/fingerprint_service.dart'; // Import the service
 import '../utils/motd.dart';
 import 'package:get_it/get_it.dart'; // Add this import
+// REMOVE: import '../controllers/chat_controller.dart'; // No longer need ChatController here
 
 class LoginScreen extends StatefulWidget {
   final bool showExpiredMessage;
-  const LoginScreen({super.key, this.showExpiredMessage = false});
+  final VoidCallback? onLoginSuccess; // <--- NEW: Callback for successful login
+
+  const LoginScreen({super.key, this.showExpiredMessage = false, this.onLoginSuccess}); // <--- NEW
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -69,7 +72,7 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     final authenticated = await _fingerprintService.authenticate(
-        localizedReason: 'Authenticate to log in to IRIS');
+        localizedReason: 'Authenticate to log in to iris');
 
     if (!authenticated) {
       if (mounted) {
@@ -120,12 +123,10 @@ class _LoginScreenState extends State<LoginScreen> {
         await prefs.setString('auth_token', token);
         await prefs.setString('username', username);
 
+        // Instead of navigating directly, call the callback
         if (mounted) {
-          Navigator.of(context).pushReplacement(
-            MaterialPageRoute(
-              builder: (_) => IrisLayout(username: username, token: token),
-            ),
-          );
+          widget.onLoginSuccess?.call(); // <--- NEW: Call the callback
+          // The LoginScreen will be popped by AuthWrapper once the new state is processed
         }
       } else {
         setState(() {
@@ -176,7 +177,7 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                   const SizedBox(height: 18),
                   const Text(
-                    'IRIS',
+                    'iris',
                     style: TextStyle(
                       fontFamily: 'Montserrat',
                       fontSize: 36,

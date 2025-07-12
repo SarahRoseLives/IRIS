@@ -15,8 +15,8 @@ import 'package:iris/services/encryption_service.dart';
 import 'package:iris/services/update_service.dart';
 import 'package:iris/services/websocket_service.dart';
 import 'package:iris/utils/web_check.dart';
-import 'package:iris/viewmodels/chat_state.dart';
-// FingerprintGate import removed
+import 'package:iris/controllers/chat_state.dart';
+import 'package:iris/controllers/chat_controller.dart';
 
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:iris/services/notification_service_platform.dart'
@@ -34,12 +34,15 @@ class PendingNotification {
 }
 
 void setupLocator() {
-  if ((kIsWeb || defaultTargetPlatform == TargetPlatform.android) &&
+  // Only register FlutterLocalNotificationsPlugin if it's a supported platform.
+  // This avoids issues on desktop/Linux where the plugin might not be configured.
+  if ((kIsWeb || defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) &&
       !getIt.isRegistered<FlutterLocalNotificationsPlugin>()) {
     getIt.registerSingleton<FlutterLocalNotificationsPlugin>(
         FlutterLocalNotificationsPlugin());
   }
 
+  // Register NotificationService early, but its internal init will handle platform specifics.
   if (!getIt.isRegistered<NotificationService>()) {
     getIt.registerSingleton<NotificationService>(NotificationService());
   }
@@ -56,12 +59,22 @@ void setupLocator() {
   if (!getIt.isRegistered<ApiService>()) {
     getIt.registerSingleton<ApiService>(ApiService());
   }
+  // Do NOT register ChatController here, because it requires username and token!
+  // It will be registered in AuthWrapper's _checkLoginStatus.
 }
 
 class AuthManager {
   static Future<void> forceLogout({bool showExpiredMessage = false}) async {
     print('[AuthManager] Beginning force logout process...');
     try {
+      // Safely dispose and unregister ChatController if it exists
+      if (getIt.isRegistered<ChatController>()) {
+        final chatController = getIt<ChatController>();
+        chatController.dispose();
+        getIt.unregister<ChatController>();
+      }
+
+      // Safely access WebSocketService if registered
       if (getIt.isRegistered<WebSocketService>()) {
         getIt<WebSocketService>().disconnect();
       }
@@ -69,19 +82,37 @@ class AuthManager {
         getIt<EncryptionService>().reset();
       }
       if (getIt.isRegistered<ChatState>()) {
-        getIt<ChatState>().reset();
+        getIt<ChatState>().clearAllMessages();
       }
+
       final prefs = await SharedPreferences.getInstance();
       await prefs.clear();
+
       final navigator = navigatorKey.currentState;
-      if (navigator != null) {
+      if (navigator != null && navigator.mounted) {
         print('[AuthManager] Navigating to LoginScreen...');
         navigator.pushAndRemoveUntil(
           MaterialPageRoute(
-              builder: (_) =>
-                  LoginScreen(showExpiredMessage: showExpiredMessage)),
+            builder: (_) => LoginScreen(
+              showExpiredMessage: showExpiredMessage,
+              // START OF FIX: This callback is now corrected.
+              onLoginSuccess: () {
+                // After a successful login, the app state needs to be
+                // re-initialized from the root. We replace the current
+                // view (LoginScreen) with a new AuthWrapper, which will
+                // then detect the new token and show the main chat UI.
+                navigatorKey.currentState?.pushAndRemoveUntil(
+                  MaterialPageRoute(builder: (context) => AuthWrapper()),
+                  (route) => false,
+                );
+              },
+              // END OF FIX
+            ),
+          ),
           (route) => false,
         );
+      } else {
+        print('[AuthManager] Navigator not mounted, cannot navigate.');
       }
     } catch (e) {
       print('[AuthManager] Error during forceLogout: $e');
@@ -89,12 +120,15 @@ class AuthManager {
   }
 }
 
+// Background handler for Firebase Messaging - only applicable for Android (and iOS if enabled)
 @pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
-  if (!(kIsWeb || defaultTargetPlatform == TargetPlatform.android)) return;
+  // Only run on Android or iOS where background message handling is supported and useful
+  if (!(defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS)) return;
+
   await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
 
-  final flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin = FlutterLocalNotificationsPlugin();
 
   // Android initialization
   const AndroidInitializationSettings initializationSettingsAndroid =
@@ -108,41 +142,33 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   await flutterLocalNotificationsPlugin.initialize(
     initializationSettings,
+    // Provide a valid callback, even if it's just a print statement for background
+    onDidReceiveNotificationResponse: (response) { print('Background notification tapped (Android/iOS): ${response.payload}'); },
+    onDidReceiveBackgroundNotificationResponse: (response) { print('Background notification tapped (Android/iOS): ${response.payload}'); },
   );
 
-  // Create the notification channel conditionally
-  AndroidNotificationChannel channel;
-  if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-    channel = AndroidNotificationChannel(
+  // Create the notification channel conditionally (Android specific)
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    final AndroidNotificationChannel channel = AndroidNotificationChannel(
       'iris_channel_id',
-      'IRIS Messages',
-      description: 'Notifications for new IRIS chat messages',
+      'iris Messages',
+      description: 'Notifications for new iris chat messages',
       importance: Importance.high,
       playSound: true,
       enableVibration: true,
       vibrationPattern: Int64List.fromList([0, 250, 250, 250]),
       showBadge: true,
     );
-  } else {
-    channel = AndroidNotificationChannel(
-      'iris_channel_id',
-      'IRIS Messages',
-      description: 'Notifications for new IRIS chat messages',
-      importance: Importance.high,
-      playSound: true,
-      enableVibration: true,
-      showBadge: true,
-    );
-  }
 
-  await flutterLocalNotificationsPlugin
-      .resolvePlatformSpecificImplementation<
-          AndroidFlutterLocalNotificationsPlugin>()
-      ?.createNotificationChannel(channel);
+    await flutterLocalNotificationsPlugin
+        .resolvePlatformSpecificImplementation<
+            AndroidFlutterLocalNotificationsPlugin>()
+        ?.createNotificationChannel(channel);
+  }
 
   print("Handling a background message: ${message.messageId}");
 
-  if (message.data['type'] == 'private_message') {
+  if (message.data['type'] == 'private_message' || message.data.containsKey('channel_name')) {
     final prefs = await SharedPreferences.getInstance();
     final pendingMessages = prefs.getStringList('pending_dm_messages') ?? [];
     pendingMessages.add(json.encode(message.data));
@@ -156,11 +182,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
 
   if (title != null && body != null) {
     AndroidNotificationDetails androidPlatformChannelSpecifics;
-    if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+    if (defaultTargetPlatform == TargetPlatform.android) {
       androidPlatformChannelSpecifics = AndroidNotificationDetails(
         'iris_channel_id',
-        'IRIS Messages',
-        channelDescription: 'Notifications for new IRIS chat messages',
+        'iris Messages',
+        channelDescription: 'Notifications for new iris chat messages',
         importance: Importance.high,
         priority: Priority.high,
         playSound: true,
@@ -171,10 +197,11 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
         styleInformation: BigTextStyleInformation(body),
       );
     } else {
+      // For iOS, Android properties might not be directly applicable but harmless.
       androidPlatformChannelSpecifics = AndroidNotificationDetails(
         'iris_channel_id',
-        'IRIS Messages',
-        channelDescription: 'Notifications for new IRIS chat messages',
+        'iris Messages',
+        channelDescription: 'Notifications for new iris chat messages',
         importance: Importance.high,
         priority: Priority.high,
         playSound: true,
@@ -186,7 +213,7 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
     }
 
     await flutterLocalNotificationsPlugin.show(
-      DateTime.now().millisecondsSinceEpoch.remainder(100000),
+      DateTime.now().millisecondsSinceEpoch.remainder(100000), // Unique ID for each notification
       title,
       body,
       NotificationDetails(
@@ -202,14 +229,22 @@ Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   }
 }
 
+// Callback for when a notification is tapped (foreground or background)
 @pragma('vm:entry-point')
 void onDidReceiveNotificationResponse(
     NotificationResponse notificationResponse) async {
+  // Ensure Flutter binding is initialized if this is a background/terminated state launch
   WidgetsFlutterBinding.ensureInitialized();
-  if (kIsWeb || defaultTargetPlatform == TargetPlatform.android) {
+
+  // Firebase app must be initialized for Firebase services
+  if ((kIsWeb || defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) && Firebase.apps.isEmpty) {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   }
-  setupLocator();
+
+  // Setup GetIt locator if it hasn't been already (crucial for background handlers)
+  if (!GetIt.instance.isRegistered<NotificationService>()) {
+    setupLocator();
+  }
 
   final String? payload = notificationResponse.payload;
   if (payload != null) {
@@ -222,49 +257,45 @@ void onDidReceiveNotificationResponse(
   }
 }
 
-// _maybeFingerprintGate function removed
-
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  if (kIsWeb || defaultTargetPlatform == TargetPlatform.android) {
+  // Initialize Firebase only on supported platforms or if already running
+  if ((kIsWeb || defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) && Firebase.apps.isEmpty) {
     await Firebase.initializeApp(options: DefaultFirebaseOptions.currentPlatform);
   }
 
-  setupLocator();
+  setupLocator(); // Register GetIt dependencies
 
-  await getIt<EncryptionService>().initialize();
+  await getIt<EncryptionService>().initialize(); // Initialize encryption service
 
-  if (kIsWeb || defaultTargetPlatform == TargetPlatform.android) {
+  // Initialize notification service only on supported platforms
+  if (kIsWeb || defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) {
     await getIt<NotificationService>().init();
-    try {
-      await FirebaseMessaging.instance.requestPermission();
-      final token = await FirebaseMessaging.instance.getToken();
-      print('[Firebase Messaging] Token: $token');
+    if (defaultTargetPlatform == TargetPlatform.android || defaultTargetPlatform == TargetPlatform.iOS) { // For native platforms
       FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
-    } catch (e) {
-      print('[Firebase Messaging] Error: $e');
     }
   }
 
-  runApp(const IRISApp());
+  runApp(const irisApp());
 }
 
-class IRISApp extends StatelessWidget {
-  const IRISApp({super.key});
+class irisApp extends StatelessWidget {
+  const irisApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'IRIS',
+      title: 'iris',
       navigatorKey: navigatorKey,
       theme: ThemeData.dark().copyWith(
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFF5865F2),
           secondary: Color(0xFF5865F2),
         ),
+        // Add a global scaffoldMessengerKey to allow showing Snackbars from anywhere.
+        // scaffoldMessengerKey: GlobalKey<ScaffoldMessengerState>(),
       ),
-      // The FingerprintGate is removed from here.
       home: AuthWrapper(),
       debugShowCheckedModeBanner: false,
     );
@@ -281,6 +312,7 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   bool _isLoggedIn = false;
   String? _username;
   String? _token;
+  ChatController? _chatControllerInstance; // Hold the instance here
 
   DateTime? _lastBackgroundTime;
 
@@ -288,58 +320,133 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    // Call _checkLoginStatus initially
     _checkLoginStatus();
     _checkForUpdates();
   }
 
   @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+  }
+
+  @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _chatControllerInstance?.dispose();
+    if (getIt.isRegistered<ChatController>()) {
+      getIt.unregister<ChatController>(); // Ensure unregister when wrapper disposes
+    }
     super.dispose();
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) async {
     super.didChangeAppLifecycleState(state);
-    if (state == AppLifecycleState.resumed && _isLoggedIn) {
-      if (_lastBackgroundTime != null &&
-          DateTime.now().difference(_lastBackgroundTime!) >
-              Duration(minutes: 5)) {
-        final isValid = await getIt<ApiService>().validateSession();
+    print("[AuthWrapper] AppLifecycleState changed to: $state");
+
+    if (state == AppLifecycleState.resumed && _isLoggedIn && _chatControllerInstance != null) {
+      print("[AuthWrapper] App resumed, isLoggedIn: $_isLoggedIn");
+      bool needsValidation = _lastBackgroundTime != null &&
+          DateTime.now().difference(_lastBackgroundTime!) > const Duration(minutes: 5);
+
+      if (needsValidation) {
+        print("[AuthWrapper] Session validation required after 5 min+ background.");
+        final isValid = await getIt<ApiService>().validateSession(); // Validate session first
+        if (!mounted) return;
+
         if (!isValid) {
+          print("[AuthWrapper] Session validation failed. Forcing logout.");
           AuthManager.forceLogout(showExpiredMessage: true);
+          return; // IMPORTANT: Exit here if validation fails
+        } else {
+          print("[AuthWrapper] Session is still valid.");
+          // ONLY call handleAppResumed if session is confirmed valid
+          _chatControllerInstance?.handleAppResumed();
         }
+      } else {
+        // If no validation needed, just call handleAppResumed
+        _chatControllerInstance?.handleAppResumed();
       }
-      _lastBackgroundTime = null;
     } else if (state == AppLifecycleState.paused) {
+      print("[AuthWrapper] App paused.");
       _lastBackgroundTime = DateTime.now();
+      _chatControllerInstance?.handleAppPaused();
     }
   }
 
+  // --- START OF FIX ---
   Future<void> _checkLoginStatus() async {
+    print("[AuthWrapper] Checking login status...");
+    if (!mounted) return;
+    setState(() {
+      _isLoading = true;
+    });
+
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('auth_token');
     final username = prefs.getString('username');
 
-    if (mounted) {
-      if (token != null && username != null) {
-        // ---> FIX: Set the token on the singleton ApiService <---
-        GetIt.instance<ApiService>().setToken(token);
+    if (token != null && username != null) {
+      print("[AuthWrapper] Found token. Validating session...");
+      GetIt.instance<ApiService>().setToken(token);
+      final isValid = await GetIt.instance<ApiService>().validateSession();
+      if (!mounted) return;
 
-        setState(() {
-          _isLoggedIn = true;
-          _isLoading = false;
-          _username = username;
-          _token = token;
-        });
+      if (isValid) {
+        try {
+          // Create and register ChatController if it doesn't exist.
+          if (!getIt.isRegistered<ChatController>()) {
+            _chatControllerInstance = ChatController(
+              username: username,
+              token: token,
+              chatState: getIt<ChatState>(),
+              isAppInBackground: () =>
+                  WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed,
+            );
+            getIt.registerSingleton<ChatController>(_chatControllerInstance!);
+          } else {
+            _chatControllerInstance = getIt<ChatController>();
+          }
+
+          // Await the initialization. If it fails, the catch block will handle it.
+          await _chatControllerInstance!.initialize();
+
+          // If initialization is successful, THEN update the state to show the main UI.
+          if (!mounted) return;
+          setState(() {
+            _isLoggedIn = true;
+            _isLoading = false;
+            _username = username;
+            _token = token;
+          });
+        } catch (e) {
+          print("[AuthWrapper] Initialization failed, forcing logout: $e");
+          if (mounted) {
+            AuthManager.forceLogout(showExpiredMessage: true);
+          }
+        }
       } else {
+        print("[AuthWrapper] Session expired or invalid. Forcing logout.");
+        if (mounted) {
+          AuthManager.forceLogout(showExpiredMessage: true);
+        }
+      }
+    } else {
+      print("[AuthWrapper] No stored token. Displaying LoginScreen.");
+      if (mounted) {
         setState(() {
           _isLoggedIn = false;
           _isLoading = false;
         });
+        if (getIt.isRegistered<ChatController>()) {
+          getIt<ChatController>().dispose();
+          getIt.unregister<ChatController>();
+        }
       }
     }
   }
+  // --- END OF FIX ---
 
   Future<void> _checkForUpdates() async {
     await Future.delayed(const Duration(seconds: 2));
@@ -359,10 +466,25 @@ class _AuthWrapperState extends State<AuthWrapper> with WidgetsBindingObserver {
       );
     }
 
-    if (_isLoggedIn && _username != null && _token != null) {
-      return IrisLayout(username: _username!, token: _token!);
+    // IMPORTANT: Only render irisLayout if ChatController is guaranteed to be initialized and set.
+    if (_isLoggedIn && _username != null && _token != null && _chatControllerInstance != null) {
+      return irisLayout(
+        username: _username!,
+        token: _token!,
+        chatController: _chatControllerInstance!,
+      );
     } else {
-      return LoginScreen();
+      // When not logged in, pass the onLoginSuccess callback to LoginScreen.
+      // This callback will trigger a re-check of login status by AuthWrapper.
+      return LoginScreen(
+        onLoginSuccess: () {
+          // Instead of _checkLoginStatus directly, let the Navigator pop
+          // This will cause AuthWrapper to rebuild and re-evaluate its state.
+          // The pop() is handled inside AuthManager.forceLogout if session expired,
+          // otherwise it would be a normal Navigator.pop from LoginScreen upon success.
+          _checkLoginStatus(); // Re-trigger the logic to switch to MainLayout
+        },
+      );
     }
   }
 }

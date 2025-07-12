@@ -32,6 +32,7 @@ class ChannelTopic extends StatelessWidget {
               child: const Text('Save'),
               onPressed: () {
                 final newTopic = controller.text.trim();
+                // Pass the current selected conversation target, viewModel will extract networkId
                 viewModel.updateChannelTopic(newTopic);
                 Navigator.pop(context);
               },
@@ -45,9 +46,18 @@ class ChannelTopic extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final viewModel = Provider.of<MainLayoutViewModel>(context);
+    // Parse the selected conversation target to get the actual channel name
+    final selectedIdentifierParts = viewModel.selectedConversationTarget.split('/');
+    final selectedChannelName = selectedIdentifierParts.length > 1 ? selectedIdentifierParts.last : '';
+
     final channel = viewModel.chatState.channels.firstWhere(
-      (c) => c.name == viewModel.selectedConversationTarget,
-      orElse: () => Channel(name: '', members: []),
+      // Match by raw channel name
+      (c) => c.name.toLowerCase() == selectedChannelName.toLowerCase(),
+      orElse: () => Channel(
+        networkId: 0, // Provide a default networkId for the dummy Channel
+        name: '',
+        members: [],
+      ),
     );
 
     final isOperator = viewModel.members.any((m) =>

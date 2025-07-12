@@ -12,6 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 	"iris-gateway/events"
 	"iris-gateway/session"
+	"iris-gateway/irc" // Used for adding messages to history
 )
 
 var upgrader = websocket.Upgrader{
@@ -41,14 +42,37 @@ func WebSocketHandler(c *gin.Context) {
 	sess.AddWebSocket(conn)
 	log.Printf("[WS] WebSocket connected for user %s (token: %s). Total devices: %d", sess.Username, token, len(sess.WebSockets))
 
-	if sess.IRC != nil && sess.IsAway {
+	// If the user has reconnected and was away, send BACK to all connected networks
+	if sess.IsAway {
 		sess.SetBack()
-		log.Printf("[IRC] User %s reconnected, sent BACK command.", sess.Username)
+		log.Printf("[IRC] User %s reconnected, sent BACK command to all networks.", sess.Username)
 	}
 
-	sess.Mutex.RLock()
+	// Send initial state including all configured networks and their channels/members
 	initialStatePayload := gin.H{
-		"channels": sess.Channels,
+		"networks": make([]map[string]interface{}, 0),
+	}
+	sess.Mutex.RLock()
+	for _, netConfig := range sess.Networks {
+		netConfig.Mutex.RLock() // Lock the network config for reading
+		networkInfo := map[string]interface{}{
+			"id":             netConfig.ID,
+			"network_name":   netConfig.NetworkName,
+			"is_connected":   netConfig.IsConnected,
+			"channels":       make([]map[string]interface{}, 0),
+		}
+		for _, ch := range netConfig.Channels {
+			ch.Mutex.RLock() // Lock the channel state for reading
+			networkInfo["channels"] = append(networkInfo["channels"].([]map[string]interface{}), map[string]interface{}{
+				"name":        ch.Name,
+				"topic":       ch.Topic,
+				"members":     ch.Members,
+				"last_update": ch.LastUpdate,
+			})
+			ch.Mutex.RUnlock() // Unlock channel state
+		}
+		netConfig.Mutex.RUnlock() // Unlock network config
+		initialStatePayload["networks"] = append(initialStatePayload["networks"].([]map[string]interface{}), networkInfo)
 	}
 	sess.Mutex.RUnlock()
 
@@ -69,23 +93,15 @@ func WebSocketHandler(c *gin.Context) {
 
 	go func() {
 		defer func() {
-			// On disconnect, just remove the specific websocket from the session's active list.
 			sess.RemoveWebSocket(conn)
 			conn.Close()
 			log.Printf("[WS] WebSocket disconnected for user %s (token: %s). Remaining devices: %d\n", sess.Username, token, len(sess.WebSockets))
 
-			// --- THE FIX ---
-			// The aggressive `session.UnmapToken(token)` call has been removed.
-			// A WebSocket disconnect should NOT invalidate the token. This allows
-			// the client to reconnect seamlessly after backgrounding.
-
-			// Use a small delay to prevent rapid away/back toggling on reconnects
-			time.Sleep(2 * time.Second)
+			time.Sleep(2 * time.Second) // Small delay to prevent rapid away/back toggling
 
 			// If no more WebSockets are connected for this session, set the user as away.
-			// This check is still valid and provides the desired BNC-like behavior.
-			if !sess.IsActive() && sess.IRC != nil {
-				sess.SetAway("IRSI")
+			if !sess.IsActive() {
+				sess.SetAway("Client disconnected.") // Will send AWAY to all connected IRC networks
 				log.Printf("[IRC] Sent AWAY command for %s (no more clients connected)", sess.Username)
 			}
 		}()
@@ -112,18 +128,39 @@ func WebSocketHandler(c *gin.Context) {
 			switch clientMsg.Type {
 			case "message":
 				if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
+					networkIDFloat, idOk := payload["network_id"].(float64) // JSON numbers are float64
 					channelName, channelOk := payload["channel_name"].(string)
 					text, textOk := payload["text"].(string)
 
-					if channelOk && textOk {
+					if idOk && channelOk && textOk {
+						networkID := int(networkIDFloat)
+						netConfig, foundNet := sess.GetNetwork(networkID)
+						if !foundNet || netConfig.IRC == nil || !netConfig.IsConnected {
+							log.Printf("[WS] Cannot send message: Network %d not connected or found for user %s.", networkID, sess.Username)
+							// Optionally, send an error back to the client
+							sess.Broadcast("error", map[string]string{"message": fmt.Sprintf("Network %s is not connected.", netConfig.NetworkName), "network_id": fmt.Sprintf("%d", networkID)})
+							continue
+						}
+
 						lines := strings.Split(text, "\n")
 						for _, line := range lines {
 							ircLine := line
 							if len(ircLine) == 0 {
 								ircLine = " "
 							}
-							log.Printf("[WS] Sending IRC line to channel %s from %s: '%s'", channelName, sess.Username, ircLine)
-							sess.IRC.Privmsg(channelName, ircLine)
+							log.Printf("[WS] Sending IRC line to channel %s on network %s from %s: '%s'", channelName, netConfig.NetworkName, sess.Username, ircLine)
+							netConfig.IRC.Privmsg(channelName, ircLine)
+
+							// Add message to history
+							msgToStore := irc.Message{
+								NetworkID: networkID,
+								Channel:   channelName,
+								Sender:    netConfig.Nickname, // Use the user's nickname for this network
+								Text:      ircLine,
+								Timestamp: time.Now(),
+							}
+							irc.AddMessageToHistory(networkID, channelName, msgToStore)
+
 							time.Sleep(100 * time.Millisecond)
 						}
 					} else {
@@ -135,20 +172,27 @@ func WebSocketHandler(c *gin.Context) {
 
 			case "topic_change":
 				if payload, ok := clientMsg.Payload.(map[string]interface{}); ok {
+					networkIDFloat, idOk := payload["network_id"].(float64)
 					channel, chanOk := payload["channel"].(string)
 					newTopic, topicOk := payload["topic"].(string)
 
-					if chanOk && topicOk {
-						if sess.IRC != nil {
-							log.Printf("[WS] User %s sending TOPIC command for channel %s", sess.Username, channel)
-							sess.IRC.SendRaw(fmt.Sprintf("TOPIC %s :%s", channel, newTopic))
+					if idOk && chanOk && topicOk {
+						networkID := int(networkIDFloat)
+						netConfig, foundNet := sess.GetNetwork(networkID)
+						if !foundNet || netConfig.IRC == nil || !netConfig.IsConnected {
+							log.Printf("[WS] Cannot change topic: Network %d not connected or found for user %s.", networkID, sess.Username)
+							sess.Broadcast("error", map[string]string{"message": fmt.Sprintf("Network %s is not connected.", netConfig.NetworkName), "network_id": fmt.Sprintf("%d", networkID)})
+							continue
 						}
+						log.Printf("[WS] User %s sending TOPIC command for channel %s on network %s", sess.Username, channel, netConfig.NetworkName)
+						netConfig.IRC.SendRaw(fmt.Sprintf("TOPIC %s :%s", channel, newTopic))
 					} else {
 						log.Printf("[WS] Received malformed 'topic_change' payload from %s: %v", sess.Username, payload)
 					}
 				} else {
 					log.Printf("[WS] Invalid payload structure in 'topic_change' from %s", sess.Username)
 				}
+				// Add more client-to-server commands here as needed (e.g., /away, /nick, /quit)
 
 			default:
 				log.Printf("[WS] Received unhandled event type '%s' from %s", clientMsg.Type, sess.Username)

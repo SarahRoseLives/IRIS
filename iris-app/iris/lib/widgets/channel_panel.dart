@@ -40,7 +40,7 @@ class ChannelPanel extends StatelessWidget {
                       fontSize: 22),
                 ),
               ),
-              Expanded( // FIX: Removed stray '_'
+              Expanded( // Removed stray '_'
                 flex: 1,
                 child: Text(
                   wsStatus.name,
@@ -78,7 +78,7 @@ class ChannelPanel extends StatelessWidget {
                   return ListTile(
                     selected: isSelected,
                     selectedTileColor: const Color(0xFF5865F2),
-                    title: Text(channel, // FIX: Removed stray '_'
+                    title: Text(channel, // Removed stray '_'
                         style: TextStyle(
                           color: isSelected ? Colors.white : Colors.white70,
                           fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,

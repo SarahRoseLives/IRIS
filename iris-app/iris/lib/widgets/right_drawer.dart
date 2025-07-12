@@ -1,28 +1,29 @@
-import 'package:flutter/foundation.dart'; // For kIsWeb
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // For kIsWeb
 import 'package:provider/provider.dart';
-
 import '../models/channel_member.dart';
 import '../models/user_status.dart';
+import 'user_avatar.dart';
 import '../utils/irc_helpers.dart';
 import '../viewmodels/main_layout_viewmodel.dart';
-import 'user_avatar.dart';
-import '../models/channel.dart';
 
 class RightDrawer extends StatelessWidget {
   final List<ChannelMember> members;
   final Map<String, String> userAvatars;
   final VoidCallback onCloseDrawer;
-  final bool isDrawer;
+  final String channelName;
+  final String channelTopic;
 
   const RightDrawer({
     super.key,
     required this.members,
     required this.userAvatars,
     required this.onCloseDrawer,
-    this.isDrawer = true,
+    required this.channelName,
+    required this.channelTopic,
   });
 
+  // Grouping logic for IRC roles
   static const _roleOrder = [
     '~', // Owner
     '&', // Admin
@@ -41,6 +42,17 @@ class RightDrawer extends StatelessWidget {
     '': "Members",
   };
 
+  // Colors for role nicks
+  static const _roleNickColors = {
+    '~': Color(0xFFB388FF), // purple
+    '&': Color(0xFF00E676), // green
+    '@': Color(0xFFFFD600), // yellow
+    '%': Color(0xFF29B6F6), // blue
+    '+': Color(0xFFFF8A65), // orange
+    '': Colors.white,
+  };
+
+  // Used to group members by their IRC role prefix.
   Map<String, List<ChannelMember>> _groupByRole(List<ChannelMember> users) {
     final map = <String, List<ChannelMember>>{};
     for (final member in users) {
@@ -50,8 +62,26 @@ class RightDrawer extends StatelessWidget {
     return map;
   }
 
+  // Member options bottom sheet with working DM
   void _showMemberOptions(BuildContext context, String username) {
     final viewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
+
+    // Get the current network name from the selected conversation target
+    final currentConversationTarget = viewModel.selectedConversationTarget;
+    final parts = currentConversationTarget.split('/');
+    String networkName = '';
+    if (parts.isNotEmpty) {
+      networkName = parts[0];
+    }
+
+    if (networkName.isEmpty || networkName == 'No channels') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Cannot start DM: No active network selected.")),
+      );
+      Navigator.pop(context);
+      return;
+    }
+
     showModalBottomSheet(
       context: context,
       backgroundColor: const Color(0xFF313338),
@@ -62,11 +92,10 @@ class RightDrawer extends StatelessWidget {
             children: [
               ListTile(
                 leading: const Icon(Icons.message, color: Colors.white),
-                title: const Text('Send Direct Message',
-                    style: TextStyle(color: Colors.white)),
+                title: const Text('Send Direct Message', style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
-                  viewModel.startNewDM(username);
+                  viewModel.startNewDM(networkName, username);
                 },
               ),
               ListTile(
@@ -81,234 +110,142 @@ class RightDrawer extends StatelessWidget {
     );
   }
 
-  Widget buildStyledMemberTile(BuildContext context, ChannelMember member, Map<String, String> userAvatars) {
-    final avatarUrl = userAvatars[member.nick];
-    final status = member.isAway ? UserStatus.away : UserStatus.online;
-    final color = getColorForPrefix(member.prefix);
-
+  Widget _buildSectionTitle(String label) {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-      child: Material(
-        color: const Color(0xFF23262B),
-        elevation: 0,
-        borderRadius: BorderRadius.circular(16),
-        child: InkWell(
-          borderRadius: BorderRadius.circular(16),
-          onLongPress: () => _showMemberOptions(context, member.nick),
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            child: Row(
-              children: [
-                UserAvatar(
-                  username: member.nick,
-                  avatarUrl: avatarUrl,
-                  status: status,
-                  radius: 24,
-                  showStatusDot: true,
-                ),
-                const SizedBox(width: 14),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Expanded(
-                            child: Text(
-                              member.nick,
-                              style: TextStyle(
-                                color: color,
-                                fontWeight: member.prefix.isNotEmpty ? FontWeight.bold : FontWeight.normal,
-                                fontSize: 16,
-                                letterSpacing: 0.1,
-                              ),
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                          ),
-                          if (member.prefix.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.only(left: 6),
-                              child: Icon(
-                                getIconForPrefix(member.prefix),
-                                color: color,
-                                size: 18,
-                              ),
-                            ),
-                        ],
-                      ),
-                      if (member.isAway)
-                        const Padding(
-                          padding: EdgeInsets.only(top: 2.0),
-                          child: Text(
-                            "away",
-                            style: TextStyle(color: Colors.amber, fontSize: 13),
-                          ),
-                        ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-          ),
+      padding: const EdgeInsets.fromLTRB(24, 24, 0, 6),
+      child: Text(
+        label,
+        style: const TextStyle(
+          color: Colors.white60,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 0.2,
+          fontSize: 15,
         ),
       ),
     );
   }
 
-  static Widget _circleHeaderButton(IconData icon, String tooltip) {
-    return Tooltip(
-      message: tooltip,
+  // Each member row, styled as in screenshot
+  Widget _buildMemberTile(BuildContext context, ChannelMember member, {bool isOwner = false, bool isOperator = false}) {
+    final avatarUrl = userAvatars[member.nick];
+    final status = member.isAway ? UserStatus.away : UserStatus.online;
+    final roleColor = _roleNickColors[member.prefix] ?? Colors.white;
+    final displayName = member.nick;
+    final nickTextStyle = TextStyle(
+      color: roleColor,
+      fontWeight: FontWeight.w700,
+      fontSize: 17,
+      letterSpacing: 0.1,
+    );
+    final roleBadge = isOwner
+        ? Icon(Icons.stars, color: Color(0xFFB388FF), size: 20)
+        : isOperator
+            ? Icon(Icons.shield, color: Color(0xFFFFD600), size: 20)
+            : null;
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(16),
+      onLongPress: () => _showMemberOptions(context, member.nick),
       child: Container(
-        width: 48,
-        height: 48,
+        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
         decoration: BoxDecoration(
-          shape: BoxShape.circle,
-          color: const Color(0xFF23262B),
-          border: Border.all(color: Colors.white10, width: 1.5),
+          color: const Color(0xFF232428),
+          borderRadius: BorderRadius.circular(16),
         ),
-        child: Icon(icon, color: Colors.white70, size: 26),
+        child: ListTile(
+          leading: UserAvatar(
+            username: member.nick,
+            avatarUrl: avatarUrl,
+            status: status,
+            radius: 24,
+          ),
+          title: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  displayName,
+                  style: nickTextStyle,
+                  overflow: TextOverflow.ellipsis,
+                ),
+              ),
+              if (roleBadge != null) ...[
+                const SizedBox(width: 6),
+                roleBadge,
+              ],
+            ],
+          ),
+          dense: true,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 8),
+          visualDensity: VisualDensity.compact,
+        ),
+      ),
+    );
+  }
+
+  // Grouped member sections
+  List<Widget> _buildMemberSections(BuildContext context, Map<String, List<ChannelMember>> groups) {
+    final widgets = <Widget>[];
+    for (final prefix in _roleOrder) {
+      final group = groups[prefix];
+      if (group != null && group.isNotEmpty) {
+        widgets.add(_buildSectionTitle(_roleLabels[prefix]!));
+        group.sort((a, b) => a.nick.toLowerCase().compareTo(b.nick.toLowerCase()));
+        widgets.addAll(group.map((member) {
+          final isOwner = prefix == '~';
+          final isOperator = prefix == '@';
+          return _buildMemberTile(context, member, isOwner: isOwner, isOperator: isOperator);
+        }));
+      }
+    }
+    return widgets;
+  }
+
+  // Placeholder action buttons row
+  Widget _buildButtonsRow() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          _buildCircleButton(icon: Icons.search),
+          const SizedBox(width: 22),
+          _buildCircleButton(icon: Icons.forum),
+          const SizedBox(width: 22),
+          _buildCircleButton(icon: Icons.settings),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCircleButton({required IconData icon}) {
+    return Material(
+      color: const Color(0xFF232428),
+      shape: const CircleBorder(),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(30),
+        onTap: () {}, // TODO: implement action
+        child: Padding(
+          padding: const EdgeInsets.all(12),
+          child: Icon(icon, color: Colors.white, size: 28),
+        ),
       ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
-    final viewModel = Provider.of<MainLayoutViewModel>(context, listen: false);
-    final channelName = viewModel.selectedConversationTarget;
-    final channel = viewModel.chatState.channels
-        .firstWhere((c) => c.name == channelName, orElse: () => Channel(name: '', members: []));
-    final channelTopic = channel.topic ?? '';
-
-    // Group members
+    // Split members into online and away for each role
     final onlineMembers = members.where((m) => !m.isAway).toList();
     final awayMembers = members.where((m) => m.isAway).toList();
+
     final onlineGroups = _groupByRole(onlineMembers);
     final awayGroups = _groupByRole(awayMembers);
-
-    final panelHeader = Padding(
-      padding: const EdgeInsets.fromLTRB(24, 24, 24, 0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          Center(
-            child: Text(
-              channelName,
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w900,
-                fontSize: 22,
-                letterSpacing: 0.2,
-              ),
-              textAlign: TextAlign.center,
-            ),
-          ),
-          const SizedBox(height: 8),
-          if (channelTopic.isNotEmpty)
-            Center(
-              child: Text(
-                channelTopic,
-                style: const TextStyle(
-                  color: Colors.white70,
-                  fontSize: 15,
-                  fontWeight: FontWeight.normal,
-                ),
-                textAlign: TextAlign.center,
-              ),
-            ),
-          if (channelTopic.isNotEmpty)
-            const SizedBox(height: 22),
-          if (channelTopic.isEmpty)
-            const SizedBox(height: 30),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              _circleHeaderButton(Icons.search, "Search"),
-              const SizedBox(width: 16),
-              _circleHeaderButton(Icons.forum_outlined, "Threads"),
-              const SizedBox(width: 16),
-              _circleHeaderButton(Icons.notifications_off_outlined, "Mute"),
-              const SizedBox(width: 16),
-              _circleHeaderButton(Icons.settings, "Settings"),
-            ],
-          ),
-          const SizedBox(height: 12),
-        ],
-      ),
-    );
-
-    List<Widget> buildSection(Map<String, List<ChannelMember>> groups, {String? sectionLabel}) {
-      final widgets = <Widget>[];
-      for (final prefix in _roleOrder) {
-        final group = groups[prefix];
-        if (group != null && group.isNotEmpty) {
-          widgets.add(Padding(
-            padding: const EdgeInsets.fromLTRB(20, 20, 0, 4),
-            child: Text(
-              sectionLabel == null
-                  ? _roleLabels[prefix]!
-                  : "$sectionLabel: ${_roleLabels[prefix]}",
-              style: const TextStyle(
-                  color: Colors.white70,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14),
-            ),
-          ));
-          group.sort((a, b) => a.nick.toLowerCase().compareTo(b.nick.toLowerCase()));
-          widgets.addAll(group.map((member) => buildStyledMemberTile(context, member, userAvatars)));
-        }
-      }
-      return widgets;
-    }
-
-    final panelContent = Container(
-      color: const Color(0xFF2B2D31),
-      child: SafeArea(
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            panelHeader,
-            const Divider(color: Colors.white24, height: 1, thickness: 0.5),
-            Expanded(
-              child: members.isEmpty
-                  ? const Center(
-                      child: Text(
-                        "No members",
-                        style: TextStyle(color: Colors.white54),
-                      ),
-                    )
-                  : ListView(
-                      padding: const EdgeInsets.only(top: 12, bottom: 0),
-                      children: [
-                        ...buildSection(onlineGroups),
-                        if (awayMembers.isNotEmpty) ...[
-                          Padding(
-                            padding: const EdgeInsets.fromLTRB(20, 26, 0, 4),
-                            child: Text(
-                              "Away",
-                              style: TextStyle(
-                                  color: Colors.white60,
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 14),
-                            ),
-                          ),
-                          ...buildSection(awayGroups, sectionLabel: "Away"),
-                        ]
-                      ],
-                    ),
-            ),
-          ],
-        ),
-      ),
-    );
-
-    if (!isDrawer) {
-      return panelContent;
-    }
 
     return Material(
       color: Colors.transparent,
       child: Row(
         children: [
+          // Always show the close handle, both web and mobile!
           GestureDetector(
             onTap: onCloseDrawer,
             child: Container(
@@ -323,7 +260,79 @@ class RightDrawer extends StatelessWidget {
               ),
             ),
           ),
-          Expanded(child: panelContent),
+          Expanded(
+            child: Container(
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  colors: [Color(0xFF232428), Color(0xFF2B2D31)],
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                ),
+              ),
+              child: SafeArea(
+                child: Column(
+                  children: [
+                    // Channel name and topic centered at the top
+                    Padding(
+                      padding: const EdgeInsets.only(top: 24, bottom: 6),
+                      child: Column(
+                        children: [
+                          Text(
+                            channelName.startsWith('#') ? channelName : '#$channelName',
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w900,
+                              fontSize: 28,
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          Text(
+                            channelTopic,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              color: Colors.white70,
+                              fontWeight: FontWeight.w400,
+                              fontSize: 16,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _buildButtonsRow(),
+                    Expanded(
+                      child: Container(
+                        decoration: BoxDecoration(
+                          color: Colors.black.withOpacity(0.02),
+                          borderRadius: const BorderRadius.only(
+                            topLeft: Radius.circular(24),
+                            topRight: Radius.circular(24),
+                          ),
+                        ),
+                        child: members.isEmpty
+                            ? const Center(
+                                child: Text(
+                                  "No members",
+                                  style: TextStyle(color: Colors.white54),
+                                ),
+                              )
+                            : ListView(
+                                padding: const EdgeInsets.only(top: 8, bottom: 16),
+                                children: [
+                                  ..._buildMemberSections(context, onlineGroups),
+                                  if (awayMembers.isNotEmpty) ...[
+                                    _buildSectionTitle("Away"),
+                                    ..._buildMemberSections(context, awayGroups),
+                                  ]
+                                ],
+                              ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ],
       ),
     );

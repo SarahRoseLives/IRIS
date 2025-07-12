@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:iris/main.dart'; // Import main.dart to access AuthManager
 import 'package:iris/services/update_service.dart';
-import 'package:iris/viewmodels/chat_state.dart';
+import 'package:iris/controllers/chat_state.dart';
 import 'package:iris/viewmodels/main_layout_viewmodel.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -439,7 +439,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
               borderRadius: BorderRadius.circular(10),
               borderSide: BorderSide.none,
             ),
-             contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
+              contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 12.0),
           ),
         ),
         const SizedBox(height: 12),

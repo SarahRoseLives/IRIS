@@ -10,7 +10,7 @@ import 'package:flutter/foundation.dart'
 
 class UpdateService {
   static const String _githubReleasesUrl =
-      'https://api.github.com/repos/TransIRC/TransIRIS/releases/latest';
+      'https://api.github.com/repos/TransIRC/Transorbit/releases/latest';
   static const String _lastUpdateCheckKey = 'last_update_check';
   static const Duration _checkInterval = Duration(days: 1); // Check once per day
 
@@ -91,7 +91,7 @@ class UpdateService {
         return AlertDialog(
           title: const Text('Update Available'),
           content: Text(
-              'A new version ($newVersion) of IRIS is available. Would you like to download it now?'),
+              'A new version ($newVersion) of iris is available. Would you like to download it now?'),
           actions: <Widget>[
             TextButton(
               child: const Text('Later'),

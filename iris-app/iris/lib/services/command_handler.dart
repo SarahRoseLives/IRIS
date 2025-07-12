@@ -2,7 +2,7 @@ import 'package:iris/commands/join_command.dart';
 import 'package:iris/commands/part_command.dart';
 import 'package:iris/commands/slash_command.dart';
 import 'package:iris/models/irc_role.dart';
-import 'package:iris/viewmodels/chat_controller.dart';
+import 'package:iris/controllers/chat_controller.dart';
 import 'package:iris/commands/command_context.dart';
 
 class CommandHandler {
@@ -38,8 +38,12 @@ class CommandHandler {
     final chatState = controller.chatState;
     final currentChannel = chatState.selectedConversationTarget;
 
+    // Get the networkId for the current conversation target using the selectedChannel getter
+    final currentNetworkId = chatState.selectedChannel?.networkId ?? 0;
+
     if (command == null) {
       chatState.addSystemMessage(
+        currentNetworkId, // Pass networkId
         currentChannel,
         'Unknown command: /$commandName',
       );
@@ -59,6 +63,7 @@ class CommandHandler {
       await command.execute(context);
     } else {
       chatState.addSystemMessage(
+        currentNetworkId, // Pass networkId
         currentChannel,
         "You do not have permission to use the '/$commandName' command.",
       );

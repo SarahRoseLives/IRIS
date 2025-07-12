@@ -5,4 +5,14 @@ class NotificationService {
   Future<String?> getFCMToken() async => null;
   void showFlutterNotification(dynamic message) {}
   void handleNotificationTap(Map<String, dynamic> data) {}
+
+  /// Stub for onAppResumed
+  void onAppResumed() {
+    // No operation in stub.
+  }
+
+  /// Stub for onAppPaused
+  void onAppPaused() {
+    // No operation in stub.
+  }
 }

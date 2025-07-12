@@ -62,6 +62,18 @@ class NotificationService {
     }
   }
 
+  /// Called when the app is resumed from background/foregrounded.
+  void onAppResumed() {
+    print('[NotificationService] App resumed. No-op by default.');
+    // You can refresh notification state here if needed.
+  }
+
+  /// Called when the app is paused/backgrounded.
+  void onAppPaused() {
+    print('[NotificationService] App paused. No-op by default.');
+    // You can pause or clean up notifications here if needed.
+  }
+
   /// Sets up the channels and settings for flutter_local_notifications.
   Future<void> setupLocalNotifications() async {
     if (!_isSupported || _flutterLocalNotificationsPlugin == null) return;
@@ -82,8 +94,8 @@ class NotificationService {
 
     final AndroidNotificationChannel channel = AndroidNotificationChannel(
       'iris_channel_id', // id
-      'IRIS Messages', // title
-      description: 'Notifications for new IRIS chat messages', // description
+      'iris Messages', // title
+      description: 'Notifications for new iris chat messages', // description
       importance: Importance.high, // Changed from max to high for better compatibility
       playSound: true,
       // sound: RawResourceAndroidNotificationSound('notification'), // REMOVED
@@ -138,8 +150,8 @@ class NotificationService {
       NotificationDetails(
         android: AndroidNotificationDetails(
           'iris_channel_id',
-          'IRIS Messages',
-          channelDescription: 'Notifications for new IRIS chat messages',
+          'iris Messages',
+          channelDescription: 'Notifications for new iris chat messages',
           importance: Importance.high,
           priority: Priority.high,
           color: const Color(0xFF5865F2),

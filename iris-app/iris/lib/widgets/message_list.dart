@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:iris/viewmodels/chat_state.dart';
+import 'package:iris/controllers/chat_state.dart'; // Corrected import path
 import 'package:url_launcher/url_launcher.dart';
 import '../models/channel.dart';
 import '../models/encryption_session.dart';
@@ -50,7 +50,8 @@ class MessageList extends StatelessWidget {
     final Map<String, ChannelMember> memberMap = {
       for (final ChannelMember m in members) m.nick.toLowerCase(): m
     };
-    final isDm = viewModel.selectedConversationTarget.startsWith('@');
+    // Correctly check if selected target is a DM
+    final isDm = viewModel.selectedConversationTarget.split('/').last.startsWith('@');
     final Set<String> blockedUsers = viewModel.blockedUsers;
     final Set<String> hiddenMessageIds = viewModel.hiddenMessageIds;
 
@@ -276,8 +277,8 @@ class MessageList extends StatelessWidget {
             children: [
               ListTile(
                 leading: const Icon(Icons.copy, color: Colors.white),
-                title: const Text('Copy Text',
-                    style: TextStyle(color: Colors.white)),
+                title:
+                    const Text('Copy Text', style: TextStyle(color: Colors.white)),
                 onTap: () {
                   Navigator.pop(context);
                   Clipboard.setData(ClipboardData(text: message.content));
@@ -290,11 +291,20 @@ class MessageList extends StatelessWidget {
               if (!isDm)
                 ListTile(
                   leading: const Icon(Icons.message, color: Colors.white),
-                  title: const Text('DM User',
-                      style: TextStyle(color: Colors.white)),
+                  title:
+                      const Text('DM User', style: TextStyle(color: Colors.white)),
                   onTap: () {
                     Navigator.pop(context);
-                    viewModel.startNewDM(message.from);
+                    // Find the network name for the currently selected channel
+                    final selectedIdentifier = viewModel.selectedConversationTarget;
+                    final parts = selectedIdentifier.split('/');
+                    if (parts.length >= 2) {
+                      final networkName = parts[0];
+                      viewModel.startNewDM(networkName, message.from); // Pass network name
+                    } else {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text("Cannot start DM: Invalid current channel context.")));
+                    }
                   },
                 ),
               if (!alreadyHidden)
@@ -394,7 +404,7 @@ class MessageList extends StatelessWidget {
               child: const Text('Remove', style: TextStyle(color: Colors.red)),
               onPressed: () {
                 Navigator.pop(context);
-                viewModel.removeDmMessage(message);
+                viewModel.removeDmMessage(message.networkId, message); // Pass networkId
               },
             ),
           ],
@@ -406,7 +416,7 @@ class MessageList extends StatelessWidget {
   Widget _buildAvatar(String from) {
     final avatarUrl = userAvatars[from];
     final initial = (from.isNotEmpty) ? from[0].toUpperCase() : "?";
-    final hasAvatar = avatarUrl != null && avatarUrl.isNotEmpty;
+    final hasAvatar = avatarUrl != null && avatarUrl!.isNotEmpty;
     final fallbackBg = const Color(0xFF5865F2);
 
     return CircleAvatar(

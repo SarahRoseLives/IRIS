@@ -38,6 +38,9 @@ class NotificationService {
     final fcmToken = await _firebaseMessaging.getToken();
     if (fcmToken != null) {
       print("[NotificationService] FCM Token: $fcmToken");
+      // Register the FCM token with your backend API
+      final apiService = GetIt.instance<ApiService>();
+      await apiService.registerFCMToken(fcmToken);
     }
   }
 
@@ -89,8 +92,8 @@ class NotificationService {
         NotificationDetails(
           android: AndroidNotificationDetails(
             'iris_channel_id',
-            'IRIS Messages',
-            channelDescription: 'Notifications for new IRIS chat messages',
+            'iris Messages',
+            channelDescription: 'Notifications for new iris chat messages',
             icon: '@mipmap/ic_launcher',
             importance: Importance.max,
             priority: Priority.high,

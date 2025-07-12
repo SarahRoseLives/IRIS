@@ -1,4 +1,4 @@
-import 'package:iris/viewmodels/chat_controller.dart';
+import 'package:iris/controllers/chat_controller.dart';
 import '../models/irc_role.dart';
 
 class CommandContext {

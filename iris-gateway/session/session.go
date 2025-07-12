@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 	ircevent "github.com/thoj/go-ircevent"
 	"iris-gateway/events"
+	"fmt" // Add fmt import here
 )
 
 type ChannelMember struct {
@@ -22,31 +24,63 @@ type ChannelState struct {
 	Topic      string          `json:"topic"`
 	Members    []ChannelMember `json:"members"`
 	LastUpdate time.Time       `json:"last_update"`
-	Mutex      sync.Mutex      `json:"-"`
+	Mutex      sync.RWMutex    `json:"-"` // Changed to RWMutex
+}
+
+// UserNetwork represents a single IRC network configuration for a user.
+type UserNetwork struct {
+	ID              int                  `json:"id"` // Unique ID for the network config
+	UserID          int                  `json:"user_id"`
+	NetworkName     string               `json:"network_name"`
+	Hostname        string               `json:"hostname"`
+	Port            int                  `json:"port"`
+	UseSSL          bool                 `json:"use_ssl"`
+	ServerPassword  string               `json:"server_password,omitempty"` // Omitted in JSON for security
+	AutoReconnect   bool                 `json:"auto_reconnect"`
+	Modules         []string             `json:"modules"`          // e.g., ["sasl", "nickserv"]
+	PerformCommands []string             `json:"perform_commands"` // Commands to run on connect
+	InitialChannels []string             `json:"initial_channels"` // Channels to join on connect
+	Nickname        string               `json:"nickname"`
+	AltNickname     string               `json:"alt_nickname"`
+	Ident           string               `json:"ident"` // Username
+	Realname        string               `json:"realname"`
+	QuitMessage     string               `json:"quit_message"`
+
+	// Live connection details
+	IRC            *ircevent.Connection       `json:"-"` // Actual IRC connection, not marshaled
+	IsConnected    bool                       `json:"is_connected"`
+	IsConnecting   bool                       `json:"-"` // Track connection attempts
+	Channels       map[string]*ChannelState   `json:"channels"` // Channels for this specific network
+
+	// Mutex for this specific network's state
+	Mutex sync.RWMutex `json:"-"`
+
+	ReconnectAttempts int         `json:"-"` // Tracks consecutive reconnect attempts
+	ReconnectTimer    *time.Timer `json:"-"` // Timer for exponential backoff reconnects
+}
+
+type UserSession struct {
+	Token       string
+	Username    string
+	Password    string
+	FCMToken    string
+	WebSockets  []*websocket.Conn
+	WsMutex     sync.Mutex
+	Mutex       sync.RWMutex
+	IsAway      bool
+	AwayMessage string
+	UserID      int // Added UserID to UserSession
+
+	// Map of network ID to UserNetwork for this session
+	// This will hold the *live* IRC connections and their states
+	Networks map[int]*UserNetwork
 }
 
 func NewUserSession(username string) *UserSession {
 	return &UserSession{
-		Username:     username,
-		Channels:     make(map[string]*ChannelState),
-		pendingNames: make(map[string][]string),
+		Username: username,
+		Networks: make(map[int]*UserNetwork), // Initialize the networks map
 	}
-}
-
-type UserSession struct {
-	Token        string
-	Username     string
-	Password     string
-	FCMToken     string
-	IRC          *ircevent.Connection
-	Channels     map[string]*ChannelState
-	pendingNames map[string][]string
-	namesMutex   sync.Mutex
-	WebSockets   []*websocket.Conn
-	WsMutex      sync.Mutex
-	Mutex        sync.RWMutex
-	IsAway       bool
-	AwayMessage  string
 }
 
 func (s *UserSession) IsActive() bool {
@@ -55,140 +89,69 @@ func (s *UserSession) IsActive() bool {
 	return len(s.WebSockets) > 0
 }
 
-func (s *UserSession) AddChannelToSession(channelName string) {
-	normalizedChannelName := strings.ToLower(channelName)
+// AddWebSocket adds a WebSocket connection to the session.
+func (s *UserSession) AddWebSocket(conn *websocket.Conn) {
 	s.Mutex.Lock()
 	defer s.Mutex.Unlock()
+	s.WebSockets = append(s.WebSockets, conn)
+}
 
-	if _, ok := s.Channels[normalizedChannelName]; !ok {
-		s.Channels[normalizedChannelName] = &ChannelState{
-			Name:       channelName,
-			Topic:      "",
-			Members:    []ChannelMember{},
-			LastUpdate: time.Now(),
+// RemoveWebSocket removes a WebSocket connection from the session.
+func (s *UserSession) RemoveWebSocket(conn *websocket.Conn) {
+	s.Mutex.Lock()
+	defer s.Mutex.Unlock()
+	for i, ws := range s.WebSockets {
+		if ws == conn {
+			s.WebSockets = append(s.WebSockets[:i], s.WebSockets[i+1:]...)
+			break
 		}
 	}
 }
 
-// --- START OF CHANGE ---
-// SetChannelTopic safely updates the topic for a single channel within the user's session.
-// This will be called by the gateway bot to ensure all users' states are updated.
-func (s *UserSession) SetChannelTopic(channelName, topic string) {
-	s.Mutex.RLock()
-	defer s.Mutex.RUnlock()
-	channelKey := strings.ToLower(channelName)
-	if channelState, exists := s.Channels[channelKey]; exists {
-		channelState.Mutex.Lock()
-		channelState.Topic = topic
-		channelState.LastUpdate = time.Now()
-		channelState.Mutex.Unlock()
+// Broadcast sends a WebSocket event to all active WebSocket connections for this user.
+func (s *UserSession) Broadcast(eventType string, payload any) {
+	msg := events.WsEvent{
+		Type:    eventType,
+		Payload: payload,
 	}
-}
-// --- END OF CHANGE ---
-
-func (s *UserSession) RemoveChannelFromSession(channelName string) {
-	normalizedChannelName := strings.ToLower(channelName)
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
-	delete(s.Channels, normalizedChannelName)
-}
-
-func (s *UserSession) AccumulateChannelMembers(channelName string, members []string) {
-	normalizedChannelName := strings.ToLower(channelName)
-	s.namesMutex.Lock()
-	defer s.namesMutex.Unlock()
-
-	if s.pendingNames == nil {
-		s.pendingNames = make(map[string][]string)
-	}
-	s.pendingNames[normalizedChannelName] = append(s.pendingNames[normalizedChannelName], members...)
-}
-
-func (s *UserSession) FinalizeChannelMembers(channelName string) {
-	normalizedChannelName := strings.ToLower(channelName)
-	s.namesMutex.Lock()
-	rawMembers, ok := s.pendingNames[normalizedChannelName]
-	if !ok {
-		s.namesMutex.Unlock()
+	bytes, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("Error marshaling event %s: %v", eventType, err)
 		return
 	}
-	delete(s.pendingNames, normalizedChannelName)
-	s.namesMutex.Unlock()
 
-	parsedMembers := make([]ChannelMember, 0, len(rawMembers))
-	validPrefixes := "~&@%+"
-	for _, rawNick := range rawMembers {
-		if rawNick == "" {
-			continue
+	s.Mutex.RLock()
+	defer s.Mutex.RUnlock()
+	for _, ws := range s.WebSockets {
+		s.WsMutex.Lock() // Lock individual websocket for writing
+		err := ws.WriteMessage(websocket.TextMessage, bytes)
+		s.WsMutex.Unlock()
+		if err != nil {
+			log.Printf("Error writing to WebSocket for user %s: %v", s.Username, err)
+			// TODO: Handle broken connections (e.g., remove from list)
 		}
-		prefix := ""
-		nick := rawNick
-		if strings.ContainsRune(validPrefixes, rune(rawNick[0])) {
-			prefix = string(rawNick[0])
-			nick = rawNick[1:]
-		}
-		parsedMembers = append(parsedMembers, ChannelMember{Nick: nick, Prefix: prefix, IsAway: false})
-	}
-
-	s.Mutex.Lock()
-	channelState, exists := s.Channels[normalizedChannelName]
-	s.Mutex.Unlock()
-
-	if exists {
-		channelState.Mutex.Lock()
-		channelState.Members = parsedMembers
-		channelState.LastUpdate = time.Now()
-		channelState.Mutex.Unlock()
-
-		go s.Broadcast("members_update", map[string]interface{}{
-			"channel_name": normalizedChannelName,
-			"members":      parsedMembers,
-		})
 	}
 }
 
-func UpdateAwayStatusForAllSessions(nick string, isAway bool) {
+// ForEachSession iterates over all active user sessions.
+func ForEachSession(callback func(s *UserSession)) {
 	mutex.RLock()
 	defer mutex.RUnlock()
-
 	for _, s := range sessionMap {
-		channelsToUpdate := make([]string, 0)
-		s.Mutex.RLock()
-		for chName, chState := range s.Channels {
-			chState.Mutex.Lock()
-			memberUpdated := false
-			for i := range chState.Members {
-				if strings.EqualFold(chState.Members[i].Nick, nick) {
-					chState.Members[i].IsAway = isAway
-					memberUpdated = true
-					break
-				}
-			}
-			chState.Mutex.Unlock()
-			if memberUpdated {
-				channelsToUpdate = append(channelsToUpdate, chName)
-			}
-		}
-		s.Mutex.RUnlock()
+		callback(s)
+	}
+}
 
-		for _, chName := range channelsToUpdate {
-			s.Mutex.RLock()
-			channelState := s.Channels[chName]
-			s.Mutex.RUnlock()
-
-			if channelState != nil {
-				channelState.Mutex.Lock()
-				finalMembers := make([]ChannelMember, len(channelState.Members))
-				copy(finalMembers, channelState.Members)
-				channelState.Mutex.Unlock()
-
-				go s.Broadcast("members_update", map[string]interface{}{
-					"channel_name": chName,
-					"members":      finalMembers,
-				})
-			}
+// FindSessionTokenByUsername finds an existing session token for a given username.
+func FindSessionTokenByUsername(username string) (string, bool) {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	for token, sess := range sessionMap {
+		if strings.EqualFold(sess.Username, username) {
+			return token, true
 		}
 	}
+	return "", false
 }
 
 var (
@@ -206,38 +169,42 @@ func AddSession(token string, s *UserSession) {
 func GetSession(token string) (*UserSession, bool) {
 	mutex.RLock()
 	defer mutex.RUnlock()
-	return sessionMap[token], sessionMap[token] != nil
+	sess, found := sessionMap[token]
+	return sess, found
 }
 
-// Revised RemoveSession for proper cleanup of websockets and IRC connections
+// RemoveSession cleans up all resources associated with a session, including IRC connections.
 func RemoveSession(token string) {
 	mutex.Lock()
 	defer mutex.Unlock()
 	if sess, ok := sessionMap[token]; ok {
 		sess.Mutex.Lock()
+		defer sess.Mutex.Unlock()
+
 		// Close all WebSocket connections gracefully
 		for _, conn := range sess.WebSockets {
 			conn.Close()
 		}
 		sess.WebSockets = nil
 
-		// Properly disconnect IRC
-		if sess.IRC != nil {
-			sess.IRC.Quit() // Send QUIT command to IRC server
-			// If IRCClient wrapper with Disconnect exists, call Disconnect
-			if disconnecter, ok := interface{}(sess.IRC).(interface{ Disconnect() }); ok {
-				disconnecter.Disconnect()
-			} else if connField := getIRCConn(sess.IRC); connField != nil {
-				connField.Close() // fallback: close IRC TCP connection if accessible
+		// Disconnect all IRC connections
+		for _, netConfig := range sess.Networks {
+			if netConfig.IRC != nil {
+				log.Printf("Disconnecting IRC for user %s, network %s", sess.Username, netConfig.NetworkName)
+				netConfig.IRC.Quit()
+				// The ircevent library usually closes the underlying connection after Quit
+				// but adding a Disconnect call if available on the type is safer.
+				if disconnecter, ok := interface{}(netConfig.IRC).(interface{ Disconnect() }); ok {
+					disconnecter.Disconnect()
+				}
+				netConfig.IRC = nil
+				netConfig.IsConnected = false
 			}
-			sess.IRC = nil
 		}
-		sess.Mutex.Unlock()
+		delete(sessionMap, token)
 	}
-	delete(sessionMap, token)
 }
 
-// --- ADDED: UnmapToken ---
 // UnmapToken only removes the token from the session map, it does not close connections.
 // This is used when re-issuing a token for an existing session.
 func UnmapToken(token string) {
@@ -246,79 +213,15 @@ func UnmapToken(token string) {
 	delete(sessionMap, token)
 }
 
-// Helper: attempt to get the Conn field from ircevent.Connection
-func getIRCConn(irc *ircevent.Connection) (connCloser interface{ Close() error }) {
-	// This is a hacky fallback for legacy ircevent.Connection, not needed if you use IRCClient with Disconnect
-	type connField struct {
-		Conn interface{ Close() error }
-	}
-	cf, ok := any(irc).(*connField)
-	if ok {
-		return cf.Conn
-	}
-	return nil
-}
-
-func (s *UserSession) AddWebSocket(conn *websocket.Conn) {
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
-	s.WebSockets = append(s.WebSockets, conn)
-}
-
-func (s *UserSession) RemoveWebSocket(conn *websocket.Conn) {
-	s.Mutex.Lock()
-	defer s.Mutex.Unlock()
-	for i, ws := range s.WebSockets {
-		if ws == conn {
-			s.WebSockets = append(s.WebSockets[:i], s.WebSockets[i+1:]...)
-			break
-		}
-	}
-}
-
-func (s *UserSession) Broadcast(eventType string, payload any) {
-	msg := events.WsEvent{
-		Type:    eventType,
-		Payload: payload,
-	}
-	bytes, err := json.Marshal(msg)
-	if err != nil {
-		return
-	}
-	s.Mutex.RLock()
-	defer s.Mutex.RUnlock()
-	for _, ws := range s.WebSockets {
-		s.WsMutex.Lock()
-		ws.WriteMessage(websocket.TextMessage, bytes)
-		s.WsMutex.Unlock()
-	}
-}
-
-func ForEachSession(callback func(s *UserSession)) {
-	mutex.RLock()
-	defer mutex.RUnlock()
-	for _, s := range sessionMap {
-		callback(s)
-	}
-}
-
-func FindSessionTokenByUsername(username string) (string, bool) {
-	mutex.RLock()
-	defer mutex.RUnlock()
-	for token, sess := range sessionMap {
-		if strings.EqualFold(sess.Username, username) {
-			return token, true
-		}
-	}
-	return "", false
-}
-
+// SetAway sends an AWAY message to all connected IRC networks for the user.
 func (s *UserSession) SetAway(message string) {
 	s.Mutex.Lock()
 	s.IsAway = true
 	s.AwayMessage = message
-	if s.IRC != nil {
-		s.IRC.SendRawf("AWAY :%s", message)
+	for _, netConfig := range s.Networks {
+		if netConfig.IRC != nil && netConfig.IsConnected {
+			netConfig.IRC.SendRawf("AWAY :%s", message)
+		}
 	}
 	s.Mutex.Unlock()
 	s.Broadcast("user_away", map[string]string{
@@ -327,15 +230,225 @@ func (s *UserSession) SetAway(message string) {
 	})
 }
 
+// SetBack sends a BACK message to all connected IRC networks for the user.
 func (s *UserSession) SetBack() {
 	s.Mutex.Lock()
 	s.IsAway = false
 	s.AwayMessage = ""
-	if s.IRC != nil {
-		s.IRC.SendRaw("BACK")
+	for _, netConfig := range s.Networks {
+		if netConfig.IRC != nil && netConfig.IsConnected {
+			netConfig.IRC.SendRaw("BACK")
+		}
 	}
 	s.Mutex.Unlock()
 	s.Broadcast("user_back", map[string]string{
 		"username": s.Username,
 	})
+}
+
+// --- Methods for managing channels and members within a specific network ---
+
+// GetNetwork returns a specific UserNetwork configuration for the session.
+func (s *UserSession) GetNetwork(networkID int) (*UserNetwork, bool) {
+	s.Mutex.RLock()
+	defer s.Mutex.RUnlock()
+	netConfig, ok := s.Networks[networkID]
+	return netConfig, ok
+}
+
+// AddChannelToNetwork adds a channel to a specific network's state for the user.
+func (un *UserNetwork) AddChannelToNetwork(channelName string) {
+	normalizedChannelName := strings.ToLower(channelName)
+	un.Mutex.Lock()
+	defer un.Mutex.Unlock()
+
+	if un.Channels == nil {
+		un.Channels = make(map[string]*ChannelState)
+	}
+
+	if _, ok := un.Channels[normalizedChannelName]; !ok {
+		un.Channels[normalizedChannelName] = &ChannelState{
+			Name:       channelName,
+			Topic:      "",
+			Members:    []ChannelMember{},
+			LastUpdate: time.Now(),
+		}
+	}
+}
+
+// RemoveChannelFromNetwork removes a channel from a specific network's state for the user.
+func (un *UserNetwork) RemoveChannelFromNetwork(channelName string) {
+	normalizedChannelName := strings.ToLower(channelName)
+	un.Mutex.Lock()
+	defer un.Mutex.Unlock()
+	if un.Channels != nil {
+		delete(un.Channels, normalizedChannelName)
+	}
+}
+
+// SetChannelTopic safely updates the topic for a single channel within a specific network.
+func (un *UserNetwork) SetChannelTopic(channelName, topic string) {
+	normalizedChannelName := strings.ToLower(channelName)
+	un.Mutex.RLock()
+	channelState, exists := un.Channels[normalizedChannelName]
+	un.Mutex.RUnlock()
+
+	if exists {
+		channelState.Mutex.Lock()
+		channelState.Topic = topic
+		channelState.LastUpdate = time.Now()
+		channelState.Mutex.Unlock()
+	}
+}
+
+// --- Accumulate and Finalize Members (modified to be per-network) ---
+
+// A temporary map to hold pending NAMES replies for each network.
+// Key: networkID_channelName (e.g., "1_#general")
+var pendingNamesByNetwork = struct {
+	sync.Mutex
+	m map[string][]string
+}{m: make(map[string][]string)}
+
+func (un *UserNetwork) AccumulateChannelMembers(channelName string, members []string) {
+	key := fmt.Sprintf("%d_%s", un.ID, strings.ToLower(channelName))
+	pendingNamesByNetwork.Lock()
+	defer pendingNamesByNetwork.Unlock()
+
+	pendingNamesByNetwork.m[key] = append(pendingNamesByNetwork.m[key], members...)
+}
+
+func (un *UserNetwork) FinalizeChannelMembers(channelName string) {
+	key := fmt.Sprintf("%d_%s", un.ID, strings.ToLower(channelName))
+	pendingNamesByNetwork.Lock()
+	rawMembers, ok := pendingNamesByNetwork.m[key]
+	if !ok {
+		pendingNamesByNetwork.Unlock()
+		return
+	}
+	delete(pendingNamesByNetwork.m, key)
+	pendingNamesByNetwork.Unlock()
+
+	parsedMembers := make([]ChannelMember, 0, len(rawMembers))
+	validPrefixes := "~&@%+" // IRC channel prefixes
+	for _, rawNick := range rawMembers {
+		if rawNick == "" {
+			continue
+		}
+		prefix := ""
+		nick := rawNick
+		if len(rawNick) > 0 && strings.ContainsRune(validPrefixes, rune(rawNick[0])) {
+			prefix = string(rawNick[0])
+			nick = rawNick[1:]
+		}
+		// TODO: Implement away status tracking for members if the IRC server supports it (e.g. AWAY-NOTIFY)
+		parsedMembers = append(parsedMembers, ChannelMember{Nick: nick, Prefix: prefix, IsAway: false})
+	}
+
+	un.Mutex.Lock() // Use un's RWMutex for its Channels map
+	channelState, exists := un.Channels[strings.ToLower(channelName)]
+	un.Mutex.Unlock()
+
+	if exists {
+		channelState.Mutex.Lock() // Use channelState's RWMutex
+		channelState.Members = parsedMembers
+		channelState.LastUpdate = time.Now()
+		channelState.Mutex.Unlock()
+
+		// Broadcast to all clients of this specific user session
+		// The event payload should include the network ID for the client to know which network this update belongs to.
+		sess, found := GetSessionByUserID(un.UserID)
+		if found {
+			sess.Broadcast(events.EventTypeMembersUpdate, map[string]interface{}{
+				"network_id":   un.ID, // Add network ID
+				"channel_name": channelName,
+				"members":      parsedMembers,
+			})
+		}
+	}
+}
+
+// UpdateAwayStatusForNetworkMember updates the away status of a user in all channels of a specific network.
+func (un *UserNetwork) UpdateAwayStatusForNetworkMember(nick string, isAway bool) {
+	un.Mutex.Lock()
+	defer un.Mutex.Unlock()
+
+	channelsToBroadcast := []string{}
+
+	for chName, chState := range un.Channels {
+		chState.Mutex.Lock() // Use channelState's RWMutex
+		updated := false
+		for i := range chState.Members {
+			if strings.EqualFold(chState.Members[i].Nick, nick) {
+				if chState.Members[i].IsAway != isAway {
+					chState.Members[i].IsAway = isAway
+					updated = true
+				}
+				break
+			}
+		}
+		chState.Mutex.Unlock() // Use channelState's RWMutex
+		if updated {
+			channelsToBroadcast = append(channelsToBroadcast, chName)
+		}
+	}
+
+	// Broadcast updates to clients of this specific user session
+	sess, found := GetSessionByUserID(un.UserID)
+	if found {
+		for _, chName := range channelsToBroadcast {
+			if chState, ok := un.Channels[strings.ToLower(chName)]; ok {
+				chState.Mutex.RLock() // Use channelState's RWMutex
+				membersCopy := make([]ChannelMember, len(chState.Members))
+				copy(membersCopy, chState.Members)
+				chState.Mutex.RUnlock() // Use channelState's RWMutex
+
+				sess.Broadcast(events.EventTypeMembersUpdate, map[string]interface{}{
+					"network_id":   un.ID,
+					"channel_name": chName,
+					"members":      membersCopy,
+				})
+			}
+		}
+	}
+}
+
+// GetSessionByUserID is a helper function to retrieve a UserSession by UserID.
+// This is needed because `sessionMap` is keyed by token, not UserID.
+// This might be inefficient for many users and could be optimized with another map.
+func GetSessionByUserID(userID int) (*UserSession, bool) {
+	mutex.RLock()
+	defer mutex.RUnlock()
+	for _, sess := range sessionMap {
+		// Assuming Username can be mapped back to UserID from users.User
+		// For now, we'll just check if the username exists in any session.
+		// A proper implementation would likely need a map[int]*UserSession.
+		// For this refactor, we'll assume `users.GetUserByUsername` can fetch the ID.
+		// This will require modifying `UserSession` to store `UserID`.
+		// (Assuming `sess.UserID` is now populated during login)
+		if sess.UserID == userID {
+			return sess, true
+		}
+	}
+	return nil, false
+}
+
+// Add UserID to UserSession to enable GetSessionByUserID
+func (s *UserSession) SetUserID(id int) {
+	s.UserID = id
+}
+
+// ReconnectNetwork is a placeholder to resolve circular dependency.
+// The actual reconnection logic is orchestrated in handlers/irc_networks.go
+// This method serves to allow irc_client.go to trigger a reconnection attempt
+// on the session object, which then calls the handler.
+func (s *UserSession) ReconnectNetwork(networkID int) {
+	// This function is intentionally left empty here to break a circular dependency
+	// between session and handlers/irc_networks. The actual re-connection logic
+	// is now handled by a dedicated function in handlers/irc_networks.go,
+	// which can be called by irc_client.go via a function reference passed during
+	// connection establishment, or by looking up the session.
+	// For now, this is a no-op that satisfies the interface requirement if any.
+	// The primary trigger for auto-reconnect will be the DISCONNECT callback in irc_client.go
+	// which will call the public ReconnectNetwork function in handlers.
 }

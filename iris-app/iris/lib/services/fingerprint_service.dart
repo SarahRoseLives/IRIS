@@ -69,7 +69,7 @@ class FingerprintService {
 
   /// Prompts the user for biometric authentication.
   Future<bool> authenticate(
-      {String localizedReason = 'Authenticate to access IRIS'}) async {
+      {String localizedReason = 'Authenticate to access iris'}) async {
     if (!isFingerprintSupported) return false;
     try {
       return await _localAuth.authenticate(
